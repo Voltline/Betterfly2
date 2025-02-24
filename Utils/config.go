@@ -2,26 +2,30 @@ package Utils
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 )
 
 type Config struct {
-	path string
-	ip   string
-	port int
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
 }
 
-func NewConfig(filePath string) Config {
+func NewConfig(filePath string) (*Config, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer f.Close()
-	decoder := json.NewDecoder(f)
-	config := Config{}
-	err = decoder.Decode(&config)
+
+	data, err := io.ReadAll(f)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return config
+
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+	return &config, nil
 }

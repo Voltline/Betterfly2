@@ -3,6 +3,7 @@ package main
 import (
 	"Betterfly-Server-Go/Database"
 	"Betterfly-Server-Go/Utils"
+	"database/sql"
 	"time"
 )
 
@@ -70,6 +71,32 @@ func main() {
 	logger := Utils.NewLogger()
 	logger.Info.Println("Hello World")
 	logger.Error.Println("Error!")
+	db, err := Database.GetDatabaseHandler()
+	if err != nil {
+		logger.Error.Println(err)
+	}
+	defer db.Close()
+	row, err := db.Query("select * from users limit 5")
+	if err != nil {
+		logger.Error.Println(err)
+	}
+	defer row.Close()
+	for row.Next() {
+		var user_id int
+		var user_name string
+		var salt, auth_string sql.NullString
+		var last_login, update_time []uint8
+		var user_avatar sql.NullString
+		if err := row.Scan(&user_id, &user_name, &salt, &auth_string, &last_login, &update_time, &user_avatar); err != nil {
+			logger.Error.Println(err)
+		}
+		u_avatar := "NULL"
+		if user_avatar.Valid {
+			u_avatar = user_avatar.String
+		}
+		logger.Info.Printf("user_id: %d, user_name: %s, last_login: %s, update_time: %s, user_avatar: %s\n",
+			user_id, user_name, last_login, update_time, u_avatar)
+	}
 	//wp := Utils.NewWorkerPool(10, func(conn int) {
 	//	fmt.Println(conn)
 	//})

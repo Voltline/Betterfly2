@@ -11,7 +11,7 @@ type DBSetting struct {
 	Password string `json:"password"`
 	IP       string `json:"ip"`
 	Port     int    `json:"port"`
-	Database string `json:"database"`
+	Database string `json:"db"`
 	Charset  string `json:"charset"`
 }
 

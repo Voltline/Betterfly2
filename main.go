@@ -76,7 +76,7 @@ func main() {
 		logger.Error.Println(err)
 	}
 	defer db.Close()
-	row, err := db.Query("select * from users limit 5")
+	row, err := db.Query("select * from users where users.user_id >= 10000 limit 3")
 	if err != nil {
 		logger.Error.Println(err)
 	}
@@ -97,6 +97,24 @@ func main() {
 		logger.Info.Printf("user_id: %d, user_name: %s, last_login: %s, update_time: %s, user_avatar: %s\n",
 			user_id, user_name, last_login, update_time, u_avatar)
 	}
+
+	info, err := db.QuerySyncMessage(10000, "1970-01-01 00:00:00")
+	if err != nil {
+		logger.Error.Println(err)
+	} else {
+		for info.Next() {
+			var from_user_id, to_id int
+			var timestamp string
+			var text, tp string
+			var is_group int
+			if err := info.Scan(&from_user_id, &to_id, &timestamp, &text, &tp, &is_group); err != nil {
+				logger.Error.Println(err)
+			} else {
+				logger.Info.Println(from_user_id, to_id, timestamp, text, tp, is_group)
+			}
+		}
+	}
+
 	//wp := Utils.NewWorkerPool(10, func(conn int) {
 	//	fmt.Println(conn)
 	//})

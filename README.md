@@ -1,5 +1,5 @@
 <div align="center">
-  <img src=Others/betterfly-logo.jpg >
+  <img src=others/betterfly-logo.jpg >
 </div>
 
 # Betterfly2

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"data_forwarding_service/config"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/logger"
 	"data_forwarding_service/internal/publisher"
@@ -19,7 +20,7 @@ func consumerRoutine() {
 	topic := os.Getenv("HOSTNAME")
 	nsServer := os.Getenv("NAMESERVER")
 	if topic == "" {
-		nsServer = "127.0.0.1:9876"
+		nsServer = config.DefaultNsServer
 		topic = "message-topic"
 	}
 	log.Info.Printf("当前nsServer: %s, topic: %s\n", nsServer, topic)

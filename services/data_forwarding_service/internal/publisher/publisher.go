@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"context"
+	"data_forwarding_service/config"
 	"data_forwarding_service/internal/logger"
 	"fmt"
 	"github.com/apache/rocketmq-client-go/v2"
@@ -20,7 +21,7 @@ func InitRocketMQProducer() error {
 	topic := os.Getenv("HOSTNAME")
 	nsServer := os.Getenv("NAMESERVER")
 	if topic == "" {
-		nsServer = "127.0.0.1:9876"
+		nsServer = config.DefaultNsServer
 		topic = "message-topic"
 	}
 	log.Info.Printf("当前nsServer: %s, topic: %s\n", nsServer, topic)

@@ -1,12 +1,13 @@
 package publisher
 
 import (
-	"common/logger"
 	"context"
+	"data_forwarding_service/internal/logger"
 	"fmt"
 	"github.com/apache/rocketmq-client-go/v2"
 	"github.com/apache/rocketmq-client-go/v2/primitive"
 	"github.com/apache/rocketmq-client-go/v2/producer"
+	"os"
 )
 
 var log = logger.NewLogger()
@@ -16,9 +17,16 @@ var RocketMQProducer rocketmq.Producer
 // InitRocketMQProducer 初始化 RocketMQ 生产者
 func InitRocketMQProducer() error {
 	var err error
+	topic := os.Getenv("HOSTNAME")
+	nsServer := os.Getenv("NAMESERVER")
+	if topic == "" {
+		nsServer = "127.0.0.1:9876"
+		topic = "message-topic"
+	}
+	log.Info.Printf("当前nsServer: %s, topic: %s\n", nsServer, topic)
 	RocketMQProducer, err = rocketmq.NewProducer(
 		producer.WithGroupName("message-group"),
-		producer.WithNameServer([]string{"127.0.0.1:9876"}),
+		producer.WithNameServer([]string{nsServer}),
 	)
 	if err != nil {
 		return fmt.Errorf("创建RocketMQ生产者错误: %v", err)
@@ -33,12 +41,16 @@ func InitRocketMQProducer() error {
 
 // PublishMessage 发布消息
 func PublishMessage(message string) error {
+	topic := os.Getenv("HOSTNAME")
+	log.Info.Printf("当前Pod Topic为: %s", topic)
+	if topic == "" {
+		topic = "message-topic"
+	}
 	msg := &primitive.Message{
 		// 还没想好主题怎么设置
-		Topic: "message-topic",
+		Topic: topic,
 		Body:  []byte(message),
 	}
-	log.Warn.Println("消息内容: ", msg)
 
 	sendResult, err := RocketMQProducer.SendSync(context.Background(), msg)
 	if err != nil {

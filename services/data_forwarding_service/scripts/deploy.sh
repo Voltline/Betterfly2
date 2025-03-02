@@ -1,0 +1,1 @@
+docker run -d --name data-forward -it --network rocketmq -p 54342:54342 -e "NAMESERVER=172.18.0.2:9876" data-forwarding-service:latest bash

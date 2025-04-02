@@ -3,20 +3,22 @@ package publisher
 import (
 	"context"
 	"data_forwarding_service/config"
-	"data_forwarding_service/internal/logger"
+	"data_forwarding_service/internal/logger_config"
 	"fmt"
 	"github.com/apache/rocketmq-client-go/v2"
 	"github.com/apache/rocketmq-client-go/v2/primitive"
 	"github.com/apache/rocketmq-client-go/v2/producer"
+	"go.uber.org/zap"
 	"os"
 )
-
-var log = logger.NewLogger()
 
 var RocketMQProducer rocketmq.Producer
 
 // InitRocketMQProducer 初始化 RocketMQ 生产者
 func InitRocketMQProducer() error {
+	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
+	defer log.Sync()
+	sugar := log.Sugar()
 	var err error
 	topic := os.Getenv("HOSTNAME")
 	nsServer := os.Getenv("NAMESERVER")
@@ -24,7 +26,7 @@ func InitRocketMQProducer() error {
 		nsServer = config.DefaultNsServer
 		topic = "message-topic"
 	}
-	log.Info.Printf("当前nsServer: %s, topic: %s\n", nsServer, topic)
+	sugar.Infof("当前nsServer: %s, topic: %s", nsServer, topic)
 	RocketMQProducer, err = rocketmq.NewProducer(
 		producer.WithGroupName("message-group"),
 		producer.WithNameServer([]string{nsServer}),
@@ -42,8 +44,11 @@ func InitRocketMQProducer() error {
 
 // PublishMessage 发布消息
 func PublishMessage(message string) error {
+	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
+	defer log.Sync()
+	sugar := log.Sugar()
 	topic := os.Getenv("HOSTNAME")
-	log.Info.Printf("当前Pod Topic为: %s", topic)
+	sugar.Infof("当前Pod Topic为: %s", topic)
 	if topic == "" {
 		topic = "message-topic"
 	}
@@ -57,6 +62,6 @@ func PublishMessage(message string) error {
 	if err != nil {
 		return fmt.Errorf("向消息队列发布消息错误: %v", err)
 	}
-	log.Info.Printf("消息发布成功: %v\n", sendResult)
+	sugar.Infof("消息发布成功: %v", sendResult)
 	return nil
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"data_forwarding_service/internal/logger_config"
 	"data_forwarding_service/internal/publisher"
 	"fmt"
 	"github.com/gorilla/websocket"
@@ -35,12 +36,12 @@ func StartWebSocketServer() error {
 
 // 请求处理
 func handleConnection(w http.ResponseWriter, r *http.Request) {
-	logger, _ := zap.NewProduction()
+	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer logger.Sync()
 	sugar := logger.Sugar()
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		sugar.Errorf("连接错误: %s\n", err)
+		sugar.Errorf("连接错误: %s", err)
 		return
 	}
 
@@ -57,12 +58,12 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 	// 存储连接
 	clientsMutex.Lock()
-	sugar.Infof("保存连接 %v, %v\n", userID, *client)
+	sugar.Infof("保存连接 %v, %v", userID, *client)
 	clients[userID] = client
 	clientsMutex.Unlock()
 
-	sugar.Infof("已与 %v 简历连接\n", conn.RemoteAddr())
-	sugar.Infof("收到的Request内容为: %v\n", *r)
+	sugar.Infof("已与 %v 简历连接", conn.RemoteAddr())
+	sugar.Infof("收到的Request内容为: %v", *r)
 
 	// 启动读取处理和发送消息两个协程
 	// 读取处理协程
@@ -73,7 +74,7 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 // 读取处理协程
 func readProcess(client *Client, userID string) {
-	logger, _ := zap.NewProduction()
+	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer logger.Sync()
 	sugar := logger.Sugar()
 	defer func() {
@@ -81,7 +82,7 @@ func readProcess(client *Client, userID string) {
 		delete(clients, userID)
 		clientsMutex.Unlock()
 		client.conn.Close()
-		sugar.Infof("(%v, %v)连接已关闭\n", userID, client.conn.RemoteAddr())
+		sugar.Infof("(%v, %v)连接已关闭", userID, client.conn.RemoteAddr())
 	}()
 
 	for {
@@ -107,7 +108,7 @@ func readProcess(client *Client, userID string) {
 
 // 监听 channel 发送消息协程
 func writeToClient(client *Client, userID string) {
-	logger, _ := zap.NewProduction()
+	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer logger.Sync()
 	sugar := logger.Sugar()
 	defer client.conn.Close()

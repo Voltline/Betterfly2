@@ -1,3 +1,3 @@
 package config
 
-var DefaultNsServer string = "xxx:xxx"
+var DefaultNsServer string = "localhost:9092"

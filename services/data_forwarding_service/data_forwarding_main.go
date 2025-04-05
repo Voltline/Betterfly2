@@ -6,49 +6,63 @@ import (
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/logger_config"
 	"data_forwarding_service/internal/publisher"
-	"github.com/apache/rocketmq-client-go/v2/consumer"
-	"github.com/apache/rocketmq-client-go/v2/primitive"
-	"github.com/apache/rocketmq-client-go/v2/rlog"
+	"github.com/IBM/sarama"
 	"go.uber.org/zap"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
+
+type KafkaConsumerGroupHandler struct{}
 
 func consumerRoutine() {
 	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer log.Sync()
 	sugar := log.Sugar()
 
-	rlog.SetLogLevel("warn")
 	topic := os.Getenv("HOSTNAME")
-	nsServer := os.Getenv("NAMESERVER")
 	if topic == "" {
-		nsServer = config.DefaultNsServer
 		topic = "message-topic"
 	}
-	sugar.Infof("当前nsServer: %s, topic: %s", nsServer, topic)
-	pushConsumer, err := consumer.NewPushConsumer(
-		consumer.WithGroupName("message-consumer-group"),
-		consumer.WithNameServer([]string{nsServer}),
-	)
-	if err != nil {
-		sugar.Fatalf("创建PushConsumer失败: %v", err)
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = config.DefaultNsServer
 	}
 
-	// 订阅 topic 和消息处理函数
-	err = pushConsumer.Subscribe(topic, consumer.MessageSelector{}, messageHandler)
-	if err != nil {
-		sugar.Fatalf("订阅失败: %v", err)
-	}
+	sugar.Infof("启动 Kafka 消费者, broker: %s, topic: %s", broker, topic)
 
-	// 启动消费者
-	err = pushConsumer.Start()
-	if err != nil {
-		sugar.Fatalf("启动PushConsumer失败: %v", err)
-	}
+	saramaConfig := sarama.NewConfig()
+	saramaConfig.Version = sarama.V2_1_0_0
+	saramaConfig.Consumer.Return.Errors = true
+	saramaConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
 
-	// 保持运行
-	select {}
+	groupID := "message-consumer-group"
+
+	consumerGroup, err := sarama.NewConsumerGroup([]string{broker}, groupID, saramaConfig)
+	if err != nil {
+		sugar.Fatalf("创建 Kafka 消费组失败: %v", err)
+	}
+	defer consumerGroup.Close()
+
+	ctx := context.Background()
+	handler := &KafkaConsumerGroupHandler{}
+
+	go func() {
+		for {
+			err := consumerGroup.Consume(ctx, []string{topic}, handler)
+			if err != nil {
+				sugar.Errorf("Kafka 消费错误: %v", err)
+				time.Sleep(time.Second)
+			}
+		}
+	}()
+
+	// 等待退出信号
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
+	<-sigterm
+	sugar.Info("Kafka 消费者退出")
 }
 
 func main() {
@@ -58,11 +72,11 @@ func main() {
 	sugar.Infoln("Betterfly2服务器启动中")
 
 	// 初始化 RocketMQ 生产者
-	err := publisher.InitRocketMQProducer()
+	err := publisher.InitKafkaProducer()
 	if err != nil {
-		sugar.Fatalln("初始化RocketMQ生产者失败: ", err)
+		sugar.Fatalln(err)
 	}
-	defer publisher.RocketMQProducer.Shutdown()
+	defer publisher.KafkaProducer.Close()
 
 	go consumerRoutine()
 
@@ -73,22 +87,26 @@ func main() {
 	}
 }
 
-// 消息处理
-func messageHandler(context context.Context, msg ...*primitive.MessageExt) (consumer.ConsumeResult, error) {
+func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
+func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+
+// 实现samara的消费处理器协议
+func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer log.Sync()
 	sugar := log.Sugar()
 
-	for _, m := range msg {
-		sugar.Infoln("消息队列收到消息:", string(m.Body))
-		// 未来需要从m.Body解析报文再发回
-		err := handlers.SendMessage(string(m.Body), "你好，这是来自服务器的回应!")
+	for msg := range claim.Messages() {
+		sugar.Infof("Kafka 收到消息: %s", string(msg.Value))
+		// TODO: 自定义业务逻辑
+		err := handlers.SendMessage(string(msg.Value), "你好，这是来自服务器的回应!")
 		if err != nil {
+			sugar.Errorf("处理消息失败: %v", err)
 			continue
 		}
-		sugar.Infof("向%v发送回显消息", string(m.Body))
+		sugar.Infof("成功发送回显消息: %s", string(msg.Value))
+
+		session.MarkMessage(msg, "")
 	}
-	// TODO: 处理消息
-	time.Sleep(1 * time.Second)
-	return consumer.ConsumeSuccess, nil
+	return nil
 }

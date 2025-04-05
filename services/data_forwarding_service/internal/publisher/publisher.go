@@ -1,67 +1,78 @@
 package publisher
 
 import (
-	"context"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/logger_config"
 	"fmt"
-	"github.com/apache/rocketmq-client-go/v2"
-	"github.com/apache/rocketmq-client-go/v2/primitive"
-	"github.com/apache/rocketmq-client-go/v2/producer"
+	"github.com/IBM/sarama"
 	"go.uber.org/zap"
 	"os"
+	"sync"
 )
 
-var RocketMQProducer rocketmq.Producer
+var (
+	KafkaProducer sarama.SyncProducer
+	initOnce      sync.Once
+)
 
-// InitRocketMQProducer 初始化 RocketMQ 生产者
-func InitRocketMQProducer() error {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
-	var err error
-	topic := os.Getenv("HOSTNAME")
-	nsServer := os.Getenv("NAMESERVER")
-	if topic == "" {
-		nsServer = config.DefaultNsServer
-		topic = "message-topic"
-	}
-	sugar.Infof("当前nsServer: %s, topic: %s", nsServer, topic)
-	RocketMQProducer, err = rocketmq.NewProducer(
-		producer.WithGroupName("message-group"),
-		producer.WithNameServer([]string{nsServer}),
-	)
-	if err != nil {
-		return fmt.Errorf("创建RocketMQ生产者错误: %v", err)
-	}
+// InitKafkaProducer 初始化 Kafka 生产者
+func InitKafkaProducer() error {
+	var initErr error
+	initOnce.Do(func() {
+		log := zap.New(logger_config.CoreConfig, zap.AddCaller())
+		defer log.Sync()
+		sugar := log.Sugar()
 
-	err = RocketMQProducer.Start()
-	if err != nil {
-		return fmt.Errorf("启动RocketMQ生产者错误: %v", err)
-	}
-	return nil
+		topic := os.Getenv("HOSTNAME")
+		broker := os.Getenv("KAFKA_BROKER")
+		if topic == "" {
+			topic = "message-topic"
+		}
+
+		if broker == "" {
+			broker = config.DefaultNsServer
+		}
+
+		sugar.Infof("当前 Kafka Broker: %s, topic: %s", broker, topic)
+
+		sarama_config := sarama.NewConfig()
+		sarama_config.Producer.Return.Successes = true
+		sarama_config.Producer.RequiredAcks = sarama.WaitForAll
+		sarama_config.Producer.Retry.Max = 5
+
+		producer, err := sarama.NewSyncProducer([]string{broker}, sarama_config)
+		if err != nil {
+			initErr = fmt.Errorf("创建 Kafka 生产者失败: %v", err)
+			return
+		}
+		KafkaProducer = producer
+	})
+	return initErr
 }
 
-// PublishMessage 发布消息
+// PublishMessage 发布消息到 Kafka
 func PublishMessage(message string) error {
 	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer log.Sync()
 	sugar := log.Sugar()
+
 	topic := os.Getenv("HOSTNAME")
-	sugar.Infof("当前Pod Topic为: %s", topic)
 	if topic == "" {
 		topic = "message-topic"
 	}
-	msg := &primitive.Message{
-		// 还没想好主题怎么设置
-		Topic: topic,
-		Body:  []byte(message),
+	if KafkaProducer == nil {
+		return fmt.Errorf("尚未初始化 Kafka Producer")
 	}
 
-	sendResult, err := RocketMQProducer.SendSync(context.Background(), msg)
-	if err != nil {
-		return fmt.Errorf("向消息队列发布消息错误: %v", err)
+	msg := &sarama.ProducerMessage{
+		Topic: topic,
+		Value: sarama.ByteEncoder(message),
 	}
-	sugar.Infof("消息发布成功: %v", sendResult)
+
+	partition, offset, err := KafkaProducer.SendMessage(msg)
+	if err != nil {
+		return fmt.Errorf("向 Kafka 发布消息失败: %v", err)
+	}
+	sugar.Infof("Kafka 消息发布成功 - Partition: %d, Offset: %d", partition, offset)
 	return nil
 }

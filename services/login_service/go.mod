@@ -6,7 +6,7 @@ require (
 	github.com/IBM/sarama v1.45.1
 	github.com/redis/go-redis/v9 v9.7.3
 	go.uber.org/zap v1.27.0
-	gorm.io/driver/postgres v1.2.3
+	gorm.io/driver/postgres v1.5.0
 	gorm.io/gorm v1.25.12
 
 	Betterfly2/shared v0.0.0

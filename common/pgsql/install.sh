@@ -24,7 +24,7 @@ sudo sed -i "s/^#\?listen_addresses\s*=.*/listen_addresses = '*'/g" "$PG_CONF"
 
 # 3. 添加远程访问权限（如已存在则跳过）
 RULE="host    all             all             0.0.0.0/0               md5"
-if ! grep -Fxq "$RULE" "$HBA_CONF"; then
+if ! sudo grep -Fxq "$RULE" "$HBA_CONF"; then
   echo "🎯 添加 pg_hba.conf 访问控制规则"
   echo "$RULE" | sudo tee -a "$HBA_CONF" > /dev/null
 else

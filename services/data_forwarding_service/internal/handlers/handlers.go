@@ -3,10 +3,12 @@ package handlers
 import (
 	"data_forwarding_service/internal/logger_config"
 	"data_forwarding_service/internal/publisher"
+	"data_forwarding_service/internal/redis_client"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"net/http"
+	"os"
 	"sync"
 )
 
@@ -31,7 +33,11 @@ var upgrader = websocket.Upgrader{
 // StartWebSocketServer 启动WebSocket服务器
 func StartWebSocketServer() error {
 	http.HandleFunc("/ws", handleConnection)
-	return http.ListenAndServe(":54342", nil)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "54342"
+	}
+	return http.ListenAndServe(":"+port, nil)
 }
 
 // 请求处理
@@ -62,7 +68,23 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 	clients[userID] = client
 	clientsMutex.Unlock()
 
-	sugar.Infof("已与 %v 简历连接", conn.RemoteAddr())
+	// 从容器内读取HOSTNAME，若没有则默认为default-container
+	containerID := os.Getenv("HOSTNAME")
+	if containerID == "" {
+		containerID = "message-topic"
+	}
+
+	err = redis_client.RegisterConnection(userID, containerID)
+	if err != nil {
+		sugar.Errorf("保存连接错误: %s", err)
+		// 如果无法正确保存连接，应该删除连接对象
+		clientsMutex.Lock()
+		delete(clients, userID)
+		clientsMutex.Unlock()
+		return
+	}
+
+	sugar.Infof("已与 %v 建立连接", conn.RemoteAddr())
 	sugar.Infof("收到的Request内容为: %v", *r)
 
 	// 启动读取处理和发送消息两个协程
@@ -82,6 +104,13 @@ func readProcess(client *Client, userID string) {
 		delete(clients, userID)
 		clientsMutex.Unlock()
 		client.conn.Close()
+
+		containerID := os.Getenv("HOSTNAME")
+		if containerID == "" {
+			containerID = "message-topic"
+		}
+		redis_client.UnregisterConnection(userID, containerID)
+
 		sugar.Infof("(%v, %v)连接已关闭", userID, client.conn.RemoteAddr())
 	}()
 
@@ -96,7 +125,14 @@ func readProcess(client *Client, userID string) {
 			// log.Warn.Println("接受到的消息为空，已跳过")
 			continue
 		}
-		err = publishMessage(p) // 将消息转发到消息队列
+
+		var targetTopic string
+		targetTopic, err = redis_client.GetContainerByConnection(string(p))
+		if err != nil {
+			sugar.Warnf("%s 用户不在线", string(p))
+			continue
+		}
+		err = publishMessage(p, targetTopic) // 将消息转发到消息队列
 		if err != nil {
 			sugar.Errorln("转发信息到消息队列异常: ", err)
 			break
@@ -121,8 +157,8 @@ func writeToClient(client *Client, userID string) {
 }
 
 // 调用消息队列发布接口完成消息发布
-func publishMessage(message []byte) error {
-	return publisher.PublishMessage(string(message))
+func publishMessage(message []byte, targetTopic string) error {
+	return publisher.PublishMessage(string(message), targetTopic)
 }
 
 // SendMessage 外部发送消息接口

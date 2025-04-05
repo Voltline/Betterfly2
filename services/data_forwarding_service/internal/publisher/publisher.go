@@ -6,14 +6,37 @@ import (
 	"fmt"
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
+	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 var (
 	KafkaProducer sarama.SyncProducer
 	initOnce      sync.Once
 )
+
+// WaitForKafkaReady 等待 Kafka 就绪
+func WaitForKafkaReady(broker string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
+	defer log.Sync()
+	sugar := log.Sugar()
+
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", broker, 3*time.Second)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+
+		sugar.Warnf("Kafka %s 未启动, 重试中...", broker)
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("Kafka 在 %s 时间内未能成功启动", timeout)
+}
 
 // InitKafkaProducer 初始化 Kafka 生产者
 func InitKafkaProducer() error {
@@ -40,6 +63,12 @@ func InitKafkaProducer() error {
 		sarama_config.Producer.RequiredAcks = sarama.WaitForAll
 		sarama_config.Producer.Retry.Max = 5
 
+		error := WaitForKafkaReady(broker, 30*time.Second)
+		if error != nil {
+			initErr = fmt.Errorf("Kafka 启动超时: %v", error)
+			return
+		}
+
 		producer, err := sarama.NewSyncProducer([]string{broker}, sarama_config)
 		if err != nil {
 			initErr = fmt.Errorf("创建 Kafka 生产者失败: %v", err)
@@ -51,21 +80,17 @@ func InitKafkaProducer() error {
 }
 
 // PublishMessage 发布消息到 Kafka
-func PublishMessage(message string) error {
+func PublishMessage(message string, targetTopic string) error {
 	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
 	defer log.Sync()
 	sugar := log.Sugar()
 
-	topic := os.Getenv("HOSTNAME")
-	if topic == "" {
-		topic = "message-topic"
-	}
 	if KafkaProducer == nil {
 		return fmt.Errorf("尚未初始化 Kafka Producer")
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: topic,
+		Topic: targetTopic,
 		Value: sarama.ByteEncoder(message),
 	}
 

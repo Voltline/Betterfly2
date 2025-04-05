@@ -1,5 +1,5 @@
 # 1. 使用 Go 官方镜像作为构建阶段
-FROM golang:1.20 AS builder
+FROM golang:1.21 AS builder
 
 # 2. 设置工作目录
 WORKDIR /service
@@ -28,4 +28,4 @@ RUN ls -lah .
 RUN pwd
 
 # 8. 运行微服务
-CMD ["bash"]
+CMD ["./data_forwarding_main"]

@@ -6,6 +6,7 @@ import (
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/logger_config"
 	"data_forwarding_service/internal/publisher"
+	"data_forwarding_service/internal/redis_client"
 	"github.com/IBM/sarama"
 	"go.uber.org/zap"
 	"os"
@@ -39,6 +40,11 @@ func consumerRoutine() {
 
 	groupID := "message-consumer-group"
 
+	error := publisher.WaitForKafkaReady(broker, 30*time.Second)
+	if error != nil {
+		sugar.Fatalf("Kafka 启动超时: %v", error)
+	}
+
 	consumerGroup, err := sarama.NewConsumerGroup([]string{broker}, groupID, saramaConfig)
 	if err != nil {
 		sugar.Fatalf("创建 Kafka 消费组失败: %v", err)
@@ -71,12 +77,19 @@ func main() {
 	sugar := log.Sugar()
 	sugar.Infoln("Betterfly2服务器启动中")
 
-	// 初始化 RocketMQ 生产者
+	// 初始化 Kafka 生产者
 	err := publisher.InitKafkaProducer()
 	if err != nil {
 		sugar.Fatalln(err)
 	}
 	defer publisher.KafkaProducer.Close()
+
+	// 初始化 Redis 客户端
+	err = redis_client.InitRedis()
+	if err != nil {
+		sugar.Fatalln(err)
+	}
+	defer redis_client.Rdb.Close()
 
 	go consumerRoutine()
 

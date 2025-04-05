@@ -1,6 +1,10 @@
-go 1.21
+go 1.24
+
+toolchain go1.24.0
 
 use (
-	services/data_forwarding_service
 	common
+	services/data_forwarding_service
+	services/login_service
+	shared
 )

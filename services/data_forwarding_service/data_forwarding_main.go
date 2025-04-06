@@ -4,23 +4,21 @@ import (
 	"context"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/handlers"
-	"data_forwarding_service/internal/logger_config"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/redis_client"
 	"github.com/IBM/sarama"
-	"go.uber.org/zap"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"Betterfly2/shared/logger"
 )
 
 type KafkaConsumerGroupHandler struct{}
 
 func consumerRoutine() {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
 
 	topic := os.Getenv("HOSTNAME")
 	if topic == "" {
@@ -72,9 +70,9 @@ func consumerRoutine() {
 }
 
 func main() {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
+	defer logger.Sync()
+
 	sugar.Infoln("Betterfly2服务器启动中")
 
 	// 初始化 Kafka 生产者
@@ -105,9 +103,7 @@ func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error
 
 // 实现samara的消费处理器协议
 func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
 
 	for msg := range claim.Messages() {
 		sugar.Infof("Kafka 收到消息: %s", string(msg.Value))

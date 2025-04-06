@@ -1,20 +1,19 @@
 package main
 
 import (
-	db_config "Betterfly2/shared/db_config"
-	logger_config "Betterfly2/shared/logger_config"
 	"fmt"
-	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"os"
 	"time"
+
+	"Betterfly2/shared/db_op/db_config"
+	"Betterfly2/shared/logger"
 )
 
 func main() {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
+	defer logger.Sync()
 	sugar.Infoln("login服务启动中...")
 	dsn := os.Getenv("PGSQL_DSN")
 	if dsn == "" {

@@ -60,7 +60,7 @@ services:
 
   df:
     build:
-      context: data_forwarding_service/.
+      context: ..
     container_name: df
     depends_on:
       - redis
@@ -74,6 +74,15 @@ services:
     networks:
       - backend
 
+  login_service:
+    build:
+      context: ..
+      dockerfile: services/login_service/Dockerfile
+    container_name: login_service
+    environment:
+      PGSQL_DSN: ${PGSQL_DSN}
+    networks:
+      - backend
 networks:
   backend:
     driver: bridge

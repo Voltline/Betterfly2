@@ -7,6 +7,8 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/redis/go-redis/v9 v9.7.3
 	go.uber.org/zap v1.27.0
+
+	Betterfly2/shared v0.0.0
 )
 
 require (
@@ -32,3 +34,5 @@ require (
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
 )
+
+replace Betterfly2/shared => ../../shared

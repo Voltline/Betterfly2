@@ -1,12 +1,11 @@
 package handlers
 
 import (
-	"data_forwarding_service/internal/logger_config"
+	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/redis_client"
 	"fmt"
 	"github.com/gorilla/websocket"
-	"go.uber.org/zap"
 	"net/http"
 	"os"
 	"sync"
@@ -42,8 +41,6 @@ func StartWebSocketServer() error {
 
 // 请求处理
 func handleConnection(w http.ResponseWriter, r *http.Request) {
-	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer logger.Sync()
 	sugar := logger.Sugar()
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -96,8 +93,6 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 
 // 读取处理协程
 func readProcess(client *Client, userID string) {
-	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer logger.Sync()
 	sugar := logger.Sugar()
 	defer func() {
 		clientsMutex.Lock()
@@ -144,8 +139,6 @@ func readProcess(client *Client, userID string) {
 
 // 监听 channel 发送消息协程
 func writeToClient(client *Client, userID string) {
-	logger := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer logger.Sync()
 	sugar := logger.Sugar()
 	defer client.conn.Close()
 	for msg := range client.sendChan {

@@ -1,11 +1,10 @@
 package redis_client
 
 import (
+	"Betterfly2/shared/logger"
 	"context"
-	"data_forwarding_service/internal/logger_config"
 	"fmt"
 	"github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
 	"os"
 )
 
@@ -24,9 +23,7 @@ func InitRedis() error {
 		DB:   0,
 	})
 
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
 	sugar.Infof("当前 Redis: %s", addr)
 
 	_, err := Rdb.Ping(ctx).Result()

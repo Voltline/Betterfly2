@@ -1,0 +1,91 @@
+syntax = "proto3";
+package request;
+option go_package = "proto/gen";
+
+import "common.proto";
+
+enum RequestType {
+  LOGIN = 0;
+  LOGOUT = 1;   // exit变更为logout
+  REGISTER = 2; // 新增注册字段
+  POST = 3;     // 与Response统一
+  QUERY_USER = 4;
+  INSERT_CONTACT = 5;
+  QUERY_GROUP = 6;
+  INSERT_GROUP = 7;
+  INSERT_GROUP_USER = 8;
+  FILE = 9;
+  UPDATE_AVATAR = 10;
+  // TODO: 拓展包括删除好友等
+}
+
+message Login {
+  // 登录消息还没确定格式
+}
+
+message Logout {
+  int64 from_user_id = 1;
+}
+
+message Register {
+  // 注册消息还没确定格式
+}
+
+message QueryUser {
+  int64 from_user_id = 1;
+  int64 to_query_user_id = 2;
+}
+
+message InsertContact {
+  int64 from_user_id = 1;
+  int64 to_insert_user_id = 2;
+}
+
+message QueryGroup {
+  int64 from_user_id = 1;
+  int64 to_query_group_id = 2;
+  bool client_need_save = 3; // 对于原先的msg字段, 0保存，1不保存
+}
+
+message InsertGroup {
+  int64 from_user_id = 1;
+  int64 to_be_created_group_id = 2;
+  string to_be_created_group_name = 3;
+}
+
+message InsertGroupUser { // 又名：加入群组
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+}
+
+// 文件上传/下载请求
+message FileRequest {
+  int64 from_user_id = 1;
+  string file_hash = 2; // SHA512
+  string file_suffix = 3; // 文件后缀
+  common.FileOperation operation = 4; // 0上传，1下载
+}
+
+message UpdateAvatar {
+  int64 target_id = 1; // 被修改头像的用户/群组id
+  string avatar_hash = 2; // 通过hash可以找到文件
+  bool is_group = 3; // 用于标识是否为群组
+}
+
+message RequestMessage {
+  RequestType type = 1;
+
+  oneof payload {
+    Login login = 2;
+    Logout logout = 3;
+    Register register = 4;
+    common.Post post = 5;
+    QueryUser query_user = 6;
+    InsertContact insert_contact = 7;
+    QueryGroup query_group = 8;
+    InsertGroup insert_group = 9;
+    InsertGroupUser insert_group_user = 10;
+    FileRequest file_request = 11;
+    UpdateAvatar update_avatar = 12;
+  }
+}

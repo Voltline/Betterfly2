@@ -1,0 +1,18 @@
+syntax = "proto3";
+package common;
+option go_package = "proto/gen";
+
+enum FileOperation {
+  UPLOAD = 0;
+  DOWNLOAD = 1;
+}
+
+message Post {
+  int64 from_id = 1;
+  bool is_group = 2;
+  int64 to_id = 3;
+  string msg = 4;
+  string msg_type = 5; // text, image, gif, file
+  string timestamp = 6;
+  string real_file_name = 7; // 仅对文件生效，为了保证到达时文件名可以复原
+}

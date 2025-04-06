@@ -1,11 +1,10 @@
 package publisher
 
 import (
+	"Betterfly2/shared/logger"
 	"data_forwarding_service/config"
-	"data_forwarding_service/internal/logger_config"
 	"fmt"
 	"github.com/IBM/sarama"
-	"go.uber.org/zap"
 	"net"
 	"os"
 	"sync"
@@ -20,9 +19,7 @@ var (
 // WaitForKafkaReady 等待 Kafka 就绪
 func WaitForKafkaReady(broker string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
 
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", broker, 3*time.Second)
@@ -42,9 +39,7 @@ func WaitForKafkaReady(broker string, timeout time.Duration) error {
 func InitKafkaProducer() error {
 	var initErr error
 	initOnce.Do(func() {
-		log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-		defer log.Sync()
-		sugar := log.Sugar()
+		sugar := logger.Sugar()
 
 		topic := os.Getenv("HOSTNAME")
 		broker := os.Getenv("KAFKA_BROKER")
@@ -81,9 +76,7 @@ func InitKafkaProducer() error {
 
 // PublishMessage 发布消息到 Kafka
 func PublishMessage(message string, targetTopic string) error {
-	log := zap.New(logger_config.CoreConfig, zap.AddCaller())
-	defer log.Sync()
-	sugar := log.Sugar()
+	sugar := logger.Sugar()
 
 	if KafkaProducer == nil {
 		return fmt.Errorf("尚未初始化 Kafka Producer")

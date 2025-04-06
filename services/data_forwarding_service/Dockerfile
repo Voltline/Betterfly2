@@ -1,5 +1,5 @@
 # 1. 使用 Go 官方镜像作为构建阶段
-FROM golang:1.21 AS builder
+FROM golang:1.24 AS builder
 
 # 2. 设置工作目录
 WORKDIR /app
@@ -18,7 +18,7 @@ FROM ubuntu:latest
 WORKDIR /app
 
 # 7. 复制编译后的可执行文件
-COPY --from=builder /service/data_forwarding_main .
+COPY --from=builder /app/services/data_forwarding_service/data_forwarding_main .
 
 # 调试：列出文件，检查 app 是否存在
 #RUN ls -lah .

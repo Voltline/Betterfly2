@@ -1,5 +1,5 @@
 # 第一阶段：构建
-FROM golang:1.21 as builder
+FROM golang:1.24 as builder
 
 # 设置工作目录（项目根目录）
 WORKDIR /app

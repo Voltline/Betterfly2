@@ -1,8 +1,8 @@
 package logger
 
 import (
+	"Betterfly2/shared/logger/logger_config"
 	"go.uber.org/zap"
-	"shared/logger/logger_config"
 	"sync"
 )
 

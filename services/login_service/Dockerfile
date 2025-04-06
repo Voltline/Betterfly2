@@ -12,13 +12,14 @@ COPY ./shared ./shared
 WORKDIR /app/services/login_service
 
 # 构建 login_main.go
-RUN go build -o login_main login_main.go
+RUN go mod tidy && go build -o login_main login_main.go
 
 # 第二阶段：运行环境
 FROM ubuntu:latest
 
 WORKDIR /app
 COPY --from=builder /app/services/login_service/login_main .
+COPY --from=builder /app/shared/db_op/db_config/server.crt .
 
 # 启动服务
 ENTRYPOINT ["./login_main"]

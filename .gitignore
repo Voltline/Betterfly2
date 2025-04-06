@@ -27,3 +27,4 @@ go.work.sum
 .vscode/
 proto/gen
 go.sum
+.DS_Store

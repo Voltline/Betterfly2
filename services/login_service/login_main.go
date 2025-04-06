@@ -1,13 +1,13 @@
 package main
 
 import (
+	db_config "Betterfly2/shared/db_config"
+	logger_config "Betterfly2/shared/logger_config"
 	"fmt"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"os"
-	db_config "shared/db_config"
-	logger_config "shared/logger_config"
 	"time"
 )
 

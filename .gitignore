@@ -26,5 +26,7 @@ go.work.sum
 .idea/
 .vscode/
 proto/gen
+*.pb.go
+*.pb.grpc.go
 go.sum
 .DS_Store

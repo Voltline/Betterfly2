@@ -12,6 +12,7 @@ gen:
 	@echo "正在从proto文件生成Go文件..."
 	@for file in $(PROTO_FILES); do \
 		$(PROTOC) \
+			-I=. \
 			--proto_path=$(PROTO_DIR) \
 			--go_out=. --go_opt=paths=source_relative \
 			--go-grpc_out=. --go-grpc_opt=paths=source_relative \

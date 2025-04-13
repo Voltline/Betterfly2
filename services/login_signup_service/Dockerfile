@@ -8,7 +8,7 @@ WORKDIR /app
 COPY ./services/login_service ./services/login_service
 COPY ./shared ./shared
 
-# 进入 login_service 目录构建
+# 进入 login_signup_service 目录构建
 WORKDIR /app/services/login_service
 
 # 构建 login_main.go

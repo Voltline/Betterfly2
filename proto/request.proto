@@ -4,30 +4,15 @@ option go_package = "proto/gen";
 
 import "common.proto";
 
-enum RequestType {
-  LOGIN = 0;
-  LOGOUT = 1;   // exit变更为logout
-  REGISTER = 2; // 新增注册字段
-  POST = 3;     // 与Response统一
-  QUERY_USER = 4;
-  INSERT_CONTACT = 5;
-  QUERY_GROUP = 6;
-  INSERT_GROUP = 7;
-  INSERT_GROUP_USER = 8;
-  FILE = 9;
-  UPDATE_AVATAR = 10;
-  // TODO: 拓展包括删除好友等
-}
-
 message Login {
-  // 登录消息还没确定格式
+  string from_account = 1;
 }
 
 message Logout {
   int64 from_user_id = 1;
 }
 
-message Register {
+message Signup {
   // 注册消息还没确定格式
 }
 
@@ -73,12 +58,10 @@ message UpdateAvatar {
 }
 
 message RequestMessage {
-  RequestType type = 1;
-
   oneof payload {
     Login login = 2;
     Logout logout = 3;
-    Register register = 4;
+    Signup signup = 4;
     common.Post post = 5;
     QueryUser query_user = 6;
     InsertContact insert_contact = 7;

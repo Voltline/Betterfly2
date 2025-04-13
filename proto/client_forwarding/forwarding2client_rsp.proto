@@ -1,0 +1,28 @@
+syntax = "proto3";
+option go_package = "Betterfly2/proto/client_forwarding";
+package client_forwarding;
+
+enum LoginResult {
+  LOGIN_OK = 0;
+  ACCOUNT_NOT_EXIST = 1;
+  PASSWORD_ERROR = 2;
+  JWT_ERROR = 3;
+  LOGIN_SVR_ERROR = 10;
+}
+
+enum SignupResult {
+  SIGNUP_OK = 0;
+  ACCOUNT_EXIST = 1;
+  SIGNUP_SVR_ERROR = 10;
+}
+
+message LoginRsp {
+  LoginResult result = 1;
+  int64 user_id = 2;
+  string jwt = 3;
+}
+
+message SignupRsp {
+    SignupResult result = 1;
+}
+

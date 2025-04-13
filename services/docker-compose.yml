@@ -78,8 +78,8 @@ services:
   login_service:
     build:
       context: ..
-      dockerfile: services/login_service/Dockerfile
-    container_name: login_service
+      dockerfile: login_signup_service/Dockerfile
+    container_name: login_signup_service
     environment:
       PGSQL_DSN: ${PGSQL_DSN}
     networks:

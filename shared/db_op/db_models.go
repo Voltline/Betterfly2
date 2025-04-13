@@ -8,4 +8,5 @@ type User struct {
 	Avatar       string `gorm:"comment:用户头像的url，图片存在COS或别的http服务器上"`
 	PasswordHash string `gorm:"comment:加密后的用户密码哈希值"`
 	Salt         string `gorm:"comment:每个用户不同的盐值，防止彩虹表攻击"`
+	JwtKey       string `gorm:"comment:jwt的key"`
 }

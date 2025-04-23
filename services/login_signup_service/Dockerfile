@@ -4,22 +4,26 @@ FROM golang:1.24 as builder
 # 设置工作目录（项目根目录）
 WORKDIR /app
 
-# 复制整个项目（包含 shared）
-COPY ./services/login_service ./services/login_service
+# 复制所有必要的模块文件和项目文件（关键修改）
+COPY ./proto ./proto
 COPY ./shared ./shared
+COPY ./services/login_signup_service ./services/login_signup_service
 
-# 进入 login_signup_service 目录构建
-WORKDIR /app/services/login_service
+# 进入服务目录构建
+WORKDIR /app/services/login_signup_service
 
-# 构建 login_main.go
-RUN go mod tidy && go build -o login_main login_main.go
+# 下载依赖并构建
+RUN go mod tidy && \
+    go build -o login_signup_main login_signup_main.go
 
 # 第二阶段：运行环境
 FROM ubuntu:latest
 
 WORKDIR /app
-COPY --from=builder /app/services/login_service/login_main .
+
+# 复制构建结果和必要的文件
+COPY --from=builder /app/services/login_signup_service/login_signup_main .
 COPY --from=builder /app/shared/db_op/db_config/server.crt .
 
 # 启动服务
-ENTRYPOINT ["./login_main"]
+ENTRYPOINT ["./login_signup_main"]

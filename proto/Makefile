@@ -1,10 +1,10 @@
-PROTOC=protoc
-PROTO_DIR=.
-OUT_DIR=gen
-PROTOC_GEN_GO=protoc-gen-go
-PROTOC_GEN_GO_GRPC=protoc-gen-go-grpc
+PROTOC = protoc
+PROTO_DIR = .
+PROTOC_GEN_GO = protoc-gen-go
+PROTOC_GEN_GO_GRPC = protoc-gen-go-grpc
 
-PROTO_FILES=$(shell find $(PROTO_DIR) -name '*.proto')
+# 找到所有proto文件
+PROTO_FILES = $(shell find $(PROTO_DIR) -name '*.proto')
 
 all: gen
 
@@ -12,8 +12,8 @@ gen:
 	@echo "正在从proto文件生成Go文件..."
 	@for file in $(PROTO_FILES); do \
 		$(PROTOC) \
-			-I=. \
-			--proto_path=$(PROTO_DIR) \
+			-I=$(PROTO_DIR) \
+			-I=$(PROTO_DIR)/idl \
 			--go_out=. --go_opt=paths=source_relative \
 			--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 			$$file; \

@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 )
 
@@ -121,8 +122,19 @@ func readProcess(client *Client, userID string) {
 			continue
 		}
 
+		requestMsg, err := HandleRequestData(p)
+		if err != nil {
+			sugar.Warnf("收到非标准化数据: %v", err)
+			continue
+		}
+
+		post := requestMsg.GetPost()
+		if post == nil {
+			continue
+		}
+
 		var targetTopic string
-		targetTopic, err = redis_client.GetContainerByConnection(string(p))
+		targetTopic, err = redis_client.GetContainerByConnection(strconv.FormatInt(post.GetToId(), 10))
 		if err != nil {
 			sugar.Warnf("%s 用户不在线", string(p))
 			continue

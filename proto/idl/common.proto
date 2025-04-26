@@ -1,6 +1,6 @@
 syntax = "proto3";
 package common;
-option go_package = "proto/gen";
+option go_package = "Betterfly2/proto/idl";
 
 enum FileOperation {
   UPLOAD = 0;

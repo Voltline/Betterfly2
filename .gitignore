@@ -30,3 +30,5 @@ proto/gen
 *.pb.grpc.go
 go.sum
 .DS_Store
+*pb2.py
+*pb2_grpc.py

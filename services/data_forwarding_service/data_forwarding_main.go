@@ -107,13 +107,17 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 
 	for msg := range claim.Messages() {
 		sugar.Infof("Kafka 收到消息: %s", string(msg.Value))
-		// TODO: 自定义业务逻辑
-		err := handlers.SendMessage(string(msg.Value), "你好，这是来自服务器的回应!")
+		requestMsg, err := handlers.HandleRequestData(msg.Value)
 		if err != nil {
 			sugar.Errorf("处理消息失败: %v", err)
 			continue
 		}
-		sugar.Infof("成功发送回显消息: %s", string(msg.Value))
+
+		err = handlers.RequestMessageHandler(requestMsg)
+		if err != nil {
+			sugar.Errorf("处理消息失败: %v", err)
+			continue
+		}
 
 		session.MarkMessage(msg, "")
 	}

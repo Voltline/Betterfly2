@@ -1,8 +1,8 @@
 syntax = "proto3";
 package request;
-option go_package = "proto/gen";
+option go_package = "Betterfly2/proto/idl";
 
-import "common.proto";
+import "idl/common.proto";
 
 message Login {
   string from_account = 1;

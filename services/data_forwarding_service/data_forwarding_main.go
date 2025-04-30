@@ -9,6 +9,7 @@ import (
 	"github.com/IBM/sarama"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,12 +39,18 @@ func consumerRoutine() {
 
 	groupID := "message-consumer-group"
 
-	error := publisher.WaitForKafkaReady(broker, 30*time.Second)
-	if error != nil {
-		sugar.Fatalf("Kafka 启动超时: %v", error)
+	// 解析多个 Kafka broker 地址
+	brokerList := splitBrokers(broker)
+
+	// 等待 Kafka 启动并支持多个 broker
+	for _, brokerAddr := range brokerList {
+		error := publisher.WaitForKafkaReady(brokerAddr, 30*time.Second)
+		if error != nil {
+			sugar.Fatalf("Kafka 启动超时: %v", error)
+		}
 	}
 
-	consumerGroup, err := sarama.NewConsumerGroup([]string{broker}, groupID, saramaConfig)
+	consumerGroup, err := sarama.NewConsumerGroup(brokerList, groupID, saramaConfig)
 	if err != nil {
 		sugar.Fatalf("创建 Kafka 消费组失败: %v", err)
 	}
@@ -96,6 +103,12 @@ func main() {
 	if err != nil {
 		sugar.Fatalln("启动 WebSocket 服务器失败: ", err)
 	}
+}
+
+// splitBrokers 解析多个 Kafka broker 地址
+func splitBrokers(broker string) []string {
+	// 使用 strings.Split 来拆分逗号分隔的 broker 地址
+	return strings.Split(broker, ",")
 }
 
 func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }

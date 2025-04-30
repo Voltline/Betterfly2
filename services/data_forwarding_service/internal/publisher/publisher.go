@@ -7,6 +7,7 @@ import (
 	"github.com/IBM/sarama"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,13 +59,18 @@ func InitKafkaProducer() error {
 		sarama_config.Producer.RequiredAcks = sarama.WaitForAll
 		sarama_config.Producer.Retry.Max = 5
 
-		error := WaitForKafkaReady(broker, 30*time.Second)
-		if error != nil {
-			initErr = fmt.Errorf("Kafka 启动超时: %v", error)
-			return
+		// 解析多个 Kafka broker 地址
+		brokerList := splitBrokers(broker)
+
+		for _, brokerAddr := range brokerList {
+			error := WaitForKafkaReady(brokerAddr, 30*time.Second)
+			if error != nil {
+				sugar.Fatalf("Kafka 启动超时: %v", error)
+			}
 		}
 
-		producer, err := sarama.NewSyncProducer([]string{broker}, sarama_config)
+		// 使用多个 broker 地址初始化生产者
+		producer, err := sarama.NewSyncProducer(brokerList, sarama_config)
 		if err != nil {
 			initErr = fmt.Errorf("创建 Kafka 生产者失败: %v", err)
 			return
@@ -72,6 +78,12 @@ func InitKafkaProducer() error {
 		KafkaProducer = producer
 	})
 	return initErr
+}
+
+// splitBrokers 解析多个 Kafka broker 地址
+func splitBrokers(broker string) []string {
+	// 将逗号分隔的 broker 地址拆分为数组
+	return strings.Split(broker, ",")
 }
 
 // PublishMessage 发布消息到 Kafka

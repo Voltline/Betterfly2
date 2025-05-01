@@ -1,22 +1,21 @@
 package main
 
 import (
+	"Betterfly2/shared/logger"
 	"context"
 	"data_forwarding_service/config"
+	"data_forwarding_service/internal/consumer"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/redis_client"
+	"data_forwarding_service/internal/utils"
+	"errors"
 	"github.com/IBM/sarama"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
-
-	"Betterfly2/shared/logger"
 )
-
-type KafkaConsumerGroupHandler struct{}
 
 func consumerRoutine() {
 	sugar := logger.Sugar()
@@ -40,7 +39,7 @@ func consumerRoutine() {
 	groupID := "message-consumer-group"
 
 	// 解析多个 Kafka broker 地址
-	brokerList := splitBrokers(broker)
+	brokerList := utils.SplitBrokers(broker)
 
 	// 等待 Kafka 启动并支持多个 broker
 	for _, brokerAddr := range brokerList {
@@ -57,12 +56,17 @@ func consumerRoutine() {
 	defer consumerGroup.Close()
 
 	ctx := context.Background()
-	handler := &KafkaConsumerGroupHandler{}
+	handler := &consumer.KafkaConsumerGroupHandler{}
 
 	go func() {
 		for {
 			err := consumerGroup.Consume(ctx, []string{topic}, handler)
 			if err != nil {
+				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
+					sugar.Warnf("Kafka 消费者组已关闭，退出消费循环")
+					break
+				}
+
 				sugar.Errorf("Kafka 消费错误: %v", err)
 				time.Sleep(time.Second)
 			}
@@ -103,36 +107,4 @@ func main() {
 	if err != nil {
 		sugar.Fatalln("启动 WebSocket 服务器失败: ", err)
 	}
-}
-
-// splitBrokers 解析多个 Kafka broker 地址
-func splitBrokers(broker string) []string {
-	// 使用 strings.Split 来拆分逗号分隔的 broker 地址
-	return strings.Split(broker, ",")
-}
-
-func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
-
-// 实现samara的消费处理器协议
-func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	sugar := logger.Sugar()
-
-	for msg := range claim.Messages() {
-		sugar.Infof("Kafka 收到消息: %s", string(msg.Value))
-		requestMsg, err := handlers.HandleRequestData(msg.Value)
-		if err != nil {
-			sugar.Errorf("处理消息失败: %v", err)
-			continue
-		}
-
-		err = handlers.RequestMessageHandler(requestMsg)
-		if err != nil {
-			sugar.Errorf("处理消息失败: %v", err)
-			continue
-		}
-
-		session.MarkMessage(msg, "")
-	}
-	return nil
 }

@@ -84,6 +84,24 @@ services:
     networks:
       - backend
 
+  df2:
+    build:
+      context: ..
+      dockerfile: services/data_forwarding_service/Dockerfile
+    container_name: df2
+    depends_on:
+      - redis
+      - kafka1
+      - kafka2
+    environment:
+      PORT: 54343
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
+    ports:
+      - "54343:54343"
+    networks:
+      - backend
+
   login_service:
     build:
       context: ..

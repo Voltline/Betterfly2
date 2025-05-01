@@ -3,11 +3,11 @@ package publisher
 import (
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/config"
+	"data_forwarding_service/internal/utils"
 	"fmt"
 	"github.com/IBM/sarama"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -60,7 +60,7 @@ func InitKafkaProducer() error {
 		sarama_config.Producer.Retry.Max = 5
 
 		// 解析多个 Kafka broker 地址
-		brokerList := splitBrokers(broker)
+		brokerList := utils.SplitBrokers(broker)
 
 		for _, brokerAddr := range brokerList {
 			error := WaitForKafkaReady(brokerAddr, 30*time.Second)
@@ -78,12 +78,6 @@ func InitKafkaProducer() error {
 		KafkaProducer = producer
 	})
 	return initErr
-}
-
-// splitBrokers 解析多个 Kafka broker 地址
-func splitBrokers(broker string) []string {
-	// 将逗号分隔的 broker 地址拆分为数组
-	return strings.Split(broker, ",")
 }
 
 // PublishMessage 发布消息到 Kafka

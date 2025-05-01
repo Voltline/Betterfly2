@@ -3,6 +3,7 @@ package redis_client
 import (
 	"Betterfly2/shared/logger"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/redis/go-redis/v9"
 	"os"
@@ -42,13 +43,33 @@ func RegisterConnection(id string, containerID string) error {
 }
 
 func UnregisterConnection(id string, containerID string) error {
+	// 检查当前记录是否匹配当前容器
+	current, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil // 本来就没有
+		}
+		return err
+	}
+	if current != containerID {
+		sugar := logger.Sugar()
+		sugar.Warnf("尝试删除非本容器的连接: %s 属于 %s, 当前容器: %s", id, current, containerID)
+		return nil // 不匹配则不删除
+	}
+
 	pipe := Rdb.TxPipeline()
 	pipe.HDel(ctx, "ws_connection_mapping", id)
 	pipe.SRem(ctx, fmt.Sprintf("container_connections:%s", containerID), id)
-	_, err := pipe.Exec(ctx)
+	_, err = pipe.Exec(ctx)
 	return err
 }
 
-func GetContainerByConnection(id string) (string, error) {
-	return Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+func GetContainerByConnection(id string) string {
+	result, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+	if err != nil {
+		sugar := logger.Sugar()
+		sugar.Warnf("GetContainerByConnection 错误: %v", err)
+		return ""
+	}
+	return result
 }

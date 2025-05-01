@@ -19,7 +19,7 @@ func RequestMessageHandler(message *pb.RequestMessage) error {
 		sugar.Infof("收到 Signup 消息: %+v", payload.Signup)
 	case *pb.RequestMessage_Post:
 		sugar.Infof("收到 Post 消息: %+v", payload.Post)
-		fromId := strconv.FormatInt(payload.Post.GetToId(), 10)
+		fromId := strconv.FormatInt(payload.Post.GetFromId(), 10)
 		toId := strconv.FormatInt(payload.Post.GetToId(), 10)
 		msg := fromId + ": " + payload.Post.GetMsg()
 		err = SendMessage(toId, msg)

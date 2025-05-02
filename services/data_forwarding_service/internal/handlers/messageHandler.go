@@ -9,7 +9,7 @@ import (
 
 func RequestMessageHandler(message *pb.RequestMessage) error {
 	sugar := logger.Sugar()
-	var err error = nil
+	var err error
 	switch payload := message.Payload.(type) {
 	case *pb.RequestMessage_Login:
 		sugar.Infof("收到 Login 消息: %+v", payload.Login)
@@ -19,12 +19,12 @@ func RequestMessageHandler(message *pb.RequestMessage) error {
 		sugar.Infof("收到 Signup 消息: %+v", payload.Signup)
 	case *pb.RequestMessage_Post:
 		sugar.Infof("收到 Post 消息: %+v", payload.Post)
-		fromId := strconv.FormatInt(payload.Post.GetFromId(), 10)
-		toId := strconv.FormatInt(payload.Post.GetToId(), 10)
-		msg := fromId + ": " + payload.Post.GetMsg()
-		err = SendMessage(toId, msg)
+		fromID := strconv.FormatInt(payload.Post.GetFromId(), 10)
+		toID := strconv.FormatInt(payload.Post.GetToId(), 10)
+		msg := fromID + ": " + payload.Post.GetMsg()
+		err = SendMessage(toID, msg)
 		if err == nil {
-			sugar.Infof("%s 成功向 %s 发送消息", fromId, toId)
+			sugar.Infof("%s 成功向 %s 发送消息", fromID, toID)
 		}
 	case *pb.RequestMessage_QueryUser:
 		sugar.Infof("收到 QueryUser 消息: %+v", payload.QueryUser)

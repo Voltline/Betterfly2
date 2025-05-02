@@ -7,7 +7,7 @@ import (
 	"data_forwarding_service/internal/consumer"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
-	"data_forwarding_service/internal/redis_client"
+	"data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/utils"
 	"errors"
 	"github.com/IBM/sarama"
@@ -43,9 +43,9 @@ func consumerRoutine() {
 
 	// 等待 Kafka 启动并支持多个 broker
 	for _, brokerAddr := range brokerList {
-		error := publisher.WaitForKafkaReady(brokerAddr, 30*time.Second)
-		if error != nil {
-			sugar.Fatalf("Kafka 启动超时: %v", error)
+		brokerErr := publisher.WaitForKafkaReady(brokerAddr, 30*time.Second)
+		if brokerErr != nil {
+			sugar.Fatalf("Kafka 启动超时: %v", brokerErr)
 		}
 	}
 
@@ -94,11 +94,11 @@ func main() {
 	defer publisher.KafkaProducer.Close()
 
 	// 初始化 Redis 客户端
-	err = redis_client.InitRedis()
+	err = redisClient.InitRedis()
 	if err != nil {
 		sugar.Fatalln(err)
 	}
-	defer redis_client.Rdb.Close()
+	defer redisClient.Rdb.Close()
 
 	go consumerRoutine()
 

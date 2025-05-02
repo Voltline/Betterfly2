@@ -3,7 +3,7 @@ package handlers
 import (
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/publisher"
-	"data_forwarding_service/internal/redis_client"
+	"data_forwarding_service/internal/redis"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"net/http"
@@ -90,7 +90,7 @@ func readProcess(client *Client, userID string) {
 		if containerID == "" {
 			containerID = "message-topic"
 		}
-		redis_client.UnregisterConnection(userID, containerID)
+		redisClient.UnregisterConnection(userID, containerID)
 
 		sugar.Infof("(%v, %v)连接已关闭", userID, client.conn.RemoteAddr())
 	}()
@@ -125,7 +125,7 @@ func readProcess(client *Client, userID string) {
 		}
 
 		var targetTopic string
-		targetTopic = redis_client.GetContainerByConnection(strconv.FormatInt(post.GetToId(), 10))
+		targetTopic = redisClient.GetContainerByConnection(strconv.FormatInt(post.GetToId(), 10))
 		if targetTopic == "" {
 			sugar.Warnf("%s 用户不在线", string(p))
 			continue
@@ -173,19 +173,6 @@ func SendMessage(userID string, message string) error {
 	return nil
 }
 
-// internalStopClient 内部关闭连接
-// 调用者必须持有锁
-func internalStopClient(userID string) {
-	client, ok := clients[userID]
-	if !ok {
-		return
-	}
-	sugar := logger.Sugar()
-	client.conn.Close()
-	client.shouldStop = true
-	sugar.Infof("内部连接关闭: %v", userID)
-}
-
 // StopClient 外部关闭特定连接
 func StopClient(userID string) {
 	clientsMutex.Lock()
@@ -213,21 +200,21 @@ func checkAndResolveConflict(userID string, client *Client) error {
 		sugar.Infof("已有本地连接，关闭旧连接: %v", userID)
 		oldClient.conn.Close()
 		delete(clients, userID)
-		if err := redis_client.UnregisterConnection(userID, containerID); err != nil {
+		if err := redisClient.UnregisterConnection(userID, containerID); err != nil {
 			sugar.Warnf("本地Redis注销失败（忽略继续）: %v", err)
 		}
 	}
 	clientsMutex.Unlock()
 
 	// 第二步：检测是否远程已注册
-	remoteContainer := redis_client.GetContainerByConnection(userID)
+	remoteContainer := redisClient.GetContainerByConnection(userID)
 	sugar.Infof("远程容器: %v", remoteContainer)
 
 	if remoteContainer != "" && remoteContainer != containerID {
 		sugar.Infof("用户 %s 存在于其他容器 %s", userID, remoteContainer)
 
 		// 注销旧连接
-		if err := redis_client.UnregisterConnection(userID, remoteContainer); err != nil {
+		if err := redisClient.UnregisterConnection(userID, remoteContainer); err != nil {
 			return fmt.Errorf("注销 Redis 失败: %w", err)
 		}
 
@@ -238,7 +225,7 @@ func checkAndResolveConflict(userID string, client *Client) error {
 	}
 
 	// 第三步：注册本连接
-	if err := redis_client.RegisterConnection(userID, containerID); err != nil {
+	if err := redisClient.RegisterConnection(userID, containerID); err != nil {
 		return fmt.Errorf("注册 Redis 失败: %w", err)
 	}
 

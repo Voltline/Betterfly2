@@ -54,23 +54,23 @@ func InitKafkaProducer() error {
 
 		sugar.Infof("当前 Kafka Broker: %s, topic: %s", broker, topic)
 
-		sarama_config := sarama.NewConfig()
-		sarama_config.Producer.Return.Successes = true
-		sarama_config.Producer.RequiredAcks = sarama.WaitForAll
-		sarama_config.Producer.Retry.Max = 5
+		saramaConfig := sarama.NewConfig()
+		saramaConfig.Producer.Return.Successes = true
+		saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
+		saramaConfig.Producer.Retry.Max = 5
 
 		// 解析多个 Kafka broker 地址
 		brokerList := utils.SplitBrokers(broker)
 
 		for _, brokerAddr := range brokerList {
-			error := WaitForKafkaReady(brokerAddr, 30*time.Second)
-			if error != nil {
-				sugar.Fatalf("Kafka 启动超时: %v", error)
+			brokerErr := WaitForKafkaReady(brokerAddr, 30*time.Second)
+			if brokerErr != nil {
+				sugar.Fatalf("Kafka 启动超时: %v", brokerErr)
 			}
 		}
 
 		// 使用多个 broker 地址初始化生产者
-		producer, err := sarama.NewSyncProducer(brokerList, sarama_config)
+		producer, err := sarama.NewSyncProducer(brokerList, saramaConfig)
 		if err != nil {
 			initErr = fmt.Errorf("创建 Kafka 生产者失败: %v", err)
 			return

@@ -1,4 +1,4 @@
-package redis_client
+package redisClient
 
 import (
 	"Betterfly2/shared/logger"

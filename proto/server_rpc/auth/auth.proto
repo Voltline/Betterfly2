@@ -38,7 +38,19 @@ message SignupRsp {
   string account = 3;
 }
 
+message CheckJwtReq {
+  int64 user_id = 1;
+  string jwt = 2;
+}
+
+message CheckJwtRsp {
+  AuthResult result = 1;
+  int64 user_id = 2;
+  string account = 3;
+}
+
 service AuthService {
   rpc Login (LoginReq) returns (LoginRsp);
   rpc Signup (SignupReq) returns (SignupRsp);
+  rpc CheckJwt (CheckJwtReq) returns (CheckJwtRsp);
 }

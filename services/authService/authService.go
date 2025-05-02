@@ -26,7 +26,6 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 	logger.Sugar().Infof("RPC-LoginReq { account:%s, jwt:%s }", account, jwt)
 	user := &db.User{}
 	err := error(nil)
-	userBriefInfo := ""
 
 	user, err = db.GetUserByAccount(account)
 	if err != nil {
@@ -38,13 +37,12 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 		result = pb.AuthResult_ACCOUNT_NOT_EXIST
 		goto RETURN
 	}
-	userBriefInfo = "user" + string(user.ID) + user.Account
 
 	if jwt == "" { // 密码验证
 		err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 		if err != nil {
+			logger.Sugar().Warnln(userBriefStr(user), "password error")
 			result = pb.AuthResult_PASSWORD_ERROR
-			logger.Sugar().Warnln(userBriefInfo, "password error")
 			goto RETURN
 		}
 
@@ -52,7 +50,8 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 			user.JwtKey = make([]byte, config.JwtKeyLength)
 			_, err = rand.Read(user.JwtKey)
 			if err != nil {
-				logger.Sugar().Errorln(userBriefInfo, "failed to generate jwt key:", err)
+				logger.Sugar().Errorln(userBriefStr(user), "failed to generate jwt key:", err)
+				result = pb.AuthResult_SERVICE_ERROR
 				goto RETURN
 			}
 			db.UpdateUserJwtKeyById(user.ID, user.JwtKey)
@@ -61,26 +60,27 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 		// 生成jwt
 		jwt, err = utils.GenerateJWT(user)
 		if err != nil {
-			logger.Sugar().Errorln(userBriefInfo, "failed to generate jwt with key:", err)
+			logger.Sugar().Errorln(userBriefStr(user), "failed to generate jwt with key:", err)
 			jwt = ""
+			result = pb.AuthResult_SERVICE_ERROR
 			goto RETURN
 		}
-		logger.Sugar().Infof(userBriefInfo, "login success with password")
+		logger.Sugar().Infoln(userBriefStr(user), "login success with password")
 
 	} else { // jwt验证
 		_, err = utils.ValidateJWT(jwt, user.JwtKey)
 		if err != nil {
 			result = pb.AuthResult_JWT_ERROR
 			jwt = ""
-			logger.Sugar().Warnln(userBriefInfo, "failed to validate jwt:", err)
+			logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", err)
 		}
 		newJwt, err := utils.GenerateJWT(user)
 		if err != nil {
-			logger.Sugar().Errorln(userBriefInfo, "failed to generate jwt key:", err)
+			logger.Sugar().Errorln(userBriefStr(user), "failed to generate jwt key:", err)
 		} else {
 			jwt = newJwt
 		}
-		logger.Sugar().Infof(userBriefInfo, "login success with jwt")
+		logger.Sugar().Infoln(userBriefStr(user), "login success with jwt")
 	}
 
 RETURN:
@@ -97,11 +97,12 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	password := rsp.GetPassword()
 	userName := rsp.GetUserName()
 	result := pb.AuthResult_OK
-	var id int64 = 0
+	var userID int64 = 0
 	var passwordHash []byte
 
 	user, err := db.GetUserByAccount(account)
 	if err != nil {
+		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
 		goto RETURN
 	}
@@ -113,6 +114,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	// 创建用户
 	passwordHash, err = bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
+		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
 		goto RETURN
 	}
@@ -124,18 +126,62 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	}
 	err = db.AddUser(user)
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
+		if strings.Contains(err.Error(), "duplicate") {
 			result = pb.AuthResult_ACCOUNT_EXIST
 		} else {
+			logger.Sugar().Errorln("fail to get user:", err)
 			result = pb.AuthResult_SERVICE_ERROR
 		}
 		goto RETURN
 	}
 
+	userID = user.ID
+
 RETURN:
 	return &pb.SignupRsp{
 		Result:  result,
-		UserId:  id,
+		UserId:  userID,
 		Account: account,
 	}, nil
+}
+
+func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.CheckJwtRsp, error) {
+	result := pb.AuthResult_OK
+	userID := rsp.GetUserId()
+	jwt := rsp.GetJwt()
+	account := ""
+	var claim *utils.BetterflyClaims
+
+	// 获取用户
+	user, err := db.GetUserByAccount(account)
+	if err != nil {
+		logger.Sugar().Errorln("fail to get user:", err)
+		result = pb.AuthResult_SERVICE_ERROR
+		goto RETURN
+	}
+	if user != nil {
+		result = pb.AuthResult_ACCOUNT_EXIST
+		goto RETURN
+	}
+	account = user.Account
+
+	// 验证jwt
+	claim, err = utils.ValidateJWT(jwt, user.JwtKey)
+	if err != nil || claim.ID != userID || claim.Account != account {
+		logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", err)
+		result = pb.AuthResult_JWT_ERROR
+		goto RETURN
+	}
+
+RETURN:
+	return &pb.CheckJwtRsp{
+		Result:  result,
+		UserId:  userID,
+		Account: account,
+	}, nil
+
+}
+
+func userBriefStr(user *db.User) string {
+	return "user" + string(user.ID) + "[" + user.Account + "]"
 }

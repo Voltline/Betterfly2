@@ -102,13 +102,15 @@ services:
     networks:
       - backend
 
-  login_service:
+  auth_service:
     build:
       context: ..
-      dockerfile: services/login_signup_service/Dockerfile
-    container_name: login_signup_service
+      dockerfile: services/authService/Dockerfile
+    container_name: authService
     environment:
       PGSQL_DSN: ${PGSQL_DSN}
+    ports:
+      - "50051:50051"
     networks:
       - backend
 

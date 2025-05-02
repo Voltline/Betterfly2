@@ -7,14 +7,14 @@ WORKDIR /app
 # 复制所有必要的模块文件和项目文件（关键修改）
 COPY ./proto ./proto
 COPY ./shared ./shared
-COPY ./services/login_signup_service ./services/login_signup_service
+COPY ./services/authService ./services/authService
 
 # 进入服务目录构建
-WORKDIR /app/services/login_signup_service
+WORKDIR /app/services/authService
 
 # 下载依赖并构建
 RUN go mod tidy && \
-    go build -o login_signup_main login_signup_main.go
+    go build -o authMain .
 
 # 第二阶段：运行环境
 FROM ubuntu:latest
@@ -22,8 +22,8 @@ FROM ubuntu:latest
 WORKDIR /app
 
 # 复制构建结果和必要的文件
-COPY --from=builder /app/services/login_signup_service/login_signup_main .
-COPY --from=builder /app/shared/db_op/db_config/server.crt .
+COPY --from=builder /app/services/authService/authMain .
+COPY --from=builder /app/shared/db/config/server.crt .
 
 # 启动服务
-ENTRYPOINT ["./login_signup_main"]
+ENTRYPOINT ["./authMain"]

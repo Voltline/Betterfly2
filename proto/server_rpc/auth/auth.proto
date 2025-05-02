@@ -1,0 +1,44 @@
+syntax = "proto3";
+option go_package = "Betterfly2/proto/server_rpc/auth";   // 指定自动生成go代码时的包名
+package auth;   // 指定包名，防止命名冲突
+
+
+enum AuthResult {
+  OK = 0;
+  SERVICE_ERROR = -1;
+
+  ACCOUNT_EXIST = 1;
+  ACCOUNT_NOT_EXIST = 2;
+  PASSWORD_ERROR = 3;
+  JWT_ERROR = 4;
+}
+
+message LoginReq {
+  string account = 1;
+  string password = 2;
+  string jwt = 3;
+}
+
+message LoginRsp {
+  AuthResult result = 1;
+  int64 user_id = 2;
+  string account = 3;
+  string jwt = 4;
+}
+
+message SignupReq {
+  string account = 1;
+  string password = 2;
+  string user_name = 3;
+}
+
+message SignupRsp {
+  AuthResult result = 1;
+  int64 user_id = 2;
+  string account = 3;
+}
+
+service AuthService {
+  rpc Login (LoginReq) returns (LoginRsp);
+  rpc Signup (SignupReq) returns (SignupRsp);
+}

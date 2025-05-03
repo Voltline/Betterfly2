@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"golang.org/x/crypto/bcrypt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -153,14 +154,14 @@ func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.Chec
 	var claim *utils.BetterflyClaims
 
 	// 获取用户
-	user, err := db.GetUserByAccount(account)
+	user, err := db.GetUserById(userID)
 	if err != nil {
 		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
 		goto RETURN
 	}
-	if user != nil {
-		result = pb.AuthResult_ACCOUNT_EXIST
+	if user == nil {
+		result = pb.AuthResult_ACCOUNT_NOT_EXIST
 		goto RETURN
 	}
 	account = user.Account
@@ -183,5 +184,5 @@ RETURN:
 }
 
 func userBriefStr(user *db.User) string {
-	return "user" + string(user.ID) + "[" + user.Account + "]"
+	return "user" + strconv.FormatInt(user.ID, 10) + "[" + user.Account + "]"
 }

@@ -1,6 +1,6 @@
 syntax = "proto3";
-package common;
-option go_package = "Betterfly2/proto/idl";
+package df_interface;
+option go_package = "Betterfly2/proto/data_forwarding";
 
 enum FileOperation {
   UPLOAD = 0;

@@ -18,7 +18,6 @@ for proto_file in ${PROTO_FILES}; do
     echo "处理proto文件：${proto_file}"
     python3.9 -m grpc_tools.protoc \
         -I${PROTO_DIR} \
-        -I${PROTO_DIR}/idl \
         --python_out=${OUT_DIR} \
         --grpc_python_out=${OUT_DIR} \
         ${proto_file}

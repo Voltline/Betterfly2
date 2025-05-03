@@ -12,7 +12,7 @@ import (
 var Rdb *redis.Client
 var ctx = context.Background()
 
-// 初始化 Redis
+// InitRedis 初始化 Redis
 func InitRedis() error {
 	addr := os.Getenv("REDIS_ADDR")
 	if addr == "" {
@@ -52,8 +52,7 @@ func UnregisterConnection(id string, containerID string) error {
 		return err
 	}
 	if current != containerID {
-		sugar := logger.Sugar()
-		sugar.Warnf("尝试删除非本容器的连接: %s 属于 %s, 当前容器: %s", id, current, containerID)
+		logger.Sugar().Warnf("尝试删除非本容器的连接: %s 属于 %s, 当前容器: %s", id, current, containerID)
 		return nil // 不匹配则不删除
 	}
 
@@ -67,8 +66,7 @@ func UnregisterConnection(id string, containerID string) error {
 func GetContainerByConnection(id string) string {
 	result, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
 	if err != nil {
-		sugar := logger.Sugar()
-		sugar.Warnf("GetContainerByConnection 错误: %v", err)
+		logger.Sugar().Warnf("GetContainerByConnection 错误: %v", err)
 		return ""
 	}
 	return result

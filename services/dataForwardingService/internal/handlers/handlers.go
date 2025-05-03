@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	pb "Betterfly2/proto/data_forwarding"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/redis"
 	"fmt"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/proto"
 	"net/http"
 	"os"
 	"strconv"
@@ -17,6 +19,7 @@ type Client struct {
 	conn       *websocket.Conn
 	sendChan   chan []byte
 	shouldStop bool // 当shouldStop为true时，读、写协程立刻退出工作
+	loggedIn   bool // 是否已登录
 }
 
 // 用于存储 WebSocket 连接的map
@@ -50,24 +53,20 @@ func handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 提取 userID，如果没有就用 IP 地址代替
-	userID := r.URL.Query().Get("user")
-	if userID == "" {
-		userID = conn.RemoteAddr().String()
-	}
+	// 连接时用ip:port临时作为键
+	userID := conn.RemoteAddr().String()
 
 	client := &Client{
 		conn:       conn,
 		sendChan:   make(chan []byte, 256),
 		shouldStop: false,
+		loggedIn:   false,
 	}
 
-	// 统一处理本地冲突、Redis 注册、远程通知
-	if err := checkAndResolveConflict(userID, client); err != nil {
-		sugar.Errorf("连接初始化失败: %v", err)
-		conn.Close()
-		return
-	}
+	// 未登录时直接保存
+	clientsMutex.Lock()
+	clients[userID] = client
+	clientsMutex.Unlock()
 
 	sugar.Infof("已与 %v 建立连接", conn.RemoteAddr())
 	sugar.Infof("收到的Request内容为: %v", *r)
@@ -86,11 +85,14 @@ func readProcess(client *Client, userID string) {
 		clientsMutex.Unlock()
 		client.conn.Close()
 
-		containerID := os.Getenv("HOSTNAME")
-		if containerID == "" {
-			containerID = "message-topic"
+		// 如果已登录才会在redis中注册
+		if client.loggedIn {
+			containerID := os.Getenv("HOSTNAME")
+			if containerID == "" {
+				containerID = "message-topic"
+			}
+			redisClient.UnregisterConnection(userID, containerID)
 		}
-		redisClient.UnregisterConnection(userID, containerID)
 
 		sugar.Infof("(%v, %v)连接已关闭", userID, client.conn.RemoteAddr())
 	}()
@@ -108,8 +110,8 @@ func readProcess(client *Client, userID string) {
 			close(client.sendChan)
 			break
 		}
+
 		if len(p) == 0 {
-			// log.Warn.Println("接受到的消息为空，已跳过")
 			continue
 		}
 
@@ -119,21 +121,62 @@ func readProcess(client *Client, userID string) {
 			continue
 		}
 
-		post := requestMsg.GetPost()
-		if post == nil {
-			continue
-		}
-
-		var targetTopic string
-		targetTopic = redisClient.GetContainerByConnection(strconv.FormatInt(post.GetToId(), 10))
-		if targetTopic == "" {
-			sugar.Warnf("%s 用户不在线", string(p))
-			continue
-		}
-		err = publishMessage(p, targetTopic) // 将消息转发到消息队列
-		if err != nil {
-			sugar.Errorln("转发信息到消息队列异常: ", err)
-			break
+		// 如果未登录，只处理两种报文
+		if !client.loggedIn {
+			switch requestMsg.Payload.(type) {
+			case *pb.RequestMessage_Login:
+				rsp, realUserID, err := HandleLoginMessage(requestMsg)
+				logger.Sugar().Infof("rsp: %s", rsp.String())
+				if err != nil {
+					logger.Sugar().Errorf("登录出现错误: %v", err)
+					rspBytes, _ := proto.Marshal(rsp)
+					client.sendChan <- rspBytes
+					continue
+				}
+				oldUserID := userID
+				userID = strconv.FormatInt(realUserID, 10)
+				err = checkAndResolveConflict(userID, client)
+				if err != nil {
+					logger.Sugar().Errorf("登录解决冲突失败: %v", err)
+				} else {
+					// 删除旧键值对
+					clientsMutex.Lock()
+					delete(clients, oldUserID)
+					clientsMutex.Unlock()
+					client.loggedIn = true
+				}
+				// 返回登录结果
+				rspBytes, _ := proto.Marshal(rsp)
+				client.sendChan <- rspBytes
+			case *pb.RequestMessage_Signup:
+				rsp, err := HandleSignupMessage(requestMsg)
+				logger.Sugar().Infof("rsp: %s", rsp.String())
+				if err != nil {
+					logger.Sugar().Errorf("注册出现错误：: %v", err)
+				}
+				rspBytes, _ := proto.Marshal(rsp)
+				client.sendChan <- rspBytes
+			case *pb.RequestMessage_Logout:
+				// 终止掉当前连接
+				break
+			default:
+				logger.Sugar().Errorln("未登录时不处理其他类型信息")
+				rsp := &pb.ResponseMessage{
+					Payload: &pb.ResponseMessage_Refused{},
+				}
+				rspBytes, _ := proto.Marshal(rsp)
+				client.sendChan <- rspBytes
+			}
+		} else {
+			intUserID, err := strconv.ParseInt(userID, 10, 64)
+			if err != nil {
+				logger.Sugar().Errorf("无法将 %s 转为int64: %v", userID, err)
+				continue
+			}
+			err = RequestMessageHandler(intUserID, requestMsg)
+			if err != nil {
+				logger.Sugar().Errorf("消息处理错误: %v", err)
+			}
 		}
 		// TODO: DEBUG模式
 		sugar.Infoln("收到WebSocket消息:", string(p))
@@ -147,7 +190,7 @@ func writeToClient(client *Client, userID string) {
 		sugar.Infof("连接关闭，写协程退出")
 	}()
 	for msg := range client.sendChan {
-		err := client.conn.WriteMessage(websocket.TextMessage, msg)
+		err := client.conn.WriteMessage(websocket.BinaryMessage, msg)
 		if err != nil {
 			sugar.Errorln("发送消息错误: ", err)
 		}
@@ -160,7 +203,7 @@ func publishMessage(message []byte, targetTopic string) error {
 }
 
 // SendMessage 外部发送消息接口
-func SendMessage(userID string, message string) error {
+func SendMessage(userID string, message []byte) error {
 	clientsMutex.Lock()
 	client, ok := clients[userID]
 	clientsMutex.Unlock()
@@ -169,7 +212,7 @@ func SendMessage(userID string, message string) error {
 	}
 
 	// 通过 channel 发送消息
-	client.sendChan <- []byte(message)
+	client.sendChan <- message
 	return nil
 }
 

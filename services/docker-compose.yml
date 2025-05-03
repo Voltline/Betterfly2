@@ -79,6 +79,7 @@ services:
       PORT: 54342
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
+      AUTH_RPC_ADDR: auth_service:50051
     ports:
       - "54342:54342"
     networks:
@@ -97,6 +98,7 @@ services:
       PORT: 54343
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
+      AUTH_RPC_ADDR: auth_service:50051
     ports:
       - "54343:54343"
     networks:

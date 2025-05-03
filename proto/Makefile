@@ -13,7 +13,6 @@ gen:
 	@for file in $(PROTO_FILES); do \
 		$(PROTOC) \
 			-I=$(PROTO_DIR) \
-			-I=$(PROTO_DIR)/idl \
 			--go_out=. --go_opt=paths=source_relative \
 			--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 			$$file; \

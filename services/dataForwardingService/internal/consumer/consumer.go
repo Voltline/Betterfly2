@@ -12,7 +12,7 @@ type KafkaConsumerGroupHandler struct{}
 func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
 func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 
-// 实现samara的消费处理器协议
+// ConsumeClaim 实现samara的消费处理器协议
 func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	sugar := logger.Sugar()
 
@@ -44,7 +44,12 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 			continue
 		}
 
-		err = handlers.RequestMessageHandler(requestMsg)
+		if requestMsg.GetPost() == nil {
+			sugar.Errorln("消费者收到非Post报文")
+			continue
+		}
+
+		err = handlers.InplaceHandlePostMessage(requestMsg)
 		if err != nil {
 			sugar.Errorf("处理消息失败: %v", err)
 			continue

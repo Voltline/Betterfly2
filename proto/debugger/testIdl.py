@@ -1,11 +1,11 @@
 import base64
-import idl.request_pb2
-import idl.common_pb2
+import data_forwarding.df_interface_pb2
+import data_forwarding.request_pb2
+import data_forwarding.common_pb2
 
-def create_request_with_post(from_id, to_id, message):
+def create_request_with_post(to_id, message):
     # 构建 Post 消息
-    post = idl.common_pb2.Post()
-    post.from_id = from_id
+    post = data_forwarding.common_pb2.post()
     post.to_id = to_id
     post.msg = message
     post.is_group = False
@@ -14,7 +14,7 @@ def create_request_with_post(from_id, to_id, message):
     post.real_file_name = ""
 
     # 封装进 RequestMessage
-    request = idl.request_pb2.RequestMessage()
+    request = data_forwarding.request_pb2.RequestMessage()
     request.post.CopyFrom(post)
 
     # 序列化
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     to_id = 10001
     message = "你好，这是一条封装在 RequestMessage 中的 Post 消息"
 
-    binary_data = create_request_with_post(from_id, to_id, message)
+    binary_data = create_request_with_post(to_id, message)
 
     # 转成 base64 并写入文件
     base64_data = base64.b64encode(binary_data).decode("utf-8")

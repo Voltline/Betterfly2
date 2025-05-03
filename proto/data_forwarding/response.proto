@@ -1,18 +1,31 @@
 syntax = "proto3";
-package response;
-option go_package = "Betterfly2/proto/idl";
+package df_interface;
+option go_package = "Betterfly2/proto/data_forwarding";
 
-import "idl/common.proto";
+import "data_forwarding/common.proto";
 
-enum ResponseType {
-  REFUSED = 0;
-  SERVER = 1;
-  FILE = 2;
-  POST = 3; // 与Request统一
-  WARN = 4;
-  REGISTER_INFO = 5; // 用于注册后返回用户ID
-  USER_INFO = 6;
-  GROUP_INFO = 7;
+enum LoginResult {
+  LOGIN_OK = 0;
+  ACCOUNT_NOT_EXIST = 1;
+  PASSWORD_ERROR = 2;
+  JWT_ERROR = 3;
+  LOGIN_SVR_ERROR = 10;
+}
+
+enum SignupResult {
+  SIGNUP_OK = 0;
+  ACCOUNT_EXIST = 1;
+  SIGNUP_SVR_ERROR = 10;
+}
+
+message LoginRsp {
+  LoginResult result = 1;
+  int64 user_id = 2;
+  string jwt = 3;
+}
+
+message SignupRsp {
+  SignupResult result = 1;
 }
 
 message Refused { // 就是空的
@@ -38,7 +51,7 @@ message _FileDownloadResponse {
 
 message FileResponse {
   string file_full_name = 1; // file_hash + file_suffix
-  common.FileOperation operation = 2;
+  FileOperation operation = 2;
 
   oneof result {
     _FileUploadResponse upload = 3;
@@ -50,10 +63,6 @@ message Warn {
   string warning_message = 1;
 }
 
-message RegisterInfo {
-  // 还没定好
-}
-
 message UserInfo {
   int64 send_to_user_id = 1;
   string query_user_name = 2;
@@ -63,17 +72,4 @@ message GroupInfo {
   bool client_need_save = 1; // 对于原先的msg字段, 0保存，1不保存
   int64 query_group_id = 2;
   string query_group_name = 3;
-}
-
-message ResponseMessage {
-  oneof payload {
-    Refused refused = 2;
-    Server server = 3;
-    FileResponse file_response = 4;
-    common.Post post = 5;
-    Warn warn = 6;
-    RegisterInfo register_info = 7;
-    UserInfo user_info = 8;
-    GroupInfo group_info = 9;
-  }
 }

@@ -1,19 +1,21 @@
 syntax = "proto3";
-package request;
-option go_package = "Betterfly2/proto/idl";
+package df_interface;
+option go_package = "Betterfly2/proto/data_forwarding";
 
-import "idl/common.proto";
+import "data_forwarding/common.proto";
 
-message Login {
-  string from_account = 1;
+message LoginReq {
+  string account = 1;
+  string password = 2;
 }
 
-message Logout {
-  int64 from_user_id = 1;
+message SignupReq {
+  string account = 1;
+  string password = 2;
+  string user_name = 3;
 }
 
-message Signup {
-  // 注册消息还没确定格式
+message LogoutReq {
 }
 
 message QueryUser {
@@ -48,27 +50,11 @@ message FileRequest {
   int64 from_user_id = 1;
   string file_hash = 2; // SHA512
   string file_suffix = 3; // 文件后缀
-  common.FileOperation operation = 4; // 0上传，1下载
+  FileOperation operation = 4; // 0上传，1下载
 }
 
 message UpdateAvatar {
   int64 target_id = 1; // 被修改头像的用户/群组id
   string avatar_hash = 2; // 通过hash可以找到文件
   bool is_group = 3; // 用于标识是否为群组
-}
-
-message RequestMessage {
-  oneof payload {
-    Login login = 2;
-    Logout logout = 3;
-    Signup signup = 4;
-    common.Post post = 5;
-    QueryUser query_user = 6;
-    InsertContact insert_contact = 7;
-    QueryGroup query_group = 8;
-    InsertGroup insert_group = 9;
-    InsertGroupUser insert_group_user = 10;
-    FileRequest file_request = 11;
-    UpdateAvatar update_avatar = 12;
-  }
 }

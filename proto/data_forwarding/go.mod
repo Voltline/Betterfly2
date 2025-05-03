@@ -1,4 +1,4 @@
-module idl
+module df_interface
 
 require (
 	google.golang.org/protobuf v1.33.0

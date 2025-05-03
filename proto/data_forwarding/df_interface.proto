@@ -1,0 +1,38 @@
+syntax='proto3';
+package df_interface;
+option go_package = "Betterfly2/proto/data_forwarding";
+
+import "data_forwarding/common.proto";
+import "data_forwarding/request.proto";
+import "data_forwarding/response.proto";
+
+message RequestMessage {
+  string jwt = 1;
+  oneof payload {
+    LoginReq login = 2;
+    SignupReq signup = 3;
+    LogoutReq logout = 4;
+    Post post = 5;
+    QueryUser query_user = 6;
+    InsertContact insert_contact = 7;
+    QueryGroup query_group = 8;
+    InsertGroup insert_group = 9;
+    InsertGroupUser insert_group_user = 10;
+    FileRequest file_request = 11;
+    UpdateAvatar update_avatar = 12;
+  }
+}
+
+message ResponseMessage {
+  oneof payload {
+    LoginRsp login = 1;
+    SignupRsp signup = 2;
+    Refused refused = 3;
+    Server server = 4;
+    FileResponse file_response = 5;
+    Post post = 6;
+    Warn warn = 7;
+    UserInfo user_info = 8;
+    GroupInfo group_info = 9;
+  }
+}

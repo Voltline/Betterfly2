@@ -2,6 +2,7 @@ package main
 
 import (
 	"Betterfly2/shared/logger"
+	"data_forwarding_service/internal/grpcClient"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/redis"
@@ -28,6 +29,13 @@ func main() {
 	defer redisClient.Rdb.Close()
 
 	go ConsumerRoutine()
+
+	// 初始化 gRPC 客户端
+	_, err = grpcClient.GetAuthClient()
+	if err != nil {
+		sugar.Fatalln(err)
+	}
+	defer grpcClient.CloseConn()
 
 	sugar.Infoln("Betterfly2服务器启动完成")
 	err = handlers.StartWebSocketServer()

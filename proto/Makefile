@@ -12,9 +12,9 @@ gen:
 	@echo "正在从proto文件生成Go文件..."
 	@for file in $(PROTO_FILES); do \
 		$(PROTOC) \
-			--plugin=protoc-gen-go=PROTOC_GEN_GO \
-			--plugin=protoc-gen-go-grpc=PROTOC_GEN_GO_GRPC \
-			-I=$(PROTO_DIR) \
+			--plugin=protoc-gen-go=$(PROTOC_GEN_GO) \
+			--plugin=protoc-gen-go-grpc=$(PROTOC_GEN_GO_GRPC) \
+			-I=. \
 			--go_out=. --go_opt=paths=source_relative \
 			--go-grpc_out=. --go-grpc_opt=paths=source_relative \
 			$$file; \

@@ -7,12 +7,12 @@ WORKDIR /app
 # 4. 复制当前微服务代码
 COPY ./proto ./proto
 COPY ./shared ./shared
-COPY ./services/data_forwarding_service ./services/data_forwarding_service
+COPY ./services/dataForwardingService ./services/dataForwardingService
 
 # 5. 编译 Go 可执行文件
-WORKDIR /app/services/data_forwarding_service
+WORKDIR /app/services/dataForwardingService
 RUN go mod tidy &&  \
-    go build -o data_forwarding_main data_forwarding_main.go
+    go build -o dataForwardingMain .
 
 # 6. 使用更小的基础镜像作为运行环境
 FROM ubuntu:latest
@@ -20,7 +20,7 @@ FROM ubuntu:latest
 WORKDIR /app
 
 # 7. 复制编译后的可执行文件
-COPY --from=builder /app/services/data_forwarding_service/data_forwarding_main .
+COPY --from=builder /app/services/dataForwardingService/dataForwardingMain .
 
 # 8. 运行微服务
-CMD ["./data_forwarding_main"]
+CMD ["./dataForwardingMain"]

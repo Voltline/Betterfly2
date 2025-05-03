@@ -5,9 +5,7 @@ import (
 	"context"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/consumer"
-	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
-	"data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/utils"
 	"errors"
 	"github.com/IBM/sarama"
@@ -17,7 +15,8 @@ import (
 	"time"
 )
 
-func consumerRoutine() {
+// ConsumerRoutine 定义数据中转服务的消费者行为
+func ConsumerRoutine() {
 	sugar := logger.Sugar()
 
 	topic := os.Getenv("HOSTNAME")
@@ -78,33 +77,4 @@ func consumerRoutine() {
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 	<-sigterm
 	sugar.Info("Kafka 消费者退出")
-}
-
-func main() {
-	sugar := logger.Sugar()
-	defer logger.Sync()
-
-	sugar.Infoln("Betterfly2服务器启动中")
-
-	// 初始化 Kafka 生产者
-	err := publisher.InitKafkaProducer()
-	if err != nil {
-		sugar.Fatalln(err)
-	}
-	defer publisher.KafkaProducer.Close()
-
-	// 初始化 Redis 客户端
-	err = redisClient.InitRedis()
-	if err != nil {
-		sugar.Fatalln(err)
-	}
-	defer redisClient.Rdb.Close()
-
-	go consumerRoutine()
-
-	sugar.Infoln("Betterfly2服务器启动完成")
-	err = handlers.StartWebSocketServer()
-	if err != nil {
-		sugar.Fatalln("启动 WebSocket 服务器失败: ", err)
-	}
 }

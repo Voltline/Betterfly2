@@ -69,7 +69,7 @@ services:
   df:
     build:
       context: ..
-      dockerfile: services/data_forwarding_service/Dockerfile
+      dockerfile: services/dataForwardingService/Dockerfile
     container_name: df
     depends_on:
       - redis
@@ -87,7 +87,7 @@ services:
   df2:
     build:
       context: ..
-      dockerfile: services/data_forwarding_service/Dockerfile
+      dockerfile: services/dataForwardingService/Dockerfile
     container_name: df2
     depends_on:
       - redis

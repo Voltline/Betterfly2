@@ -1,7 +1,7 @@
 PROTOC = ../tool/bin/protoc
 PROTO_DIR = .
-PROTOC_GEN_GO = protoc-gen-go
-PROTOC_GEN_GO_GRPC = protoc-gen-go-grpc
+PROTOC_GEN_GO = ../tool/bin/protoc-gen-go
+PROTOC_GEN_GO_GRPC = ../tool/bin/protoc-gen-go-grpc
 
 # 找到所有proto文件
 PROTO_FILES = $(shell find $(PROTO_DIR) -name '*.proto')

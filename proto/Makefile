@@ -1,4 +1,4 @@
-PROTOC = protoc
+PROTOC = ../tool/bin/protoc
 PROTO_DIR = .
 PROTOC_GEN_GO = protoc-gen-go
 PROTOC_GEN_GO_GRPC = protoc-gen-go-grpc

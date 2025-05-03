@@ -1,6 +1,11 @@
 # 第一阶段：构建
 FROM golang:1.24 AS builder
 
+# 设置go mod下载镜像源
+ENV GOPROXY=https://goproxy.cn,direct \
+    GO111MODULE=on \
+    CGO_ENABLED=0
+
 # 设置工作目录（项目根目录）
 WORKDIR /app
 

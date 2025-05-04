@@ -1,7 +1,18 @@
-PROTOC = ../tool/bin/protoc
 PROTO_DIR = .
-PROTOC_GEN_GO = ../tool/bin/protoc-gen-go
-PROTOC_GEN_GO_GRPC = ../tool/bin/protoc-gen-go-grpc
+
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Linux)
+	PLATFORM := linux
+else ifeq ($(UNAME_S),Darwin)
+	PLATFORM := macOS
+else
+	$(error Unsupported OS)
+endif
+
+PROTOC = ../tool/bin/$(PLATFORM)/protoc
+PROTOC_GEN_GO = ../tool/bin/$(PLATFORM)/protoc-gen-go
+PROTOC_GEN_GO_GRPC = ../tool/bin/$(PLATFORM)/protoc-gen-go-grpc
 
 # 找到所有proto文件
 PROTO_FILES = $(shell find $(PROTO_DIR) -name '*.proto')

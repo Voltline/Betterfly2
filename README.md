@@ -15,16 +15,21 @@
 * [Voltline](https://github.com/Voltline)
 * [D_S_O_](https://github.com/DissipativeStructureObject)
 
-## 项目概况
-* 项目开始于2025年3月1日
-* 项目基于MIT协议开源
+## 项目概况-Project Overview
 
-## Project Brief Introduction
-* The project starts on March 1, 2025
-* The project based on MIT protocol
+- 项目启动时间：2025 年 3 月 1 日
+- 开源协议：MIT License
+
+- Project Start Date: March 1, 2025
+- Open Source License: MIT License
 
 ## 架构-Architecture
-&emsp; 后续补充架构设计
+![](others/Betterfly2-architecture.jpg)
+### **免责声明 / Disclaimer**  
+> 图中所使用的所有第三方 Logo（如 gRPC、Kafka、Redis、Nginx、GORM、PostgreSQL、MinIO、Traefik 等）均为其各自版权所有者的注册商标，仅用于技术架构说明用途。我们不拥有这些 Logo 的任何权利，也不代表与相关方有任何官方合作。如有使用不当请联系我们删除。
+>
+> The logos of third-party technologies used in the diagram (such as gRPC, Kafka, Redis, Nginx, GORM, PostgreSQL, MinIO, Traefik, etc.) are trademarks or registered trademarks of their respective owners. They are included solely for the purpose of illustrating the system architecture and do not imply any affiliation, endorsement, or official relationship. We do not claim ownership of these logos. Please contact us if you believe any usage is inappropriate.
+
 
 ## 项目信息-About Betterfly-Server-Go
 ### 语言-Lang

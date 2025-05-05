@@ -132,7 +132,7 @@ func readProcess(client *Client, userID string) {
 			continue
 		}
 
-		// 如果未登录，只处理两种报文
+		// 如果未登录，只处理三种报文
 		if !client.loggedIn {
 			switch requestMsg.Payload.(type) {
 			case *pb.RequestMessage_Login:
@@ -184,9 +184,13 @@ func readProcess(client *Client, userID string) {
 				logger.Sugar().Errorf("无法将 %s 转为int64: %v", userID, err)
 				continue
 			}
-			err = RequestMessageHandler(intUserID, requestMsg)
+			res, err := RequestMessageHandler(intUserID, requestMsg)
 			if err != nil {
 				logger.Sugar().Errorf("消息处理错误: %v", err)
+			}
+			if res == 1 {
+				// res为1代表后续收到logout报文，需要断开连接
+				break
 			}
 		}
 		// TODO: DEBUG模式

@@ -25,9 +25,10 @@ func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
 	return req, nil
 }
 
-func RequestMessageHandler(fromID int64, message *pb.RequestMessage) error {
+func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error) {
 	sugar := logger.Sugar()
 	var err error
+	res := 0
 	switch payload := message.Payload.(type) {
 	case *pb.RequestMessage_Post:
 		sugar.Infof("收到 Post 消息: %+v", payload.Post)
@@ -46,10 +47,15 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) error {
 		sugar.Infof("收到 FileRequest 消息: %+v", payload.FileRequest)
 	case *pb.RequestMessage_UpdateAvatar:
 		sugar.Infof("收到 UpdateAvatar 消息: %+v", payload.UpdateAvatar)
+	case *pb.RequestMessage_Logout:
+		res = 1
+		sugar.Infof("收到登出报文: %+v", payload.Logout)
+	case *pb.RequestMessage_Login, *pb.RequestMessage_Signup:
+		sugar.Warnf("收到认证服务请求，不处理：%+v", payload)
 	default:
 		sugar.Warnf("收到不可处理Payload: %+v", payload)
 	}
-	return err
+	return res, err
 }
 
 func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64, error) {

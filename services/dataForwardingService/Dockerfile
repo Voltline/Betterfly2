@@ -1,6 +1,11 @@
 # 1. 使用 Go 官方镜像作为构建阶段
 FROM golang:1.24 AS builder
 
+# 设置go mod下载镜像源
+ENV GOPROXY=https://goproxy.cn,direct \
+    GO111MODULE=on \
+    CGO_ENABLED=0
+
 # 2. 设置工作目录
 WORKDIR /app
 

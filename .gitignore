@@ -32,3 +32,4 @@ go.sum
 .DS_Store
 *pb2.py
 *pb2_grpc.py
+*.pem

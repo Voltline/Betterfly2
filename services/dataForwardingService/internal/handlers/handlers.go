@@ -41,7 +41,18 @@ func StartWebSocketServer() error {
 	if port == "" {
 		port = "54342"
 	}
-	return http.ListenAndServe(":"+port, nil)
+
+	certFile := os.Getenv("CERT_PATH")
+	if certFile == "" {
+		certFile = "./certs/cert.pem"
+	}
+
+	keyFile := os.Getenv("KEY_PATH")
+	if keyFile == "" {
+		keyFile = "./certs/key.pem"
+	}
+
+	return http.ListenAndServeTLS(":"+port, certFile, keyFile, nil)
 }
 
 // 请求处理

@@ -24,7 +24,7 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 	jwt := req.GetJwt()
 	result := pb.AuthResult_OK
 
-	logger.Sugar().Infof("RPC-LoginReq { account:%s, jwt:%s }", account, jwt)
+	logger.Sugar().Debugf("RPC-LoginReq { account:%s, jwt:%s }", account, jwt)
 	user := &db.User{}
 	err := error(nil)
 
@@ -101,6 +101,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	var userID int64 = 0
 	var passwordHash []byte
 
+	logger.Sugar().Debugf("RPC-SignupReq { account:%s }", account)
 	user, err := db.GetUserByAccount(account)
 	if err != nil {
 		logger.Sugar().Errorln("fail to get user:", err)
@@ -152,6 +153,8 @@ func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.Chec
 	jwt := rsp.GetJwt()
 	account := ""
 	var claim *utils.BetterflyClaims
+
+	logger.Sugar().Debugf("RPC-CheckJwtReq { userID:%s, jwt:%s }", userID, jwt)
 
 	// 获取用户
 	user, err := db.GetUserById(userID)

@@ -31,7 +31,9 @@ var DB = func() func() *gorm.DB {
 				dsn = config.DefaultDsn
 			}
 			var err error
-			db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+			db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
+				Logger: nil,
+			})
 			if err != nil {
 				sugar.Fatalln("连接pgsql失败:", err)
 			}

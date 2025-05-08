@@ -9,6 +9,7 @@ import (
 
 	"Betterfly2/shared/db/config"
 	"Betterfly2/shared/logger"
+	gologger "gorm.io/gorm/logger"
 )
 
 var DB = func() func() *gorm.DB {
@@ -32,7 +33,7 @@ var DB = func() func() *gorm.DB {
 			}
 			var err error
 			db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
-				Logger: nil,
+				Logger: gologger.Default.LogMode(gologger.Silent),
 			})
 			if err != nil {
 				sugar.Fatalln("连接pgsql失败:", err)

@@ -11,6 +11,8 @@ enum AuthResult {
   ACCOUNT_NOT_EXIST = 2;
   PASSWORD_ERROR = 3;
   JWT_ERROR = 4;
+  ACCOUNT_EMPTY = 5;
+  PASSWORD_EMPTY = 6;
 }
 
 message LoginReq {

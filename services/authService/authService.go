@@ -100,9 +100,21 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	result := pb.AuthResult_OK
 	var userID int64 = 0
 	var passwordHash []byte
+	var user *db.User
+	var err error
 
 	logger.Sugar().Debugf("RPC-SignupReq { account:%s }", account)
-	user, err := db.GetUserByAccount(account)
+
+	if account == "" {
+		result = pb.AuthResult_ACCOUNT_EMPTY
+		goto RETURN
+	}
+	if password == "" {
+		result = pb.AuthResult_PASSWORD_EMPTY
+		goto RETURN
+	}
+
+	user, err = db.GetUserByAccount(account)
 	if err != nil {
 		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR

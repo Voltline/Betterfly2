@@ -110,9 +110,23 @@ services:
       dockerfile: services/authService/Dockerfile
     container_name: authService
     environment:
+      PORT: 50051
       PGSQL_DSN: ${PGSQL_DSN}
     ports:
       - "50051:50051"
+    networks:
+      - backend
+
+  friend_service:
+    build:
+      context: ..
+      dockerfile: services/friendService/Dockerfile
+    container_name: friendService
+    environment:
+      PORT: 54401
+      PGSQL_DSN: ${PGSQL_DSN}
+    ports:
+      - "54401:54401"
     networks:
       - backend
 

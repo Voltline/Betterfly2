@@ -17,6 +17,7 @@ enum SignupResult {
   ACCOUNT_EXIST = 1;
   ACCOUNT_EMPTY = 2;
   PASSWORD_EMPTY = 3;
+  ACCOUNT_TOO_LONG = 4;
   SIGNUP_SVR_ERROR = 10;
 }
 

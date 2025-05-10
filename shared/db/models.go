@@ -1,11 +1,22 @@
 package db
 
+const MaxNameLen = 50 // 账户、用户名、备注等的长度限制
+
 type User struct {
 	ID           int64  `gorm:"primaryKey;comment:用户id，唯一"`
-	Account      string `gorm:"uniqueIndex;comment:用户账号，唯一"`
-	Name         string `gorm:"comment:用户昵称，不唯一"`
-	UpdateTime   string `gorm:"comment:上次更新个人资料时间，用于用户间的个人资料同步"`
-	Avatar       string `gorm:"comment:用户头像的url，图片存在COS或别的http服务器上"`
-	PasswordHash string `gorm:"comment:加密后的用户密码哈希值"`
+	Account      string `gorm:"uniqueIndex;type:varchar(50);comment:用户账号，唯一"`
+	Name         string `gorm:"type:varchar(50);comment:用户昵称，不唯一"`
+	UpdateTime   string `gorm:"type:varchar(25);comment:上次更新个人资料时间，用于用户间的个人资料同步"`
+	Avatar       string `gorm:"type:varchar(255);comment:用户头像的url，图片存在COS或别的http服务器上"`
+	PasswordHash string `gorm:"type:varchar(60);comment:加密后的用户密码哈希值，bcrypt生成的带盐哈希固定长度60"`
 	JwtKey       []byte `gorm:"comment:jwt的key"`
+}
+
+type Friend struct {
+	UserID     int64  `gorm:"primaryKey;comment:当前用户ID"`
+	FriendID   int64  `gorm:"primaryKey;comment:对方用户ID"`
+	IsNotify   bool   `gorm:"comment:是否开启好友消息通知"`
+	Alias      string `gorm:"type:varchar(50);comment:对好友的备注名"`
+	IsDelete   bool   `gorm:"comment:是否为已删除好友"`
+	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间，用于同步"`
 }

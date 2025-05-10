@@ -12,17 +12,20 @@ import (
 	gologger "gorm.io/gorm/logger"
 )
 
-var DB = func() func() *gorm.DB {
+var DB = func() func(dst ...interface{}) *gorm.DB {
 	var (
 		db   *gorm.DB
 		once sync.Once
 	)
 
-	var initModels = func() {
-		db.AutoMigrate(&User{})
+	var initModels = func(dst ...interface{}) {
+		err := db.AutoMigrate(dst...)
+		if err != nil {
+			logger.Sugar().Fatalln("数据库自动迁移失败:", err)
+		}
 	}
 
-	return func() *gorm.DB {
+	return func(dst ...interface{}) *gorm.DB {
 		once.Do(func() {
 			sugar := logger.Sugar()
 			sugar.Infoln("开始连接数据库")

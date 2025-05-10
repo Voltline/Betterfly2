@@ -11,7 +11,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type AuthService struct {
@@ -109,6 +108,10 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 		result = pb.AuthResult_ACCOUNT_EMPTY
 		goto RETURN
 	}
+	if len(account) > db.MaxNameLen {
+		result = pb.AuthResult_ACCOUNT_TOO_LONG
+		goto RETURN
+	}
 	if password == "" {
 		result = pb.AuthResult_PASSWORD_EMPTY
 		goto RETURN
@@ -135,7 +138,6 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	user = &db.User{
 		Account:      account,
 		Name:         userName,
-		UpdateTime:   time.Now().UTC().Format(time.RFC3339),
 		PasswordHash: string(passwordHash),
 	}
 	err = db.AddUser(user)

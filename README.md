@@ -10,6 +10,7 @@
 ![License](https://img.shields.io/github/license/Voltline/Betterfly2)
 ![Issues](https://img.shields.io/github/issues/Voltline/Betterfly2)
 ![Stars](https://img.shields.io/github/stars/Voltline/Betterfly2)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Voltline/Betterfly2)
 
 ## 成员-Collaborators
 * [Voltline](https://github.com/Voltline)

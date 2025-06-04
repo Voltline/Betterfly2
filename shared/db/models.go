@@ -20,3 +20,13 @@ type Friend struct {
 	IsDelete   bool   `gorm:"comment:是否为已删除好友"`
 	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间，用于同步"`
 }
+
+type Message struct {
+	MessageID   int64  `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
+	FromUserID  int64  `gorm:"type:int8;comment:消息来源用户ID"`
+	ToUserID    int64  `gorm:"type:int8;comment:消息去向用户ID"`
+	Content     string `gorm:"type:varchar(700);comment:消息内容"`
+	Timestamp   string `gorm:"type:varchar(25);comment:消息产生时间"`
+	MessageType string `gorm:"type:varchar(10);comment:消息类型"`
+	IsGroup     bool   `gorm:"type:bool;comment:消息是否来自于群聊"`
+}

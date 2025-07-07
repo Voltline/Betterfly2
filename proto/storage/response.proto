@@ -1,0 +1,21 @@
+syntax = "proto3";
+package storage_interface;
+option go_package = "Betterfly2/proto/storage";
+
+message StoreMsgRsp {
+  int64 message_id = 1;
+}
+
+message MessageRsp {
+  int64 from_user_id = 1;
+  int64 to_user_id = 2;
+  string content = 3;
+  string timestamp = 4;
+  string msg_type = 5;
+  bool is_group = 6;
+}
+
+message SyncMessagesRsp {
+  repeated MessageRsp msgs = 1;
+}
+

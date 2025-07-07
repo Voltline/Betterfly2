@@ -1,0 +1,30 @@
+syntax = "proto3";
+package storage_interface;
+option go_package = "Betterfly2/proto/storage";
+
+message StoreNewMessage {
+  int64 from_user_id = 1;
+  int64 to_user_id = 2;
+  string content = 3;
+  string message_type = 4; // text, image, gif, file
+  bool is_group = 5;
+}
+
+message QueryMessage {
+  int64 message_id = 1;
+}
+
+message QuerySyncMessages {
+  int64 to_user_id = 1;
+  string timestamp = 2;
+}
+
+message UpdateUserName {
+  int64 user_id = 1;
+  string new_user_name = 2;
+}
+
+message UpdateUserAvatar {
+  int64 user_id = 1;
+  string new_avatar_url = 2;
+}

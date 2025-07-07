@@ -29,6 +29,28 @@ func AddUser(user *User) error {
 	return DB().Create(user).Error
 }
 
+// UpdateUserNameByID 用于更新用户昵称
+func UpdateUserNameByID(id int64, newName string) error {
+	nowTime := utils.NowTime()
+	return DB().Model(&User{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"name":        newName,
+			"update_time": nowTime,
+		}).Error
+}
+
+// UpdateUserAvatarByID 用于更新用户头像
+func UpdateUserAvatarByID(id int64, newAvatarURL string) error {
+	nowTime := utils.NowTime()
+	return DB().Model(&User{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"avatar":      newAvatarURL,
+			"update_time": nowTime,
+		}).Error
+}
+
 func getUser(user *User, err error) (*User, error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

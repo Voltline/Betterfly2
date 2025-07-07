@@ -1,0 +1,32 @@
+syntax = "proto3";
+package storage_interface;
+option go_package = "Betterfly2/proto/storage";
+
+import "storage/request.proto";
+import "storage/response.proto";
+
+enum StorageResult {
+  OK = 0;
+  SERVICE_ERROR = 255;
+
+  RECORD_NOT_EXIST = 1;
+}
+
+message RequestMessage {
+  oneof payload {
+    StoreNewMessage store_new_message = 1;
+    QueryMessage query_message = 2;
+    QuerySyncMessages query_sync_messages = 3;
+    UpdateUserName update_user_name = 4;
+    UpdateUserAvatar update_user_avatar = 5;
+  }
+}
+
+message ResponseMessage {
+  StorageResult result = 1;
+  oneof payload {
+    StoreMsgRsp store_msg_rsp = 2;
+    MessageRsp msg_rsp = 3;
+    SyncMessagesRsp sync_msgs_rsp = 4;
+  }
+}

@@ -13,20 +13,23 @@ enum StorageResult {
 }
 
 message RequestMessage {
+  string from_kafka_topic = 1;
+  int64 target_user_id = 2;
   oneof payload {
-    StoreNewMessage store_new_message = 1;
-    QueryMessage query_message = 2;
-    QuerySyncMessages query_sync_messages = 3;
-    UpdateUserName update_user_name = 4;
-    UpdateUserAvatar update_user_avatar = 5;
+    StoreNewMessage store_new_message = 3;
+    QueryMessage query_message = 4;
+    QuerySyncMessages query_sync_messages = 5;
+    UpdateUserName update_user_name = 6;
+    UpdateUserAvatar update_user_avatar = 7;
   }
 }
 
 message ResponseMessage {
   StorageResult result = 1;
+  int64 target_user_id = 2;
   oneof payload {
-    StoreMsgRsp store_msg_rsp = 2;
-    MessageRsp msg_rsp = 3;
-    SyncMessagesRsp sync_msgs_rsp = 4;
+    StoreMsgRsp store_msg_rsp = 3;
+    MessageRsp msg_rsp = 4;
+    SyncMessagesRsp sync_msgs_rsp = 5;
   }
 }

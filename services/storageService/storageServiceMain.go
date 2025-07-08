@@ -1,7 +1,11 @@
-package storageService
+package main
 
 import (
+	_ "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
+	_ "storageService/internal/cache"
+	_ "storageService/internal/consumer"
+	_ "storageService/internal/redis"
 )
 
 func main() {

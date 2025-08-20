@@ -3,8 +3,9 @@ package consumer
 import (
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/handlers"
-	"github.com/IBM/sarama"
 	"regexp"
+
+	"github.com/IBM/sarama"
 )
 
 type KafkaConsumerGroupHandler struct{}
@@ -17,7 +18,7 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 	sugar := logger.Sugar()
 
 	for msg := range claim.Messages() {
-		sugar.Infof("Kafka 收到消息: %s", string(msg.Value))
+		sugar.Debugf("Kafka 收到消息: %s", string(msg.Value))
 		// TODO: 或许有风险，需要改造
 		match, regErr := regexp.Match("DELETE USER [0-9a-zA-Z.:]+", msg.Value)
 		if regErr != nil {

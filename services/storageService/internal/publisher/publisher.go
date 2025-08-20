@@ -2,16 +2,21 @@ package publisher
 
 import (
 	"Betterfly2/shared/logger"
-	"data_forwarding_service/config"
-	"data_forwarding_service/internal/utils"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 )
+
+// splitBrokers 解析多个 Kafka broker 地址
+func splitBrokers(broker string) []string {
+	// 将逗号分隔的 broker 地址拆分为数组
+	return strings.Split(broker, ",")
+}
 
 var (
 	KafkaProducer sarama.SyncProducer
@@ -46,7 +51,7 @@ func InitKafkaProducer() error {
 		broker := os.Getenv("KAFKA_BROKER")
 
 		if broker == "" {
-			broker = config.DefaultNsServer
+			broker = "localhost:9092"
 		}
 
 		sugar.Infof("当前 Kafka Broker: %s", broker)
@@ -57,7 +62,7 @@ func InitKafkaProducer() error {
 		saramaConfig.Producer.Retry.Max = 5
 
 		// 解析多个 Kafka broker 地址
-		brokerList := utils.SplitBrokers(broker)
+		brokerList := splitBrokers(broker)
 
 		for _, brokerAddr := range brokerList {
 			brokerErr := WaitForKafkaReady(brokerAddr, 30*time.Second)

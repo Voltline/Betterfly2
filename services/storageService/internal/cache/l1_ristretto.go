@@ -2,9 +2,10 @@ package cache
 
 import (
 	"Betterfly2/shared/logger"
-	"github.com/dgraph-io/ristretto"
 	"sync"
 	"time"
+
+	"github.com/dgraph-io/ristretto"
 )
 
 var (
@@ -19,7 +20,7 @@ func InitL1Cache() {
 		cache, err := ristretto.NewCache(&ristretto.Config{
 			NumCounters: 1e7,     // 计数器数量
 			MaxCost:     1 << 30, // 最大成本(1 GB)
-			BufferItems: 64,      // 并发写缓冲大小
+			BufferItems: 256,     // 并发写缓冲大小
 		})
 		if err != nil {
 			logger.Sugar().Fatal("初始化L1缓存失败: %v", err)

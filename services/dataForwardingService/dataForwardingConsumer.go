@@ -8,11 +8,12 @@ import (
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/utils"
 	"errors"
-	"github.com/IBM/sarama"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/IBM/sarama"
 )
 
 // ConsumerRoutine 定义数据中转服务的消费者行为
@@ -76,5 +77,5 @@ func ConsumerRoutine() {
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 	<-sigterm
-	sugar.Info("Kafka 消费者退出")
+	sugar.Debug("Kafka 消费者退出")
 }

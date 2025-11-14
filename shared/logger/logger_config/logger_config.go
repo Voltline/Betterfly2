@@ -20,5 +20,5 @@ var encoderConfig zapcore.EncoderConfig = zapcore.EncoderConfig{
 var CoreConfig zapcore.Core = zapcore.NewCore(
 	zapcore.NewConsoleEncoder(encoderConfig), // 使用控制台编码器
 	zapcore.AddSync(os.Stdout),               // 输出到控制台
-	zapcore.DebugLevel,                       // 日志级别
+	zapcore.InfoLevel,                        // 日志级别
 )

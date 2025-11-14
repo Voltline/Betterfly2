@@ -25,7 +25,7 @@ func InitRedis() error {
 	})
 
 	sugar := logger.Sugar()
-	sugar.Infof("当前 Redis: %s", addr)
+	sugar.Debugf("当前 Redis: %s", addr)
 
 	_, err := Rdb.Ping(ctx).Result()
 	if err != nil {

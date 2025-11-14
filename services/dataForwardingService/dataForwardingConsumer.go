@@ -24,12 +24,15 @@ func ConsumerRoutine() {
 	if topic == "" {
 		topic = "message-topic"
 	}
+
+	// 所有容器都需要监听踢出消息topic
+	kickTopic := "user-kick-topic"
 	broker := os.Getenv("KAFKA_BROKER")
 	if broker == "" {
 		broker = config.DefaultNsServer
 	}
 
-	sugar.Infof("启动 Kafka 消费者, broker: %s, topic: %s", broker, topic)
+	sugar.Debugf("启动 Kafka 消费者, broker: %s, topic: %s", broker, topic)
 
 	saramaConfig := sarama.NewConfig()
 	saramaConfig.Version = sarama.V2_1_0_0
@@ -56,11 +59,12 @@ func ConsumerRoutine() {
 	defer consumerGroup.Close()
 
 	ctx := context.Background()
-	handler := &consumer.KafkaConsumerGroupHandler{}
+	// 使用全局WebSocket处理器创建消费者处理器
+	handler := consumer.NewKafkaConsumerGroupHandlerWithHandler(GetGlobalWebSocketHandler())
 
 	go func() {
 		for {
-			err := consumerGroup.Consume(ctx, []string{topic}, handler)
+			err := consumerGroup.Consume(ctx, []string{topic, kickTopic}, handler)
 			if err != nil {
 				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 					sugar.Warnf("Kafka 消费者组已关闭，退出消费循环")

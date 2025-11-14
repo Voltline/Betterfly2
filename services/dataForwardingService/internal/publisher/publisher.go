@@ -49,7 +49,7 @@ func InitKafkaProducer() error {
 			broker = config.DefaultNsServer
 		}
 
-		sugar.Infof("当前 Kafka Broker: %s", broker)
+		sugar.Debugf("当前 Kafka Broker: %s", broker)
 
 		saramaConfig := sarama.NewConfig()
 		saramaConfig.Producer.Return.Successes = true
@@ -94,6 +94,6 @@ func PublishMessage(message string, targetTopic string) error {
 	if err != nil {
 		return fmt.Errorf("向 Kafka 发布消息失败: %v", err)
 	}
-	sugar.Infof("Kafka 消息发布成功 - Partition: %d, Offset: %d", partition, offset)
+	sugar.Debugf("Kafka 消息发布成功 - Partition: %d, Offset: %d", partition, offset)
 	return nil
 }

@@ -6,10 +6,12 @@ import (
 	"Betterfly2/shared/logger"
 	"context"
 	"data_forwarding_service/internal/grpcClient"
+	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/utils"
 	"errors"
 	"google.golang.org/protobuf/proto"
+	"os"
 	"strconv"
 )
 
@@ -18,7 +20,7 @@ func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
 	err := proto.Unmarshal(data, req)
 	if err != nil {
 		// 反序列化失败了，说明数据不是有效的pb数据
-		logger.Sugar().Errorf("反序列化失败: %v", err)
+		logger.Sugar().Warnf("反序列化失败: %v", err)
 		return nil, err
 	}
 
@@ -31,25 +33,25 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 	res := 0
 	switch payload := message.Payload.(type) {
 	case *pb.RequestMessage_Post:
-		sugar.Infof("收到 Post 消息: %+v", payload.Post)
+		sugar.Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
 		err = handlePostMessage(fromID, message)
 	case *pb.RequestMessage_QueryUser:
-		sugar.Infof("收到 QueryUser 消息: %+v", payload.QueryUser)
+		sugar.Debugf("收到 QueryUser 消息")
 	case *pb.RequestMessage_InsertContact:
-		sugar.Infof("收到 InsertContact 消息: %+v", payload.InsertContact)
+		sugar.Debugf("收到 InsertContact 消息")
 	case *pb.RequestMessage_QueryGroup:
-		sugar.Infof("收到 QueryGroup 消息: %+v", payload.QueryGroup)
+		sugar.Debugf("收到 QueryGroup 消息")
 	case *pb.RequestMessage_InsertGroup:
-		sugar.Infof("收到 InsertGroup 消息: %+v", payload.InsertGroup)
+		sugar.Debugf("收到 InsertGroup 消息")
 	case *pb.RequestMessage_InsertGroupUser:
-		sugar.Infof("收到 InsertGroupUser 消息: %+v", payload.InsertGroupUser)
+		sugar.Debugf("收到 InsertGroupUser 消息")
 	case *pb.RequestMessage_FileRequest:
-		sugar.Infof("收到 FileRequest 消息: %+v", payload.FileRequest)
+		sugar.Debugf("收到 FileRequest 消息")
 	case *pb.RequestMessage_UpdateAvatar:
-		sugar.Infof("收到 UpdateAvatar 消息: %+v", payload.UpdateAvatar)
+		sugar.Debugf("收到 UpdateAvatar 消息")
 	case *pb.RequestMessage_Logout:
 		res = 1
-		sugar.Infof("收到登出报文: %+v", payload.Logout)
+		sugar.Infof("用户登出")
 	case *pb.RequestMessage_Login, *pb.RequestMessage_Signup:
 		sugar.Warnf("收到认证服务请求，不处理：%+v", payload)
 	default:
@@ -83,7 +85,7 @@ func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64,
 		authLoginReq.Jwt = jwt
 	}
 	authServiceRsp, err := rpcClient.Login(context.Background(), authLoginReq)
-	logger.Sugar().Infof("authServiceRsp: %s", authServiceRsp.String())
+	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
 	if err != nil {
 		return errRsp, -1, err
 	}
@@ -130,7 +132,7 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 		UserName: clientSignupReq.GetUserName(),
 	}
 	authServiceRsp, err := rpcClient.Signup(context.Background(), authSignupReq)
-	logger.Sugar().Infof("authServiceRsp: %s", authServiceRsp.String())
+	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
 	if err != nil {
 		return errRsp, err
 	}
@@ -169,16 +171,55 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	payload := message.GetPost()
 	payload.FromId = fromID
 
-	targetTopic := redisClient.GetContainerByConnection(strconv.FormatInt(payload.GetToId(), 10))
+	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
+	targetTopic := redisClient.GetContainerByConnection(targetUserID)
 	if targetTopic == "" {
 		// TODO: 消息保存
-		logger.Sugar().Warnf("%s 用户不在线", strconv.FormatInt(payload.GetToId(), 10))
+		logger.Sugar().Debugf("%s 用户不在线", targetUserID)
+		return nil
 	}
-	rspBytes, _ := proto.Marshal(message)
-	err = publishMessage(rspBytes, targetTopic) // 将消息转发到消息队列
-	if err != nil {
-		logger.Sugar().Warnf("消息转发失败: %v", err)
-		return err
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 检查是否在同一容器内
+	if targetTopic == currentContainerID {
+		// 同容器内消息，直接发送
+		rsp := &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_Post{
+				Post: payload,
+			},
+		}
+		rspBytes, err := proto.Marshal(rsp)
+		if err != nil {
+			logger.Sugar().Errorf("序列化响应消息失败: %v", err)
+			return err
+		}
+
+		// 使用全局WebSocket处理器的连接管理器直接发送消息
+		wsHandler := GetWebSocketHandler()
+		if wsHandler != nil {
+			err = wsHandler.connManager.SendMessageToUser(targetUserID, rspBytes)
+			if err != nil {
+				logger.Sugar().Warnf("发送消息失败: %v", err)
+				return err
+			}
+			logger.Sugar().Debugf("同容器内消息发送成功: %d -> %d", payload.GetFromId(), payload.GetToId())
+		} else {
+			logger.Sugar().Errorf("WebSocket处理器未初始化")
+		}
+	} else {
+		// 跨容器消息，通过Kafka转发
+		rspBytes, _ := proto.Marshal(message)
+		err = publisher.PublishMessage(string(rspBytes), targetTopic) // 将消息转发到消息队列
+		if err != nil {
+			logger.Sugar().Warnf("消息转发失败: %v", err)
+			return err
+		}
+		logger.Sugar().Debugf("跨容器消息转发成功: %d -> %d (目标容器: %s)", payload.GetFromId(), payload.GetToId(), targetTopic)
 	}
 
 	return nil
@@ -186,18 +227,34 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 
 func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 	payload := message.GetPost()
-	logger.Sugar().Infof("InplaceHandlePostMessage-payload: %s", payload.String())
+	logger.Sugar().Debugf("InplaceHandlePostMessage-payload: %s", payload.String())
+
+	// 构建响应消息
 	rsp := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Post{
 			Post: payload,
 		},
 	}
-	rspBytes, _ := proto.Marshal(rsp)
-	err := SendMessage(strconv.FormatInt(payload.GetToId(), 10), rspBytes)
+
+	// 序列化响应消息
+	rspBytes, err := proto.Marshal(rsp)
 	if err != nil {
+		logger.Sugar().Errorf("序列化响应消息失败: %v", err)
 		return err
 	}
 
-	logger.Sugar().Infof("%d 成功向 %d 发送消息", payload.GetFromId(), payload.GetToId())
+	// 使用全局WebSocket处理器的连接管理器直接发送消息
+	wsHandler := GetWebSocketHandler()
+	if wsHandler != nil {
+		err = wsHandler.connManager.SendMessageToUser(strconv.FormatInt(payload.GetToId(), 10), rspBytes)
+		if err != nil {
+			logger.Sugar().Warnf("发送消息失败: %v", err)
+			return err
+		}
+		logger.Sugar().Debugf("%d 成功向 %d 发送消息", payload.GetFromId(), payload.GetToId())
+	} else {
+		logger.Sugar().Errorf("WebSocket处理器未初始化")
+	}
+
 	return nil
 }

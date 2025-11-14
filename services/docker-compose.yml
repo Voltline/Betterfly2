@@ -4,6 +4,7 @@ services:
     container_name: redis
     ports:
       - "6379:6379"
+    command: redis-server --appendonly no --save ""
     networks:
       - backend
 
@@ -117,18 +118,18 @@ services:
     networks:
       - backend
 
-  friend_service:
-    build:
-      context: ..
-      dockerfile: services/friendService/Dockerfile
-    container_name: friendService
-    environment:
-      PORT: 54401
-      PGSQL_DSN: ${PGSQL_DSN}
-    ports:
-      - "54401:54401"
-    networks:
-      - backend
+#  friend_service:
+#    build:
+#      context: ..
+#      dockerfile: services/friendService/Dockerfile
+#    container_name: friendService
+#    environment:
+#      PORT: 54401
+#      PGSQL_DSN: ${PGSQL_DSN}
+#    ports:
+#      - "54401:54401"
+#    networks:
+#      - backend
 
 networks:
   backend:

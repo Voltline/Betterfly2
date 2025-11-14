@@ -26,6 +26,11 @@
 
 ## 架构-Architecture
 ![](others/Betterfly2-architecture.jpg)
+
+> 数据中转服务目前已经被划分为三层：连接层、会话层与路由层，用来更好地完成数据中转的全部服务
+> 
+> Data-Forwarding service has been divided into three layers: Connection Layer, Session Layer and Router Layer in order to better accomplish the data-forwarding tasks.
+
 ### **免责声明 / Disclaimer**  
 > 图中所使用的所有第三方 Logo（如 gRPC、Kafka、Redis、Nginx、GORM、PostgreSQL、MinIO、Traefik 等）均为其各自版权所有者的注册商标，仅用于技术架构说明用途。我们不拥有这些 Logo 的任何权利，也不代表与相关方有任何官方合作。如有使用不当请联系我们删除。
 >

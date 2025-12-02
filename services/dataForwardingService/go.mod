@@ -1,12 +1,13 @@
 module data_forwarding_service
 
-go 1.23.0
+go 1.24.0
 
 toolchain go1.24.1
 
 require (
 	Betterfly2/proto v0.0.0
 	Betterfly2/proto/data_forwarding v0.0.0
+	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
 	github.com/IBM/sarama v1.45.1
 	github.com/gorilla/websocket v1.5.3
@@ -36,15 +37,16 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/net v0.39.0 // indirect
-	golang.org/x/sys v0.32.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
 )
 
 replace (
 	Betterfly2/proto => ../../proto
 	Betterfly2/proto/data_forwarding => ../../proto/data_forwarding
+	Betterfly2/proto/storage => ../../proto/storage
 	Betterfly2/shared => ../../shared
 )

@@ -81,6 +81,7 @@ services:
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      LOG_LEVEL: debug
     ports:
       - "54342:54342"
     networks:
@@ -100,6 +101,7 @@ services:
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      LOG_LEVEL: debug
     ports:
       - "54343:54343"
     networks:
@@ -115,6 +117,25 @@ services:
       PGSQL_DSN: ${PGSQL_DSN}
     ports:
       - "50051:50051"
+    networks:
+      - backend
+
+  storage_service:
+    build:
+      context: ..
+      dockerfile: services/storageService/Dockerfile
+    container_name: storageService
+    depends_on:
+      - redis
+      - kafka1
+      - kafka2
+    environment:
+      PGSQL_DSN: ${PGSQL_DSN}
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_STORAGE_TOPIC: storage-requests
+      KAFKA_CONSUMER_GROUP: storage-service-group
+      LOG_LEVEL: debug
     networks:
       - backend
 

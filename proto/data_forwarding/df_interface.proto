@@ -20,6 +20,8 @@ message RequestMessage {
     InsertGroupUser insert_group_user = 10;
     FileRequest file_request = 11;
     UpdateAvatar update_avatar = 12;
+    QueryMessage query_message = 13;
+    QuerySyncMessages query_sync_messages = 14;
   }
 }
 
@@ -34,5 +36,7 @@ message ResponseMessage {
     Warn warn = 7;
     UserInfo user_info = 8;
     GroupInfo group_info = 9;
+    MessageRsp message_rsp = 10;
+    SyncMessagesRsp sync_msgs_rsp = 11;
   }
 }

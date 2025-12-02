@@ -58,3 +58,14 @@ message UpdateAvatar {
   string avatar_hash = 2; // 通过hash可以找到文件
   bool is_group = 3; // 用于标识是否为群组
 }
+
+// 查询单条消息
+message QueryMessage {
+  int64 message_id = 1;
+}
+
+// 同步消息（查询某个时间点之后的消息）
+message QuerySyncMessages {
+  int64 to_user_id = 1;
+  string timestamp = 2;
+}

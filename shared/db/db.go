@@ -55,7 +55,7 @@ var DB = func() func(dst ...interface{}) *gorm.DB {
 			sqlDB.SetConnMaxIdleTime(10 * time.Minute) // 空闲连接最多保持多久
 
 			sugar.Infoln("自动更新/创建表")
-			initModels()
+			initModels(dst...)
 			sugar.Infoln("数据库连接完成")
 		})
 		return db

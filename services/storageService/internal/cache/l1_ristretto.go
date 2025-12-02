@@ -14,6 +14,9 @@ var (
 	l1Cache   *ristretto.Cache
 )
 
+// L1Cache 实现Cache接口
+type L1Cache struct{}
+
 // InitL1Cache 用于初始化一个L1 Cache
 func InitL1Cache() {
 	once.Do(func() {
@@ -64,4 +67,30 @@ func L1Close() {
 		l1Cache.Close()
 		logger.Sugar().Infof("L1 缓存已关闭")
 	})
+}
+
+// Set 实现Cache接口的Set方法
+func (c *L1Cache) Set(key string, value interface{}, ttl time.Duration) bool {
+	return L1Set(key, value, ttl)
+}
+
+// Get 实现Cache接口的Get方法
+func (c *L1Cache) Get(key string) (interface{}, bool) {
+	return L1Get(key)
+}
+
+// Del 实现Cache接口的Del方法
+func (c *L1Cache) Del(key string) {
+	L1Del(key)
+}
+
+// Close 实现Cache接口的Close方法
+func (c *L1Cache) Close() {
+	L1Close()
+}
+
+// NewL1Cache 创建新的L1Cache实例
+func NewL1Cache() *L1Cache {
+	InitL1Cache()
+	return &L1Cache{}
 }

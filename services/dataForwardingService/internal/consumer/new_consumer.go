@@ -1,12 +1,17 @@
 package consumer
 
 import (
+	pb "Betterfly2/proto/data_forwarding"
+	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/handlers"
+	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 
 	"github.com/IBM/sarama"
+	"google.golang.org/protobuf/proto"
 )
 
 // NewKafkaConsumerGroupHandler 新的Kafka消费者处理器
@@ -71,6 +76,22 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 			continue
 		}
 
+		// 先尝试解析为storage响应消息
+		storageResp := &storage.ResponseMessage{}
+		if err := proto.Unmarshal(msg.Value, storageResp); err == nil {
+			// 成功解析为storage响应，处理这些消息
+			sugar.Debugf("收到storage响应: result=%v, target_user=%d", storageResp.Result, storageResp.TargetUserId)
+
+			// 处理storage响应并转发给客户端
+			if err := h.handleStorageResponse(storageResp); err != nil {
+				sugar.Errorf("处理storage响应失败: %v", err)
+			}
+
+			session.MarkMessage(msg, "")
+			continue
+		}
+
+		// 不是storage响应，尝试解析为data forwarding请求
 		requestMsg, err := handlers.HandleRequestData(msg.Value)
 		if err != nil {
 			sugar.Errorf("处理消息失败: %v", err)
@@ -90,5 +111,91 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 
 		session.MarkMessage(msg, "")
 	}
+	return nil
+}
+
+// handleStorageResponse 处理storage服务的响应并转发给客户端
+func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storage.ResponseMessage) error {
+	sugar := logger.Sugar()
+
+	if h.wsHandler == nil {
+		return fmt.Errorf("WebSocket处理器未设置，无法转发响应")
+	}
+
+	// 构建data_forwarding响应消息
+	var dfResp *pb.ResponseMessage
+	var err error
+
+	switch payload := storageResp.Payload.(type) {
+	case *storage.ResponseMessage_StoreMsgRsp:
+		// 存储消息响应 - 目前客户端可能不需要，但可以发送确认
+		sugar.Debugf("收到消息存储响应: message_id=%d", payload.StoreMsgRsp.GetMessageId())
+		// 可以发送简单的确认消息，这里暂时不发送具体响应
+		return nil
+
+	case *storage.ResponseMessage_MsgRsp:
+		// 单条消息查询响应
+		msg := payload.MsgRsp
+		sugar.Debugf("收到单条消息查询响应: from=%d to=%d", msg.GetFromUserId(), msg.GetToUserId())
+
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_MessageRsp{
+				MessageRsp: &pb.MessageRsp{
+					FromUserId: msg.GetFromUserId(),
+					ToUserId:   msg.GetToUserId(),
+					Content:    msg.GetContent(),
+					Timestamp:  msg.GetTimestamp(),
+					MsgType:    msg.GetMsgType(),
+					IsGroup:    msg.GetIsGroup(),
+				},
+			},
+		}
+
+	case *storage.ResponseMessage_SyncMsgsRsp:
+		// 同步消息查询响应
+		syncMsgs := payload.SyncMsgsRsp
+		sugar.Debugf("收到同步消息查询响应: 消息数量=%d", len(syncMsgs.GetMsgs()))
+
+		// 转换为data_forwarding的MessageRsp列表
+		var dfMsgs []*pb.MessageRsp
+		for _, msg := range syncMsgs.GetMsgs() {
+			dfMsgs = append(dfMsgs, &pb.MessageRsp{
+				FromUserId: msg.GetFromUserId(),
+				ToUserId:   msg.GetToUserId(),
+				Content:    msg.GetContent(),
+				Timestamp:  msg.GetTimestamp(),
+				MsgType:    msg.GetMsgType(),
+				IsGroup:    msg.GetIsGroup(),
+			})
+		}
+
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_SyncMsgsRsp{
+				SyncMsgsRsp: &pb.SyncMessagesRsp{
+					Msgs: dfMsgs,
+				},
+			},
+		}
+
+	default:
+		// 未知的响应类型
+		sugar.Warnf("未知的storage响应类型: %T", payload)
+		return nil
+	}
+
+	// 序列化响应消息
+	respBytes, err := proto.Marshal(dfResp)
+	if err != nil {
+		return fmt.Errorf("序列化响应消息失败: %v", err)
+	}
+
+	// 发送给目标用户
+	targetUserID := strconv.FormatInt(storageResp.TargetUserId, 10)
+	err = h.wsHandler.SendMessage(targetUserID, respBytes)
+	if err != nil {
+		return fmt.Errorf("发送消息给用户 %s 失败: %v", targetUserID, err)
+	}
+
+	sugar.Debugf("storage响应已转发给用户: target_user=%d", storageResp.TargetUserId)
 	return nil
 }

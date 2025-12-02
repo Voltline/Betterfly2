@@ -3,6 +3,7 @@ package handlers
 import (
 	pb "Betterfly2/proto/data_forwarding"
 	auth "Betterfly2/proto/server_rpc/auth"
+	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"context"
 	"data_forwarding_service/internal/grpcClient"
@@ -49,6 +50,12 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 		sugar.Debugf("收到 FileRequest 消息")
 	case *pb.RequestMessage_UpdateAvatar:
 		sugar.Debugf("收到 UpdateAvatar 消息")
+	case *pb.RequestMessage_QueryMessage:
+		sugar.Debugf("收到 QueryMessage 消息: message_id=%d", payload.QueryMessage.GetMessageId())
+		err = handleQueryMessage(fromID, message)
+	case *pb.RequestMessage_QuerySyncMessages:
+		sugar.Debugf("收到 QuerySyncMessages 消息: to_user_id=%d", payload.QuerySyncMessages.GetToUserId())
+		err = handleQuerySyncMessages(fromID, message)
 	case *pb.RequestMessage_Logout:
 		res = 1
 		sugar.Infof("用户登出")
@@ -158,6 +165,41 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 	}, nil
 }
 
+// sendMessageToStorage 发送消息到storageService进行存储
+func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
+	// 构建storage请求消息
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   payload.GetToId(),
+		Payload: &storage.RequestMessage_StoreNewMessage{
+			StoreNewMessage: &storage.StoreNewMessage{
+				FromUserId:  payload.GetFromId(),
+				ToUserId:    payload.GetToId(),
+				Content:     payload.GetMsg(),
+				MessageType: payload.GetMsgType(),
+				IsGroup:     payload.GetIsGroup(),
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布消息到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("消息已保存到storageService: from=%d to=%d", payload.GetFromId(), payload.GetToId())
+	return nil
+}
+
 func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	jwt := message.GetJwt()
 	if jwt == "" {
@@ -169,20 +211,32 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 	payload := message.GetPost()
+	if payload == nil {
+		return errors.New("post消息为空")
+	}
 	payload.FromId = fromID
 
 	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 	targetTopic := redisClient.GetContainerByConnection(targetUserID)
-	if targetTopic == "" {
-		// TODO: 消息保存
-		logger.Sugar().Debugf("%s 用户不在线", targetUserID)
-		return nil
-	}
 
 	// 获取当前容器ID
 	currentContainerID := os.Getenv("HOSTNAME")
 	if currentContainerID == "" {
 		currentContainerID = "local"
+	}
+
+	// 无论用户是否在线，都将消息保存到storageService
+	storageErr := sendMessageToStorage(payload, currentContainerID)
+	if storageErr != nil {
+		// 记录错误但继续处理（消息存储失败不影响转发）
+		logger.Sugar().Errorf("消息保存到storageService失败: %v", storageErr)
+		// 不返回错误，继续尝试转发消息
+	}
+
+	if targetTopic == "" {
+		// 用户不在线，只保存消息（已保存），不进行转发
+		logger.Sugar().Debugf("%s 用户不在线，消息已保存", targetUserID)
+		return nil
 	}
 
 	// 检查是否在同一容器内
@@ -256,5 +310,108 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 		logger.Sugar().Errorf("WebSocket处理器未初始化")
 	}
 
+	return nil
+}
+
+// handleQueryMessage 处理查询单条消息请求
+func handleQueryMessage(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法查询消息")
+	}
+
+	err := utils.ValidateAndParseJWT(fromID, jwt)
+	if err != nil {
+		return err
+	}
+	payload := message.GetQueryMessage()
+	if payload == nil {
+		return errors.New("query_message消息为空")
+	}
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 构建storage查询请求
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   fromID, // 查询结果返回给请求者
+		Payload: &storage.RequestMessage_QueryMessage{
+			QueryMessage: &storage.QueryMessage{
+				MessageId: payload.GetMessageId(),
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage查询请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布查询请求到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("消息查询请求已发送到storageService: message_id=%d", payload.GetMessageId())
+	return nil
+}
+
+// handleQuerySyncMessages 处理同步消息请求
+func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法查询同步消息")
+	}
+
+	err := utils.ValidateAndParseJWT(fromID, jwt)
+	if err != nil {
+		return err
+	}
+	payload := message.GetQuerySyncMessages()
+	if payload == nil {
+		return errors.New("query_sync_messages消息为空")
+	}
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 构建storage同步查询请求
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   payload.GetToUserId(), // 注意：这里使用payload中的to_user_id，而不是fromID
+		Payload: &storage.RequestMessage_QuerySyncMessages{
+			QuerySyncMessages: &storage.QuerySyncMessages{
+				ToUserId:  payload.GetToUserId(),
+				Timestamp: payload.GetTimestamp(),
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage同步查询请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布同步查询请求到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("同步消息查询请求已发送到storageService: to_user_id=%d", payload.GetToUserId())
 	return nil
 }

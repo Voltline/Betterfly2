@@ -136,13 +136,53 @@ func (cm *ConnectionManager) Login(connectionID string, userID string) error {
 		logger.Sugar().Debugf("[%s] Login: 设置用户连接映射 %s -> %s", cm.instanceID, userID, connectionID)
 
 		// 6. 最终冲突检查：在设置会话前再次检查，防止竞态条件
-		finalSession, err := dsm.GetUserSession(userID)
-		if err == nil && finalSession != "" {
-			_, finalContainerID := dsm.ParseSessionData(finalSession)
-			// 如果会话仍然在其他容器，说明踢出失败，返回错误让客户端重试
+		// 增加重试机制，等待踢出操作完成
+		maxRetries := 3
+		retryDelay := 100 * time.Millisecond
+		var finalSession string
+		var finalContainerID string
+
+		for i := 0; i < maxRetries; i++ {
+			finalSession, err = dsm.GetUserSession(userID)
+			if err != nil {
+				break
+			}
+			if finalSession == "" {
+				// 会话已被清理，可以继续
+				break
+			}
+
+			_, finalContainerID = dsm.ParseSessionData(finalSession)
+			// 如果会话仍然在其他容器，等待后重试
 			if finalContainerID != containerID && finalContainerID != "" {
-				logger.Sugar().Warnf("登录冲突检测：用户 %s 仍在容器 %s 登录，踢出可能失败", userID, finalContainerID)
-				return fmt.Errorf("登录冲突，请稍后重试")
+				if i < maxRetries-1 {
+					logger.Sugar().Debugf("登录冲突检测重试 %d/%d: 用户 %s 仍在容器 %s 登录，等待 %v 后重试",
+						i+1, maxRetries, userID, finalContainerID, retryDelay)
+					time.Sleep(retryDelay)
+					continue
+				} else {
+					// 最后一次重试仍然失败，尝试强制清理会话
+					logger.Sugar().Warnf("登录冲突检测：用户 %s 仍在容器 %s 登录，尝试强制清理会话", userID, finalContainerID)
+					// 直接删除用户会话，因为踢出通知可能已发送但目标容器未处理
+					if cleanupErr := dsm.RemoveUserSession(userID); cleanupErr != nil {
+						logger.Sugar().Errorf("强制清理用户会话失败: %v", cleanupErr)
+					} else {
+						logger.Sugar().Infof("已强制清理用户 %s 的会话，重新检查", userID)
+						// 清理后立即再次检查
+						time.Sleep(50 * time.Millisecond) // 短暂等待确保Redis更新
+						finalSession, err = dsm.GetUserSession(userID)
+						if err == nil && finalSession == "" {
+							// 会话已清理，可以继续
+							break
+						}
+					}
+					// 如果强制清理后仍然有会话，返回错误
+					logger.Sugar().Warnf("登录冲突检测：用户 %s 仍在容器 %s 登录，踢出可能失败", userID, finalContainerID)
+					return fmt.Errorf("登录冲突，请稍后重试")
+				}
+			} else {
+				// 会话在当前容器或已清理，可以继续
+				break
 			}
 		}
 

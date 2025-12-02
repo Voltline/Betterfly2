@@ -34,7 +34,7 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@v1
         env:
-          ANTHROPIC_BASE_URL: https://api.deepseek.com
+          ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: |

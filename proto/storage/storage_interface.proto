@@ -21,6 +21,7 @@ message RequestMessage {
     QuerySyncMessages query_sync_messages = 5;
     UpdateUserName update_user_name = 6;
     UpdateUserAvatar update_user_avatar = 7;
+    QueryUser query_user = 8;
   }
 }
 
@@ -31,5 +32,6 @@ message ResponseMessage {
     StoreMsgRsp store_msg_rsp = 3;
     MessageRsp msg_rsp = 4;
     SyncMessagesRsp sync_msgs_rsp = 5;
+    UserInfoRsp user_info_rsp = 6;
   }
 }

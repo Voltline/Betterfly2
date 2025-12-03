@@ -69,6 +69,11 @@ message Warn {
 message UserInfo {
   int64 send_to_user_id = 1;
   string query_user_name = 2;
+  int64 user_id = 3;
+  string account = 4;
+  string name = 5;
+  string avatar = 6;
+  string update_time = 7;
 }
 
 message GroupInfo {

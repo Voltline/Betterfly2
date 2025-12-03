@@ -28,3 +28,7 @@ message UpdateUserAvatar {
   int64 user_id = 1;
   string new_avatar_url = 2;
 }
+
+message QueryUser {
+  int64 user_id = 1;  // 要查询的用户ID
+}

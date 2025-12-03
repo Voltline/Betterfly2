@@ -126,6 +126,55 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 	var dfResp *pb.ResponseMessage
 	var err error
 
+	// 处理没有payload的响应（如更新操作）
+	if storageResp.Payload == nil {
+		switch storageResp.Result {
+		case storage.StorageResult_OK:
+			// 操作成功，发送简单确认消息
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Server{
+					Server: &pb.Server{
+						ServerMsg: "操作成功",
+					},
+				},
+			}
+		case storage.StorageResult_RECORD_NOT_EXIST:
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "记录不存在",
+					},
+				},
+			}
+		default:
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: fmt.Sprintf("操作失败: %v", storageResp.Result),
+					},
+				},
+			}
+		}
+		// 发送响应并返回
+		if dfResp != nil {
+			// 序列化响应消息
+			respBytes, err := proto.Marshal(dfResp)
+			if err != nil {
+				return fmt.Errorf("序列化响应消息失败: %v", err)
+			}
+
+			// 发送给目标用户
+			targetUserID := strconv.FormatInt(storageResp.TargetUserId, 10)
+			err = h.wsHandler.SendMessage(targetUserID, respBytes)
+			if err != nil {
+				return fmt.Errorf("发送消息给用户 %s 失败: %v", targetUserID, err)
+			}
+
+			sugar.Debugf("storage响应已转发给用户: target_user=%d", storageResp.TargetUserId)
+		}
+		return nil
+	}
+
 	switch payload := storageResp.Payload.(type) {
 	case *storage.ResponseMessage_StoreMsgRsp:
 		// 存储消息响应 - 目前客户端可能不需要，但可以发送确认
@@ -173,6 +222,25 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 			Payload: &pb.ResponseMessage_SyncMsgsRsp{
 				SyncMsgsRsp: &pb.SyncMessagesRsp{
 					Msgs: dfMsgs,
+				},
+			},
+		}
+
+	case *storage.ResponseMessage_UserInfoRsp:
+		// 用户信息查询响应
+		userInfo := payload.UserInfoRsp
+		sugar.Debugf("收到用户信息查询响应: user_id=%d, account=%s", userInfo.GetUserId(), userInfo.GetAccount())
+
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_UserInfo{
+				UserInfo: &pb.UserInfo{
+					SendToUserId:  storageResp.TargetUserId, // 接收响应的用户ID
+					QueryUserName: userInfo.GetName(),       // 查询到的用户名
+					UserId:        userInfo.GetUserId(),
+					Account:       userInfo.GetAccount(),
+					Name:          userInfo.GetName(),
+					Avatar:        userInfo.GetAvatar(),
+					UpdateTime:    userInfo.GetUpdateTime(),
 				},
 			},
 		}

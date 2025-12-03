@@ -69,3 +69,15 @@ message QuerySyncMessages {
   int64 to_user_id = 1;
   string timestamp = 2;
 }
+
+// 更新用户名
+message UpdateUserName {
+  int64 user_id = 1;
+  string new_user_name = 2;
+}
+
+// 更新用户头像URL
+message UpdateUserAvatar {
+  int64 user_id = 1;
+  string new_avatar_url = 2;
+}

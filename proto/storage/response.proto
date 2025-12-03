@@ -19,3 +19,11 @@ message SyncMessagesRsp {
   repeated MessageRsp msgs = 1;
 }
 
+message UserInfoRsp {
+  int64 user_id = 1;
+  string account = 2;
+  string name = 3;
+  string avatar = 4;
+  string update_time = 5;
+}
+

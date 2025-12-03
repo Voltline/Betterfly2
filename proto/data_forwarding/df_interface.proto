@@ -22,6 +22,8 @@ message RequestMessage {
     UpdateAvatar update_avatar = 12;
     QueryMessage query_message = 13;
     QuerySyncMessages query_sync_messages = 14;
+    UpdateUserName update_user_name = 15;
+    UpdateUserAvatar update_user_avatar = 16;
   }
 }
 

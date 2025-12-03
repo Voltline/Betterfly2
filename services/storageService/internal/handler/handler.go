@@ -74,6 +74,8 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 		resp, err = h.handleUpdateUserName(req, payload.UpdateUserName)
 	case *storage.RequestMessage_UpdateUserAvatar:
 		resp, err = h.handleUpdateUserAvatar(req, payload.UpdateUserAvatar)
+	case *storage.RequestMessage_QueryUser:
+		resp, err = h.handleQueryUser(req, payload.QueryUser)
 	default:
 		err = fmt.Errorf("未知的请求类型")
 	}
@@ -157,19 +159,35 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
-	// 解析时间戳（假设格式为 "2006-01-02 15:04:05"）
-	// 如果解析失败，使用默认值（当前时间减一天）
+	// 解析时间戳，支持多种格式
 	var timestamp time.Time
-	parsedTime, err := time.Parse("2006-01-02 15:04:05", query.Timestamp)
+	var err error
+
+	// 尝试RFC3339格式（带T和时区，如 "2006-01-02T15:04:05Z07:00"）
+	timestamp, err = time.Parse(time.RFC3339, query.Timestamp)
 	if err != nil {
-		sugar.Warnf("解析时间戳失败，使用默认值: %v", err)
-		timestamp = time.Now().Add(-24 * time.Hour) // 默认查询最近24小时
-	} else {
-		timestamp = parsedTime
+		// 尝试RFC3339Nano格式
+		timestamp, err = time.Parse(time.RFC3339Nano, query.Timestamp)
+		if err != nil {
+			// 尝试不带冒号的时区格式（如 "2006-01-02T15:04:05+0800"）
+			timestamp, err = time.Parse("2006-01-02T15:04:05Z0700", query.Timestamp)
+			if err != nil {
+				// 尝试空格分隔的格式（如 "2006-01-02 15:04:05+08"）
+				timestamp, err = time.Parse("2006-01-02 15:04:05-07", query.Timestamp)
+				if err != nil {
+					// 最后尝试简单格式（如 "2006-01-02 15:04:05"）
+					timestamp, err = time.Parse("2006-01-02 15:04:05", query.Timestamp)
+					if err != nil {
+						sugar.Warnf("解析时间戳失败，使用默认值: %v, 原始时间戳: %s", err, query.Timestamp)
+						timestamp = time.Now().Add(-24 * time.Hour) // 默认查询最近24小时
+					}
+				}
+			}
+		}
 	}
 
-	// 查询该时间戳之后的消息
-	messages, err := db.GetSyncMessagesByTimestamp(query.ToUserId, timestamp.Format("2006-01-02 15:04:05"))
+	// 查询该时间戳之后的消息，使用UTC时间的RFC3339格式（与数据库存储格式一致）
+	messages, err := db.GetSyncMessagesByTimestamp(query.ToUserId, timestamp.UTC().Format(time.RFC3339))
 	if err != nil {
 		sugar.Errorf("查询同步消息失败: %v", err)
 		return nil, err
@@ -349,6 +367,55 @@ func (h *StorageHandler) clearUserCache(userID int64) {
 	h.l1Cache.Del(cacheKey)
 	if h.l2Cache != nil {
 		h.l2Cache.Del(cacheKey)
+	}
+}
+
+// handleQueryUser 处理查询用户信息请求
+func (h *StorageHandler) handleQueryUser(req *storage.RequestMessage, query *storage.QueryUser) (*storage.ResponseMessage, error) {
+	sugar := logger.Sugar()
+
+	// 先尝试从缓存获取
+	cacheKey := fmt.Sprintf("user:%d", query.UserId)
+	if cached, ok := h.getFromCache(cacheKey); ok {
+		if user, ok := cached.(*db.User); ok {
+			sugar.Debugf("从缓存获取用户信息: user_id=%d", query.UserId)
+			return h.buildUserInfoResponse(req, user), nil
+		}
+	}
+
+	// 从数据库查询
+	user, err := db.GetUserById(query.UserId)
+	if err != nil {
+		sugar.Errorf("查询用户失败: %v", err)
+		return nil, err
+	}
+	if user == nil {
+		return &storage.ResponseMessage{
+			Result:       storage.StorageResult_RECORD_NOT_EXIST,
+			TargetUserId: req.TargetUserId,
+		}, nil
+	}
+
+	// 存入缓存
+	h.setToCache(cacheKey, user, 10*time.Minute) // 用户信息缓存10分钟
+
+	return h.buildUserInfoResponse(req, user), nil
+}
+
+// buildUserInfoResponse 构建用户信息查询响应
+func (h *StorageHandler) buildUserInfoResponse(req *storage.RequestMessage, user *db.User) *storage.ResponseMessage {
+	return &storage.ResponseMessage{
+		Result:       storage.StorageResult_OK,
+		TargetUserId: req.TargetUserId,
+		Payload: &storage.ResponseMessage_UserInfoRsp{
+			UserInfoRsp: &storage.UserInfoRsp{
+				UserId:     user.ID,
+				Account:    user.Account,
+				Name:       user.Name,
+				Avatar:     user.Avatar,
+				UpdateTime: user.UpdateTime,
+			},
+		},
 	}
 }
 

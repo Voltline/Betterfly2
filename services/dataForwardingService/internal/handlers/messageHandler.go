@@ -38,6 +38,7 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 		err = handlePostMessage(fromID, message)
 	case *pb.RequestMessage_QueryUser:
 		sugar.Debugf("收到 QueryUser 消息")
+		err = handleQueryUser(fromID, message)
 	case *pb.RequestMessage_InsertContact:
 		sugar.Debugf("收到 InsertContact 消息")
 	case *pb.RequestMessage_QueryGroup:
@@ -50,6 +51,12 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 		sugar.Debugf("收到 FileRequest 消息")
 	case *pb.RequestMessage_UpdateAvatar:
 		sugar.Debugf("收到 UpdateAvatar 消息")
+	case *pb.RequestMessage_UpdateUserName:
+		sugar.Debugf("收到 UpdateUserName 消息")
+		err = handleUpdateUserName(fromID, message)
+	case *pb.RequestMessage_UpdateUserAvatar:
+		sugar.Debugf("收到 UpdateUserAvatar 消息")
+		err = handleUpdateUserAvatar(fromID, message)
 	case *pb.RequestMessage_QueryMessage:
 		sugar.Debugf("收到 QueryMessage 消息: message_id=%d", payload.QueryMessage.GetMessageId())
 		err = handleQueryMessage(fromID, message)
@@ -413,5 +420,160 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 	}
 
 	logger.Sugar().Debugf("同步消息查询请求已发送到storageService: to_user_id=%d", payload.GetToUserId())
+	return nil
+}
+
+// handleQueryUser 处理查询用户信息请求
+func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法查询用户信息")
+	}
+
+	err := utils.ValidateAndParseJWT(fromID, jwt)
+	if err != nil {
+		return err
+	}
+	payload := message.GetQueryUser()
+	if payload == nil {
+		return errors.New("query_user消息为空")
+	}
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 构建storage查询请求
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   fromID, // 查询结果返回给请求者
+		Payload: &storage.RequestMessage_QueryUser{
+			QueryUser: &storage.QueryUser{
+				UserId: payload.GetToQueryUserId(), // 要查询的用户ID
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage用户查询请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布用户查询请求到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("用户信息查询请求已发送到storageService: to_query_user_id=%d", payload.GetToQueryUserId())
+	return nil
+}
+
+// handleUpdateUserName 处理更新用户名请求
+func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法更新用户名")
+	}
+
+	err := utils.ValidateAndParseJWT(fromID, jwt)
+	if err != nil {
+		return err
+	}
+	payload := message.GetUpdateUserName()
+	if payload == nil {
+		return errors.New("update_user_name消息为空")
+	}
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 构建storage更新请求
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   fromID, // 结果返回给请求者
+		Payload: &storage.RequestMessage_UpdateUserName{
+			UpdateUserName: &storage.UpdateUserName{
+				UserId:      payload.GetUserId(),
+				NewUserName: payload.GetNewUserName(),
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage用户名更新请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布用户名更新请求到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("用户名更新请求已发送到storageService: user_id=%d, new_name=%s", payload.GetUserId(), payload.GetNewUserName())
+	return nil
+}
+
+// handleUpdateUserAvatar 处理更新用户头像请求
+func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法更新用户头像")
+	}
+
+	err := utils.ValidateAndParseJWT(fromID, jwt)
+	if err != nil {
+		return err
+	}
+	payload := message.GetUpdateUserAvatar()
+	if payload == nil {
+		return errors.New("update_user_avatar消息为空")
+	}
+
+	// 获取当前容器ID
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	// 构建storage更新请求
+	storeReq := &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   fromID, // 结果返回给请求者
+		Payload: &storage.RequestMessage_UpdateUserAvatar{
+			UpdateUserAvatar: &storage.UpdateUserAvatar{
+				UserId:       payload.GetUserId(),
+				NewAvatarUrl: payload.GetNewAvatarUrl(),
+			},
+		},
+	}
+
+	// 序列化存储请求
+	storeReqBytes, err := proto.Marshal(storeReq)
+	if err != nil {
+		logger.Sugar().Errorf("序列化storage用户头像更新请求失败: %v", err)
+		return err
+	}
+
+	// 发布到storage-requests主题
+	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	if err != nil {
+		logger.Sugar().Errorf("发布用户头像更新请求到storage-requests失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("用户头像更新请求已发送到storageService: user_id=%d, new_avatar=%s", payload.GetUserId(), payload.GetNewAvatarUrl())
 	return nil
 }

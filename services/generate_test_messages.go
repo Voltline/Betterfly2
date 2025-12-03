@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	pb "Betterfly2/proto/data_forwarding"
+
 	"google.golang.org/protobuf/proto"
 )
 
 func main() {
-	msgType := flag.String("type", "all", "Message type: login, signup, logout, post, query_message, query_sync_messages, all")
+	msgType := flag.String("type", "all", "Message type: login, signup, logout, post, query_message, query_sync_messages, query_user, update_user_name, update_user_avatar, all")
 	flag.Parse()
 
 	switch *msgType {
@@ -29,6 +29,12 @@ func main() {
 		generateQueryMessage()
 	case "query_sync_messages":
 		generateQuerySyncMessages()
+	case "query_user":
+		generateQueryUser()
+	case "update_user_name":
+		generateUpdateUserName()
+	case "update_user_avatar":
+		generateUpdateUserAvatar()
 	case "all":
 		generateAll()
 	default:
@@ -125,7 +131,7 @@ func generateQuerySyncMessages() {
 	// 生成同步消息查询请求
 	querySync := &pb.QuerySyncMessages{
 		ToUserId:  1002,
-		Timestamp: time.Now().Format(time.RFC3339),
+		Timestamp: "2025-08-21 21:26:38+08", // 使用固定的测试时间，便于阅读
 	}
 
 	reqMsg := &pb.RequestMessage{
@@ -136,6 +142,57 @@ func generateQuerySyncMessages() {
 	}
 
 	encodeAndPrint("同步消息查询请求", reqMsg)
+}
+
+func generateQueryUser() {
+	// 生成查询用户信息请求
+	queryUser := &pb.QueryUser{
+		FromUserId:    1,
+		ToQueryUserId: 2,
+	}
+
+	reqMsg := &pb.RequestMessage{
+		Jwt: "example.jwt.token.here",
+		Payload: &pb.RequestMessage_QueryUser{
+			QueryUser: queryUser,
+		},
+	}
+
+	encodeAndPrint("查询用户信息请求", reqMsg)
+}
+
+func generateUpdateUserName() {
+	// 生成更新用户名请求
+	updateUserName := &pb.UpdateUserName{
+		UserId:      1,
+		NewUserName: "New Test Name",
+	}
+
+	reqMsg := &pb.RequestMessage{
+		Jwt: "example.jwt.token.here",
+		Payload: &pb.RequestMessage_UpdateUserName{
+			UpdateUserName: updateUserName,
+		},
+	}
+
+	encodeAndPrint("更新用户名请求", reqMsg)
+}
+
+func generateUpdateUserAvatar() {
+	// 生成更新用户头像请求
+	updateUserAvatar := &pb.UpdateUserAvatar{
+		UserId:       1,
+		NewAvatarUrl: "https://example.com/avatar.jpg",
+	}
+
+	reqMsg := &pb.RequestMessage{
+		Jwt: "example.jwt.token.here",
+		Payload: &pb.RequestMessage_UpdateUserAvatar{
+			UpdateUserAvatar: updateUserAvatar,
+		},
+	}
+
+	encodeAndPrint("更新用户头像请求", reqMsg)
 }
 
 func generateAll() {
@@ -153,6 +210,12 @@ func generateAll() {
 	generateQueryMessage()
 	fmt.Println()
 	generateQuerySyncMessages()
+	fmt.Println()
+	generateQueryUser()
+	fmt.Println()
+	generateUpdateUserName()
+	fmt.Println()
+	generateUpdateUserAvatar()
 }
 
 func encodeAndPrint(label string, reqMsg *pb.RequestMessage) {

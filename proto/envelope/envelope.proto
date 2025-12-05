@@ -1,0 +1,20 @@
+syntax = "proto3";
+package envelope;
+option go_package = "Betterfly2/proto/envelope";
+
+enum MessageType {
+  UNKNOWN = 0;
+  STORAGE_REQUEST = 1;
+  STORAGE_RESPONSE = 2;
+  DF_REQUEST = 3;      // data forwarding request
+  DF_RESPONSE = 4;     // data forwarding response
+  // 保留类型用于未来扩展
+  AUTH_REQUEST = 5;
+  AUTH_RESPONSE = 6;
+  TEXT = 7;           // 纯文本消息，如降级方案
+}
+
+message Envelope {
+  MessageType type = 1;
+  bytes payload = 2; // 实际的消息序列化数据
+}

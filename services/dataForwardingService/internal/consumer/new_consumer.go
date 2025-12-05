@@ -2,6 +2,7 @@ package consumer
 
 import (
 	pb "Betterfly2/proto/data_forwarding"
+	envelope "Betterfly2/proto/envelope"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/handlers"
@@ -76,6 +77,60 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 			continue
 		}
 
+		// 尝试解析为Envelope
+		env := &envelope.Envelope{}
+		if err := proto.Unmarshal(msg.Value, env); err == nil {
+			// 成功解析为Envelope，根据类型处理
+			sugar.Debugf("收到Envelope消息: type=%v", env.Type)
+			switch env.Type {
+			case envelope.MessageType_STORAGE_RESPONSE:
+				storageResp := &storage.ResponseMessage{}
+				if err := proto.Unmarshal(env.Payload, storageResp); err != nil {
+					sugar.Errorf("解析Envelope中的STORAGE_RESPONSE payload失败: %v", err)
+					continue
+				}
+				// 处理storage响应
+				if err := h.handleStorageResponse(storageResp); err != nil {
+					sugar.Errorf("处理storage响应失败: %v", err)
+				}
+				session.MarkMessage(msg, "")
+				continue
+			case envelope.MessageType_DF_REQUEST:
+				requestMsg, err := handlers.HandleRequestData(env.Payload)
+				if err != nil {
+					sugar.Errorf("处理Envelope中的DF_REQUEST payload失败: %v", err)
+					continue
+				}
+				if requestMsg.GetPost() == nil {
+					sugar.Errorln("消费者收到非Post报文")
+					continue
+				}
+				err = handlers.InplaceHandlePostMessage(requestMsg)
+				if err != nil {
+					sugar.Errorf("处理消息失败: %v", err)
+					continue
+				}
+				session.MarkMessage(msg, "")
+				continue
+			case envelope.MessageType_STORAGE_REQUEST:
+				// storage请求应该由storage服务处理，这里可能不需要处理
+				sugar.Warnf("收到STORAGE_REQUEST类型Envelope，但data forwarding服务不处理，忽略")
+				continue
+			case envelope.MessageType_DF_RESPONSE:
+				// DF_RESPONSE可能由其他服务处理
+				sugar.Warnf("收到DF_RESPONSE类型Envelope，但当前消费者不处理，忽略")
+				continue
+			case envelope.MessageType_TEXT:
+				// 文本消息，可能用于降级方案，但已经在前面的正则匹配中处理
+				sugar.Debugf("收到TEXT类型Envelope，内容: %s", string(env.Payload))
+				continue
+			default:
+				sugar.Warnf("未知的Envelope类型: %v", env.Type)
+				continue
+			}
+		}
+
+		// 如果不是Envelope，继续旧逻辑
 		// 先尝试解析为storage响应消息
 		storageResp := &storage.ResponseMessage{}
 		if err := proto.Unmarshal(msg.Value, storageResp); err == nil {

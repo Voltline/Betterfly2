@@ -5,6 +5,7 @@ go 1.24
 toolchain go1.24.1
 
 require (
+	Betterfly2/proto v0.0.0
 	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2

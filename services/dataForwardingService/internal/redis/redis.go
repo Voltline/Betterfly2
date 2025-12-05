@@ -5,8 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/redis/go-redis/v9"
 	"os"
+
+	"github.com/redis/go-redis/v9"
 )
 
 var Rdb *redis.Client
@@ -65,6 +66,7 @@ func UnregisterConnection(id string, containerID string) error {
 
 func GetContainerByConnection(id string) string {
 	result, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+	logger.Sugar().Debugf("ws_connection_mapping 待查询id为: %s", id)
 	if err != nil {
 		logger.Sugar().Warnf("GetContainerByConnection 错误: %v", err)
 		return ""

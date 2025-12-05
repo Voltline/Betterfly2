@@ -1,6 +1,7 @@
 package handler
 
 import (
+	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
@@ -424,19 +425,30 @@ func (h *StorageHandler) sendResponse(topic string, resp *storage.ResponseMessag
 	sugar := logger.Sugar()
 
 	// 序列化响应
-	data, err := proto.Marshal(resp)
+	respData, err := proto.Marshal(resp)
 	if err != nil {
 		sugar.Errorf("序列化响应失败: %v", err)
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_RESPONSE,
+		Payload: respData,
+	}
+	envData, err := proto.Marshal(env)
+	if err != nil {
+		sugar.Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发送响应到Kafka
-	err = publisher.PublishMessage(string(data), topic)
+	err = publisher.PublishMessage(string(envData), topic)
 	if err != nil {
 		sugar.Errorf("发送响应到Kafka失败: %v", err)
 		return err
 	}
 
-	sugar.Debugf("响应发送成功到topic: %s, 数据长度: %d", topic, len(data))
+	sugar.Debugf("响应发送成功到topic: %s, 数据长度: %d, Envelope类型: %v", topic, len(envData), envelope.MessageType_STORAGE_RESPONSE)
 	return nil
 }

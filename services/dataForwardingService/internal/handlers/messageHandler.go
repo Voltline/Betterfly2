@@ -2,6 +2,7 @@ package handlers
 
 import (
 	pb "Betterfly2/proto/data_forwarding"
+	envelope "Betterfly2/proto/envelope"
 	auth "Betterfly2/proto/server_rpc/auth"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
@@ -11,9 +12,11 @@ import (
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/utils"
 	"errors"
-	"google.golang.org/protobuf/proto"
+	"fmt"
 	"os"
 	"strconv"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
@@ -196,8 +199,19 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布消息到storage-requests失败: %v", err)
 		return err
@@ -246,43 +260,47 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 		return nil
 	}
 
-	// 检查是否在同一容器内
+	// 获取WebSocket处理器和路由器
+	wsHandler := GetWebSocketHandler()
+	if wsHandler == nil || wsHandler.router == nil {
+		logger.Sugar().Errorf("WebSocket处理器或路由器未初始化")
+		return fmt.Errorf("WebSocket处理器或路由器未初始化")
+	}
+
+	// 构建要发送的消息
+	var messageBytes []byte
+
 	if targetTopic == currentContainerID {
-		// 同容器内消息，直接发送
+		// 同容器内消息，发送ResponseMessage格式
 		rsp := &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_Post{
 				Post: payload,
 			},
 		}
-		rspBytes, err := proto.Marshal(rsp)
+		messageBytes, err = proto.Marshal(rsp)
 		if err != nil {
 			logger.Sugar().Errorf("序列化响应消息失败: %v", err)
 			return err
 		}
-
-		// 使用全局WebSocket处理器的连接管理器直接发送消息
-		wsHandler := GetWebSocketHandler()
-		if wsHandler != nil {
-			err = wsHandler.connManager.SendMessageToUser(targetUserID, rspBytes)
-			if err != nil {
-				logger.Sugar().Warnf("发送消息失败: %v", err)
-				return err
-			}
-			logger.Sugar().Debugf("同容器内消息发送成功: %d -> %d", payload.GetFromId(), payload.GetToId())
-		} else {
-			logger.Sugar().Errorf("WebSocket处理器未初始化")
-		}
+		logger.Sugar().Debugf("构建同容器ResponseMessage，长度: %d", len(messageBytes))
 	} else {
-		// 跨容器消息，通过Kafka转发
-		rspBytes, _ := proto.Marshal(message)
-		err = publisher.PublishMessage(string(rspBytes), targetTopic) // 将消息转发到消息队列
+		// 跨容器消息，发送RequestMessage格式
+		messageBytes, err = proto.Marshal(message)
 		if err != nil {
-			logger.Sugar().Warnf("消息转发失败: %v", err)
+			logger.Sugar().Errorf("序列化RequestMessage失败: %v", err)
 			return err
 		}
-		logger.Sugar().Debugf("跨容器消息转发成功: %d -> %d (目标容器: %s)", payload.GetFromId(), payload.GetToId(), targetTopic)
+		logger.Sugar().Debugf("构建跨容器RequestMessage，长度: %d", len(messageBytes))
 	}
 
+	// 使用路由器统一发送消息
+	err = wsHandler.router.RouteMessage(targetUserID, messageBytes)
+	if err != nil {
+		logger.Sugar().Errorf("路由器发送消息失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("消息路由成功: %d -> %s (容器: %s)", payload.GetFromId(), targetUserID, targetTopic)
 	return nil
 }
 
@@ -304,18 +322,20 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 使用全局WebSocket处理器的连接管理器直接发送消息
+	// 使用路由器发送消息
 	wsHandler := GetWebSocketHandler()
-	if wsHandler != nil {
-		err = wsHandler.connManager.SendMessageToUser(strconv.FormatInt(payload.GetToId(), 10), rspBytes)
-		if err != nil {
-			logger.Sugar().Warnf("发送消息失败: %v", err)
-			return err
-		}
-		logger.Sugar().Debugf("%d 成功向 %d 发送消息", payload.GetFromId(), payload.GetToId())
-	} else {
-		logger.Sugar().Errorf("WebSocket处理器未初始化")
+	if wsHandler == nil || wsHandler.router == nil {
+		logger.Sugar().Errorf("WebSocket处理器或路由器未初始化")
+		return fmt.Errorf("WebSocket处理器或路由器未初始化")
 	}
+
+	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
+	err = wsHandler.router.RouteMessage(targetUserID, rspBytes)
+	if err != nil {
+		logger.Sugar().Errorf("路由器发送消息失败: %v", err)
+		return err
+	}
+	logger.Sugar().Debugf("%d 成功向 %d 发送消息", payload.GetFromId(), payload.GetToId())
 
 	return nil
 }
@@ -360,8 +380,19 @@ func handleQueryMessage(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布查询请求到storage-requests失败: %v", err)
 		return err
@@ -412,8 +443,19 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布同步查询请求到storage-requests失败: %v", err)
 		return err
@@ -463,8 +505,19 @@ func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布用户查询请求到storage-requests失败: %v", err)
 		return err
@@ -515,8 +568,19 @@ func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布用户名更新请求到storage-requests失败: %v", err)
 		return err
@@ -567,8 +631,19 @@ func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
+	// 创建Envelope封装
+	env := &envelope.Envelope{
+		Type:    envelope.MessageType_STORAGE_REQUEST,
+		Payload: storeReqBytes,
+	}
+	envBytes, err := proto.Marshal(env)
+	if err != nil {
+		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
+		return err
+	}
+
 	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(storeReqBytes), "storage-requests")
+	err = publisher.PublishMessage(string(envBytes), "storage-requests")
 	if err != nil {
 		logger.Sugar().Errorf("发布用户头像更新请求到storage-requests失败: %v", err)
 		return err

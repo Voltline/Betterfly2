@@ -3,7 +3,9 @@ package consumer
 import (
 	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
 	"storageService/internal/handler"
+	"time"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
@@ -28,6 +30,8 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 	for msg := range claim.Messages() {
 		sugar.Debugf("Kafka 收到消息, topic: %s, partition: %d, offset: %d",
 			msg.Topic, msg.Partition, msg.Offset)
+		metrics.RecordKafkaMessageConsumed()
+		start := time.Now()
 
 		// 尝试解析为Envelope
 		env := &envelope.Envelope{}
@@ -57,8 +61,10 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 
 		// 处理消息
 		err := h.handler.HandleMessage(session.Context(), payload)
+		metrics.RecordKafkaProcessingLatency(start)
 		if err != nil {
 			sugar.Errorf("处理消息失败: %v", err)
+			metrics.RecordKafkaProcessingError()
 			// 继续处理下一条消息，不终止消费循环
 			continue
 		}

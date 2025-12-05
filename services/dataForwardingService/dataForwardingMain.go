@@ -5,7 +5,10 @@ import (
 	"data_forwarding_service/internal/grpcClient"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
-	"data_forwarding_service/internal/redis"
+	redisClient "data_forwarding_service/internal/redis"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // 全局WebSocket处理器实例
@@ -42,6 +45,17 @@ func main() {
 	handlers.SetGlobalWebSocketHandler(globalWebSocketHandler)
 
 	go ConsumerRoutine()
+
+	// 启动metrics HTTP服务器
+	go func() {
+		metricsPort := "9090"
+		sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
+		http.Handle("/metrics", promhttp.Handler())
+		err := http.ListenAndServe(":"+metricsPort, nil)
+		if err != nil {
+			sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
+		}
+	}()
 
 	// 初始化 gRPC 客户端
 	_, err = grpcClient.GetAuthClient()

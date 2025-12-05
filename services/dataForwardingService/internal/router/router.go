@@ -3,11 +3,13 @@ package router
 import (
 	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
 	"data_forwarding_service/internal/connection"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"fmt"
 	"os"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -26,11 +28,13 @@ func NewRouter(connManager *connection.ConnectionManager) *Router {
 
 // RouteMessage 路由消息到指定用户
 func (r *Router) RouteMessage(toUserID string, message []byte) error {
+	start := time.Now()
 	sugar := logger.Sugar()
 
 	// 1. 先尝试本地路由
 	if r.routeLocally(toUserID, message) {
 		sugar.Debugf("消息本地路由成功: %s", toUserID)
+		metrics.RecordMessageRouted("local", start)
 		return nil
 	}
 
@@ -38,12 +42,24 @@ func (r *Router) RouteMessage(toUserID string, message []byte) error {
 	targetContainerID := redisClient.GetContainerByConnection(toUserID)
 	if targetContainerID != "" {
 		// 用户在其他容器在线，进行跨容器路由
-		return r.routeCrossContainer(toUserID, targetContainerID, message)
+		err := r.routeCrossContainer(toUserID, targetContainerID, message)
+		if err != nil {
+			metrics.RecordRoutingError()
+		} else {
+			metrics.RecordMessageRouted("cross_container", start)
+		}
+		return err
 	}
 
 	// 3. 用户不在线，处理为离线消息
 	sugar.Warnf("用户不在线，消息暂存: %s", toUserID)
-	return r.handleOfflineMessage(toUserID, message)
+	err := r.handleOfflineMessage(toUserID, message)
+	if err != nil {
+		metrics.RecordRoutingError()
+	} else {
+		metrics.RecordMessageRouted("offline", start)
+	}
+	return err
 }
 
 // routeLocally 尝试本地路由
@@ -98,10 +114,12 @@ func (r *Router) routeCrossContainer(toUserID string, targetContainerID string, 
 	err = publisher.PublishMessage(string(envBytes), targetContainerID)
 	if err != nil {
 		sugar.Errorf("跨容器消息转发失败: %s -> %s, error: %v", toUserID, targetContainerID, err)
+		metrics.RecordKafkaProcessingError()
 		return err
 	}
 
 	sugar.Debugf("跨容器消息转发成功: %s (目标容器: %s)", toUserID, targetContainerID)
+	metrics.RecordKafkaMessageProduced(targetContainerID)
 	return nil
 }
 
@@ -128,9 +146,11 @@ func (r *Router) handleOfflineMessage(toUserID string, message []byte) error {
 	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
 		sugar.Errorf("离线消息发布失败: %v", err)
+		metrics.RecordKafkaProcessingError()
 		return err
 	}
 
+	metrics.RecordKafkaMessageProduced("storage-service")
 	return nil
 }
 

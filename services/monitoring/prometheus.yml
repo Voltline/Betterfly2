@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'data_forwarding'
+    static_configs:
+      - targets: ['df:9090', 'df2:9090']
+        labels:
+          service: 'data_forwarding'
+
+  - job_name: 'storage'
+    static_configs:
+      - targets: ['storage_service:9091']
+        labels:
+          service: 'storage'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

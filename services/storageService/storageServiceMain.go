@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"storageService/internal/publisher"
 
 	"github.com/IBM/sarama"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -50,6 +52,17 @@ func main() {
 	if err := startKafkaConsumer(); err != nil {
 		sugar.Fatalf("启动 Kafka 消费者失败: %v", err)
 	}
+
+	// 启动metrics HTTP服务器
+	go func() {
+		metricsPort := "9091"
+		sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
+		http.Handle("/metrics", promhttp.Handler())
+		err := http.ListenAndServe(":"+metricsPort, nil)
+		if err != nil {
+			sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
+		}
+	}()
 
 	sugar.Infoln("存储服务启动完成，等待终止信号...")
 

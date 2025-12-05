@@ -5,6 +5,7 @@ import (
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
 	"context"
 	"fmt"
 	"storageService/internal/cache"
@@ -99,9 +100,12 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 	sugar := logger.Sugar()
 
 	// 保存到数据库
+	start := time.Now()
 	messageID, err := db.StoreNewMessage(msg.FromUserId, msg.ToUserId, msg.Content, msg.MessageType, msg.IsGroup)
+	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
 		sugar.Errorf("保存消息到数据库失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 
@@ -138,9 +142,12 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 	}
 
 	// 从数据库查询
+	start := time.Now()
 	message, err := db.GetMessageByID(query.MessageId)
+	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询消息失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 	if message == nil {
@@ -188,9 +195,12 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 	}
 
 	// 查询该时间戳之后的消息，使用UTC时间的RFC3339格式（与数据库存储格式一致）
+	start := time.Now()
 	messages, err := db.GetSyncMessagesByTimestamp(query.ToUserId, timestamp.UTC().Format(time.RFC3339))
+	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询同步消息失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 
@@ -232,17 +242,23 @@ func (h *StorageHandler) handleUpdateUserName(req *storage.RequestMessage, updat
 	sugar := logger.Sugar()
 
 	// 更新数据库
+	start := time.Now()
 	err := db.UpdateUserNameByID(update.UserId, update.NewUserName)
+	metrics.RecordDatabaseQuery("update", start)
 	if err != nil {
 		sugar.Errorf("更新用户名失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 
 	// 注意：UpdateUserNameByID 不返回受影响行数
 	// 需要检查用户是否存在
+	userStart := time.Now()
 	user, err := db.GetUserById(update.UserId)
+	metrics.RecordDatabaseQuery("select", userStart)
 	if err != nil {
 		sugar.Errorf("检查用户是否存在失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 	if user == nil {
@@ -271,16 +287,22 @@ func (h *StorageHandler) handleUpdateUserAvatar(req *storage.RequestMessage, upd
 	sugar := logger.Sugar()
 
 	// 更新数据库
+	start := time.Now()
 	err := db.UpdateUserAvatarByID(update.UserId, update.NewAvatarUrl)
+	metrics.RecordDatabaseQuery("update", start)
 	if err != nil {
 		sugar.Errorf("更新用户头像失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 
 	// 检查用户是否存在
+	userStart := time.Now()
 	user, err := db.GetUserById(update.UserId)
+	metrics.RecordDatabaseQuery("select", userStart)
 	if err != nil {
 		sugar.Errorf("检查用户是否存在失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 	if user == nil {
@@ -324,18 +346,29 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 
 // getFromCache 从缓存获取数据（先L1后L2）
 func (h *StorageHandler) getFromCache(key string) (interface{}, bool) {
+	start := time.Now()
+
 	// 先查L1缓存
 	if val, ok := h.l1Cache.Get(key); ok {
+		metrics.RecordCacheOperation("get", "l1", start)
+		metrics.RecordCacheHit("l1")
 		return val, true
 	}
+	metrics.RecordCacheOperation("get", "l1", start)
+	metrics.RecordCacheMiss("l1")
 
 	// 再查L2缓存（如果已初始化）
 	if h.l2Cache != nil {
+		l2Start := time.Now()
 		if val, ok := h.l2Cache.Get(key); ok {
+			metrics.RecordCacheOperation("get", "l2", l2Start)
+			metrics.RecordCacheHit("l2")
 			// 回填到L1缓存
 			h.l1Cache.Set(key, val, 5*time.Minute)
 			return val, true
 		}
+		metrics.RecordCacheOperation("get", "l2", l2Start)
+		metrics.RecordCacheMiss("l2")
 	}
 
 	return nil, false
@@ -344,11 +377,15 @@ func (h *StorageHandler) getFromCache(key string) (interface{}, bool) {
 // setToCache 设置缓存（同时设置L1和L2）
 func (h *StorageHandler) setToCache(key string, value interface{}, ttl time.Duration) {
 	// 设置L1缓存
+	l1Start := time.Now()
 	h.l1Cache.Set(key, value, ttl)
+	metrics.RecordCacheOperation("set", "l1", l1Start)
 
 	// 设置L2缓存（如果已初始化）
 	if h.l2Cache != nil {
+		l2Start := time.Now()
 		h.l2Cache.Set(key, value, ttl)
+		metrics.RecordCacheOperation("set", "l2", l2Start)
 	}
 }
 
@@ -385,9 +422,12 @@ func (h *StorageHandler) handleQueryUser(req *storage.RequestMessage, query *sto
 	}
 
 	// 从数据库查询
+	start := time.Now()
 	user, err := db.GetUserById(query.UserId)
+	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询用户失败: %v", err)
+		metrics.RecordDatabaseError()
 		return nil, err
 	}
 	if user == nil {
@@ -446,8 +486,10 @@ func (h *StorageHandler) sendResponse(topic string, resp *storage.ResponseMessag
 	err = publisher.PublishMessage(string(envData), topic)
 	if err != nil {
 		sugar.Errorf("发送响应到Kafka失败: %v", err)
+		metrics.RecordKafkaProcessingError()
 		return err
 	}
+	metrics.RecordKafkaMessageProduced(topic)
 
 	sugar.Debugf("响应发送成功到topic: %s, 数据长度: %d, Envelope类型: %v", topic, len(envData), envelope.MessageType_STORAGE_RESPONSE)
 	return nil

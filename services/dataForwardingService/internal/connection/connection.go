@@ -2,6 +2,7 @@ package connection
 
 import (
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"fmt"
@@ -56,6 +57,7 @@ func (cm *ConnectionManager) AddConnection(conn *websocket.Conn) *Connection {
 
 	cm.connections.Store(connectionID, connection)
 	logger.Sugar().Debugf("新连接建立: %s", connectionID)
+	metrics.RecordWebSocketConnectionOpened()
 
 	return connection
 }
@@ -201,6 +203,8 @@ func (cm *ConnectionManager) Login(connectionID string, userID string) error {
 		}
 
 		logger.Sugar().Infof("用户登录成功: %s (容器: %s)", userID, containerID)
+		// 更新在线用户数指标
+		metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
 		return nil
 	}
 
@@ -215,9 +219,14 @@ func (cm *ConnectionManager) RemoveConnection(connectionID string) {
 	if conn, ok := cm.connections.Load(connectionID); ok {
 		connection := conn.(*Connection)
 
+		// 记录WebSocket连接关闭
+		metrics.RecordWebSocketConnectionClosed()
+
 		// 如果已登录，清理用户映射和全局会话
 		if connection.LoggedIn && connection.UserID != "" {
 			cm.userConnections.Delete(connection.UserID)
+			// 更新在线用户数指标（删除后）
+			metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
 
 			// 清理全局会话（需要检查是否为当前会话）
 			dsm := &redisClient.DistributedSessionManager{}

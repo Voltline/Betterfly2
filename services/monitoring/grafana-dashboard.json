@@ -1,0 +1,159 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Betterfly2 Performance Dashboard",
+    "tags": ["betterfly2", "performance"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Message Routing Rate",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "rate(betterfly_messages_routed_total[5m])",
+            "legendFormat": "{{route_type}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops"
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Cache Hit Ratio",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "betterfly_cache_hits_total / (betterfly_cache_hits_total + betterfly_cache_misses_total)",
+            "legendFormat": "{{cache_level}}",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percentunit"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Database Query Latency",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(betterfly_database_query_latency_seconds_sum[5m]) / rate(betterfly_database_query_latency_seconds_count[5m])",
+            "legendFormat": "avg latency",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Kafka Messages Throughput",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(betterfly_kafka_messages_consumed_total[5m])",
+            "legendFormat": "consumed",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(betterfly_kafka_messages_produced_total[5m])",
+            "legendFormat": "produced {{topic}}",
+            "refId": "B"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 8
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "WebSocket Connections",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "betterfly_websocket_connections_total",
+            "legendFormat": "connections",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 6,
+        "title": "Online Users",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "betterfly_online_users_total",
+            "legendFormat": "users",
+            "refId": "A"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "10s"
+  },
+  "overwrite": true
+}

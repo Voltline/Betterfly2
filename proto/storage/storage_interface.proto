@@ -22,6 +22,7 @@ message RequestMessage {
     UpdateUserName update_user_name = 6;
     UpdateUserAvatar update_user_avatar = 7;
     QueryUser query_user = 8;
+    QueryFileExists query_file_exists = 9;
   }
 }
 
@@ -33,5 +34,6 @@ message ResponseMessage {
     MessageRsp msg_rsp = 4;
     SyncMessagesRsp sync_msgs_rsp = 5;
     UserInfoRsp user_info_rsp = 6;
+    FileExistsRsp file_exists_rsp = 7;
   }
 }

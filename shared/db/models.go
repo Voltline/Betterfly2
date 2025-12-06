@@ -30,3 +30,11 @@ type Message struct {
 	MessageType string `gorm:"type:varchar(10);comment:消息类型"`
 	IsGroup     bool   `gorm:"type:bool;comment:消息是否来自于群聊"`
 }
+
+type FileMetadata struct {
+	FileHash    string `gorm:"primaryKey;type:varchar(128);comment:文件SHA512哈希值，作为主键"`
+	FileSize    int64  `gorm:"comment:文件大小（字节）"`
+	StoragePath string `gorm:"type:varchar(512);comment:文件在对象存储中的路径"`
+	CreatedAt   string `gorm:"type:varchar(25);comment:文件创建时间"`
+	UpdatedAt   string `gorm:"type:varchar(25);comment:文件更新时间"`
+}

@@ -15,6 +15,7 @@ import (
 
 	"storageService/internal/cache"
 	"storageService/internal/consumer"
+	"storageService/internal/http_server"
 	"storageService/internal/publisher"
 
 	"github.com/IBM/sarama"
@@ -35,7 +36,9 @@ func main() {
 	sugar.Infoln("初始化 Kafka 生产者...")
 	err := publisher.InitKafkaProducer()
 	if err != nil {
-		sugar.Fatalf("初始化 Kafka 生产者失败: %v", err)
+		sugar.Errorf("初始化 Kafka 生产者失败: %v，将在后台重试", err)
+		// 不直接退出，允许服务继续启动，Kafka连接会在后台重试
+		// 或者可以选择退出：sugar.Fatalf("初始化 Kafka 生产者失败: %v", err)
 	}
 	defer func() {
 		if err := publisher.KafkaProducer.Close(); err != nil {
@@ -47,7 +50,21 @@ func main() {
 	sugar.Infoln("初始化缓存...")
 	initCache()
 
-	// 3. 启动 Kafka 消费者
+	// 3. 初始化HTTP服务器
+	sugar.Infoln("初始化HTTP服务器...")
+	httpServer, err := http_server.NewHTTPServer()
+	if err != nil {
+		sugar.Fatalf("初始化HTTP服务器失败: %v", err)
+	}
+
+	// 4. 启动HTTP服务器（在goroutine中）
+	go func() {
+		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {
+			sugar.Fatalf("HTTP服务器启动失败: %v", err)
+		}
+	}()
+
+	// 5. 启动 Kafka 消费者
 	sugar.Infoln("启动 Kafka 消费者...")
 	if err := startKafkaConsumer(); err != nil {
 		sugar.Fatalf("启动 Kafka 消费者失败: %v", err)
@@ -66,8 +83,21 @@ func main() {
 
 	sugar.Infoln("存储服务启动完成，等待终止信号...")
 
-	// 4. 等待终止信号
-	waitForShutdown()
+	// 6. 等待终止信号
+	sigterm := make(chan os.Signal, 1)
+	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
+	<-sigterm
+
+	// 优雅关闭
+	sugar.Infoln("收到终止信号，正在优雅关闭...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 关闭HTTP服务器
+	if err := httpServer.Shutdown(ctx); err != nil {
+		sugar.Errorf("关闭HTTP服务器失败: %v", err)
+	}
+
 	sugar.Infoln("存储服务正常退出")
 }
 
@@ -111,12 +141,13 @@ func startKafkaConsumer() error {
 	sugar.Infof("Kafka 配置: broker=%s, group=%s, topic=%s",
 		broker, consumerGroup, topic)
 
-	// 等待 Kafka 就绪
+	// 等待 Kafka 就绪（增加等待时间到60秒）
 	sugar.Info("等待 Kafka 服务就绪...")
 	brokerList := strings.Split(broker, ",")
 	for _, brokerAddr := range brokerList {
-		if err := publisher.WaitForKafkaReady(brokerAddr, 30*time.Second); err != nil {
-			return fmt.Errorf("kafka %s 启动超时: %v", brokerAddr, err)
+		if err := publisher.WaitForKafkaReady(brokerAddr, 60*time.Second); err != nil {
+			sugar.Errorf("Kafka %s 启动超时: %v，消费者将在后台继续重试", brokerAddr, err)
+			// 不直接返回错误，允许消费者在后台继续重试连接
 		}
 	}
 

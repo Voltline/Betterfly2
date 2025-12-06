@@ -1,0 +1,45 @@
+syntax = "proto3";
+package storage_interface;
+option go_package = "Betterfly2/proto/storage";
+
+// HTTP服务接口定义（用于客户端直接调用）
+
+// 上传文件请求
+message UploadFileRequest {
+  string file_hash = 1;  // 文件SHA512哈希值
+  int64 file_size = 2;   // 文件大小（字节）
+}
+
+// 上传文件响应
+message UploadFileResponse {
+  bool exists = 1;              // 文件是否已存在
+  string upload_url = 2;        // 预签名上传URL（如果文件不存在）
+  int64 expires_in = 3;         // URL过期时间（秒）
+  string error_message = 4;    // 错误信息（如果有）
+}
+
+// 验证上传请求（上传完成后验证）
+message VerifyUploadRequest {
+  string file_hash = 1;  // 文件SHA512哈希值
+}
+
+// 验证上传响应
+message VerifyUploadResponse {
+  bool success = 1;           // 验证是否成功
+  string error_message = 2;  // 错误信息（如果有）
+}
+
+// 下载文件请求
+message DownloadFileRequest {
+  string file_hash = 1;  // 文件SHA512哈希值
+}
+
+// 下载文件响应
+message DownloadFileResponse {
+  bool exists = 1;              // 文件是否存在
+  string download_url = 2;      // 预签名下载URL（如果文件存在）
+  int64 expires_in = 3;         // URL过期时间（秒）
+  int64 file_size = 4;          // 文件大小（字节）
+  string error_message = 5;     // 错误信息（如果有）
+}
+

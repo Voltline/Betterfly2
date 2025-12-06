@@ -25,7 +25,7 @@ type StorageHandler struct {
 // NewStorageHandler 创建新的存储处理器
 func NewStorageHandler() *StorageHandler {
 	// 初始化数据库连接并自动迁移表
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.Message{})
+	_ = db.DB(&db.User{}, &db.Friend{}, &db.Message{}, &db.FileMetadata{})
 
 	// 初始化L1缓存
 	l1Cache := cache.NewL1Cache()
@@ -78,6 +78,8 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 		resp, err = h.handleUpdateUserAvatar(req, payload.UpdateUserAvatar)
 	case *storage.RequestMessage_QueryUser:
 		resp, err = h.handleQueryUser(req, payload.QueryUser)
+	case *storage.RequestMessage_QueryFileExists:
+		resp, err = h.handleQueryFileExists(req, payload.QueryFileExists)
 	default:
 		err = fmt.Errorf("未知的请求类型")
 	}
@@ -455,6 +457,66 @@ func (h *StorageHandler) buildUserInfoResponse(req *storage.RequestMessage, user
 				Name:       user.Name,
 				Avatar:     user.Avatar,
 				UpdateTime: user.UpdateTime,
+			},
+		},
+	}
+}
+
+// handleQueryFileExists 处理查询文件是否存在请求
+func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, query *storage.QueryFileExists) (*storage.ResponseMessage, error) {
+	sugar := logger.Sugar()
+
+	fileHash := query.FileHash
+	if fileHash == "" {
+		return &storage.ResponseMessage{
+			Result:       storage.StorageResult_SERVICE_ERROR,
+			TargetUserId: req.TargetUserId,
+		}, fmt.Errorf("file_hash is required")
+	}
+
+	// 先尝试从缓存获取
+	cacheKey := fmt.Sprintf("file_exists:%s", fileHash)
+	if cached, ok := h.getFromCache(cacheKey); ok {
+		if exists, ok := cached.(bool); ok {
+			sugar.Debugf("从缓存获取文件存在性: file_hash=%s, exists=%v", fileHash, exists)
+			return h.buildFileExistsResponse(req, exists, 0, ""), nil
+		}
+	}
+
+	// 从数据库查询
+	start := time.Now()
+	fileMetadata, err := db.GetFileMetadata(fileHash)
+	metrics.RecordDatabaseQuery("select", start)
+	if err != nil {
+		sugar.Errorf("查询文件元数据失败: %v", err)
+		metrics.RecordDatabaseError()
+		return nil, err
+	}
+
+	exists := fileMetadata != nil
+	var fileSize int64
+	var storagePath string
+	if exists {
+		fileSize = fileMetadata.FileSize
+		storagePath = fileMetadata.StoragePath
+	}
+
+	// 存入缓存
+	h.setToCache(cacheKey, exists, 5*time.Minute)
+
+	return h.buildFileExistsResponse(req, exists, fileSize, storagePath), nil
+}
+
+// buildFileExistsResponse 构建文件存在性查询响应
+func (h *StorageHandler) buildFileExistsResponse(req *storage.RequestMessage, exists bool, fileSize int64, storagePath string) *storage.ResponseMessage {
+	return &storage.ResponseMessage{
+		Result:       storage.StorageResult_OK,
+		TargetUserId: req.TargetUserId,
+		Payload: &storage.ResponseMessage_FileExistsRsp{
+			FileExistsRsp: &storage.FileExistsRsp{
+				Exists:      exists,
+				FileSize:    fileSize,
+				StoragePath: storagePath,
 			},
 		},
 	}

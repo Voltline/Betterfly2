@@ -27,19 +27,25 @@ var (
 func WaitForKafkaReady(broker string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	sugar := logger.Sugar()
+	retryCount := 0
+	maxRetries := int(timeout.Seconds() / 2) // 每2秒重试一次
 
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", broker, 3*time.Second)
 		if err == nil {
 			conn.Close()
+			sugar.Infof("Kafka %s 连接成功", broker)
 			return nil
 		}
 
-		sugar.Warnf("Kafka %s 未启动, 重试中...", broker)
+		retryCount++
+		if retryCount <= maxRetries {
+			sugar.Warnf("Kafka %s 未启动, 重试中... (尝试 %d/%d)", broker, retryCount, maxRetries)
+		}
 		time.Sleep(2 * time.Second)
 	}
 
-	return fmt.Errorf("Kafka 在 %s 时间内未能成功启动", timeout)
+	return fmt.Errorf("Kafka %s 在 %s 时间内未能成功启动", broker, timeout)
 }
 
 // InitKafkaProducer 初始化 Kafka 生产者
@@ -64,10 +70,13 @@ func InitKafkaProducer() error {
 		// 解析多个 Kafka broker 地址
 		brokerList := splitBrokers(broker)
 
+		// 增加等待时间到60秒，因为Kafka容器启动后需要时间完全就绪
 		for _, brokerAddr := range brokerList {
-			brokerErr := WaitForKafkaReady(brokerAddr, 30*time.Second)
+			brokerErr := WaitForKafkaReady(brokerAddr, 60*time.Second)
 			if brokerErr != nil {
-				sugar.Fatalf("Kafka 启动超时: %v", brokerErr)
+				sugar.Errorf("Kafka %s 启动超时: %v", brokerAddr, brokerErr)
+				initErr = brokerErr
+				return
 			}
 		}
 

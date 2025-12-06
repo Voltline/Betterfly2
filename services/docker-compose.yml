@@ -120,22 +120,68 @@ services:
     networks:
       - backend
 
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs
+    ports:
+      - "9000:9000"  # S3 API端口
+      - "9001:9001"  # 控制台端口
+    volumes:
+      - rustfs-data:/data
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_CONSOLE_ENABLE: "true"
+    command:
+      - --address
+      - :9000
+      - --console-enable
+      - --access-key
+      - ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      - --secret-key
+      - ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      - /data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9000/minio/health/live || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   storage_service:
     build:
       context: ..
       dockerfile: services/storageService/Dockerfile
     container_name: storageService
     depends_on:
-      - redis
-      - kafka1
-      - kafka2
+      rustfs:
+        condition: service_started
+      redis:
+        condition: service_started
+      kafka1:
+        condition: service_started
+      kafka2:
+        condition: service_started
     environment:
       PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_STORAGE_TOPIC: storage-requests
       KAFKA_CONSUMER_GROUP: storage-service-group
+      AUTH_RPC_ADDR: auth_service:50051
+      HTTP_PORT: ${HTTP_PORT:-8081}
+      # RustFS配置
+      RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
+      RUSTFS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ENDPOINT_URL: http://rustfs:9000
+      RUSTFS_EXTERNAL_ENDPOINT_URL: ${RUSTFS_EXTERNAL_ENDPOINT_URL:-http://localhost:9000}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       LOG_LEVEL: debug
+    ports:
+      - "${HTTP_PORT:-8081}:${HTTP_PORT:-8081}"
     networks:
       - backend
 
@@ -194,3 +240,4 @@ networks:
 
 volumes:
   grafana-storage:
+  rustfs-data:

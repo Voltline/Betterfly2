@@ -27,3 +27,9 @@ message UserInfoRsp {
   string update_time = 5;
 }
 
+message FileExistsRsp {
+  bool exists = 1;
+  int64 file_size = 2;
+  string storage_path = 3;
+}
+

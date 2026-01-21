@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,10 +26,12 @@ type Connection struct {
 
 // ConnectionManager 管理所有WebSocket连接
 type ConnectionManager struct {
-	connections     *sync.Map // connectionID -> *Connection
-	userConnections *sync.Map // userID -> connectionID
-	mutex           sync.RWMutex
-	instanceID      string // 实例标识符，用于调试
+	connections      *sync.Map // connectionID -> *Connection
+	userConnections  *sync.Map // userID -> connectionID
+	mutex            sync.RWMutex
+	instanceID       string // 实例标识符，用于调试
+	connectionCount  int64  // 使用原子计数器提高性能
+	loggedInCount    int64  // 已登录用户的原子计数器
 }
 
 // NewConnectionManager 创建新的连接管理器
@@ -56,6 +59,7 @@ func (cm *ConnectionManager) AddConnection(conn *websocket.Conn) *Connection {
 	}
 
 	cm.connections.Store(connectionID, connection)
+	atomic.AddInt64(&cm.connectionCount, 1)
 	logger.Sugar().Debugf("新连接建立: %s", connectionID)
 	metrics.RecordWebSocketConnectionOpened()
 
@@ -135,6 +139,7 @@ func (cm *ConnectionManager) Login(connectionID string, userID string) error {
 
 		// 更新用户-连接映射
 		cm.userConnections.Store(userID, connectionID)
+		atomic.AddInt64(&cm.loggedInCount, 1)
 		logger.Sugar().Debugf("[%s] Login: 设置用户连接映射 %s -> %s", cm.instanceID, userID, connectionID)
 
 		// 6. 最终冲突检查：在设置会话前再次检查，防止竞态条件
@@ -225,6 +230,7 @@ func (cm *ConnectionManager) RemoveConnection(connectionID string) {
 		// 如果已登录，清理用户映射和全局会话
 		if connection.LoggedIn && connection.UserID != "" {
 			cm.userConnections.Delete(connection.UserID)
+			atomic.AddInt64(&cm.loggedInCount, -1)
 			// 更新在线用户数指标（删除后）
 			metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
 
@@ -265,6 +271,7 @@ func (cm *ConnectionManager) RemoveConnection(connectionID string) {
 
 		// 从连接池中移除
 		cm.connections.Delete(connectionID)
+		atomic.AddInt64(&cm.connectionCount, -1)
 
 		logger.Sugar().Debugf("连接已移除: %s", connectionID)
 	}
@@ -341,22 +348,12 @@ func (cm *ConnectionManager) IsUserLoggedIn(userID string) bool {
 	return exists
 }
 
-// GetConnectionCount 获取当前连接数
+// GetConnectionCount 获取当前连接数 (O(1) using atomic counter)
 func (cm *ConnectionManager) GetConnectionCount() int {
-	count := 0
-	cm.connections.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	return count
+	return int(atomic.LoadInt64(&cm.connectionCount))
 }
 
-// GetLoggedInUserCount 获取已登录用户数
+// GetLoggedInUserCount 获取已登录用户数 (O(1) using atomic counter)
 func (cm *ConnectionManager) GetLoggedInUserCount() int {
-	count := 0
-	cm.userConnections.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	return count
+	return int(atomic.LoadInt64(&cm.loggedInCount))
 }

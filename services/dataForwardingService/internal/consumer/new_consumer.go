@@ -15,6 +15,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Pre-compiled regex patterns for efficient matching
+var (
+	deleteUserPatternMatch   = regexp.MustCompile(`DELETE USER \d+ TARGET [a-zA-Z0-9-]+`)
+	deleteUserPatternCapture = regexp.MustCompile(`DELETE USER (\d+) TARGET ([a-zA-Z0-9-]+)`)
+)
+
 // NewKafkaConsumerGroupHandler 新的Kafka消费者处理器
 type NewKafkaConsumerGroupHandler struct {
 	wsHandler *handlers.WebSocketHandler
@@ -37,20 +43,12 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 	for msg := range claim.Messages() {
 		sugar.Debugf("Kafka 收到消息 - Topic: %s, Partition: %d, Offset: %d", msg.Topic, msg.Partition, msg.Offset)
 
-		// 检查是否为关闭连接请求（Kafka降级方案）
-		match, regErr := regexp.Match("DELETE USER \\d+ TARGET [a-zA-Z0-9]+", msg.Value)
-		if regErr != nil {
-			sugar.Errorf("正则匹配失败：%v", regErr)
-			continue
-		}
-
-		// 收到关闭连接要求（降级方案）
-		if match {
-			re := regexp.MustCompile("DELETE USER (\\d+) TARGET ([a-zA-Z0-9]+)")
-			matches := re.FindAllStringSubmatch(string(msg.Value), -1)
-			if len(matches) > 0 && len(matches[0]) > 2 {
-				userID := matches[0][1]
-				targetContainerID := matches[0][2]
+		// 检查是否为关闭连接请求（Kafka降级方案），使用预编译的正则表达式
+		if deleteUserPatternMatch.Match(msg.Value) {
+			matches := deleteUserPatternCapture.FindStringSubmatch(string(msg.Value))
+			if len(matches) > 2 {
+				userID := matches[1]
+				targetContainerID := matches[2]
 
 				// 获取容器标识符（使用HOSTNAME作为唯一标识）
 				currentContainerID := os.Getenv("HOSTNAME")

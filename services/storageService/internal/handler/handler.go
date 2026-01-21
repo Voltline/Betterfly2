@@ -16,6 +16,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Pre-defined time formats for efficient parsing (ordered by expected frequency)
+var timeFormats = []string{
+	time.RFC3339,
+	time.RFC3339Nano,
+	"2006-01-02T15:04:05Z0700",
+	"2006-01-02 15:04:05-07",
+	"2006-01-02 15:04:05",
+}
+
 // StorageHandler 存储服务处理器
 type StorageHandler struct {
 	l1Cache cache.Cache
@@ -169,31 +178,22 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
-	// 解析时间戳，支持多种格式
+	// 解析时间戳，使用预定义的格式列表
 	var timestamp time.Time
 	var err error
+	parsed := false
 
-	// 尝试RFC3339格式（带T和时区，如 "2006-01-02T15:04:05Z07:00"）
-	timestamp, err = time.Parse(time.RFC3339, query.Timestamp)
-	if err != nil {
-		// 尝试RFC3339Nano格式
-		timestamp, err = time.Parse(time.RFC3339Nano, query.Timestamp)
-		if err != nil {
-			// 尝试不带冒号的时区格式（如 "2006-01-02T15:04:05+0800"）
-			timestamp, err = time.Parse("2006-01-02T15:04:05Z0700", query.Timestamp)
-			if err != nil {
-				// 尝试空格分隔的格式（如 "2006-01-02 15:04:05+08"）
-				timestamp, err = time.Parse("2006-01-02 15:04:05-07", query.Timestamp)
-				if err != nil {
-					// 最后尝试简单格式（如 "2006-01-02 15:04:05"）
-					timestamp, err = time.Parse("2006-01-02 15:04:05", query.Timestamp)
-					if err != nil {
-						sugar.Warnf("解析时间戳失败，使用默认值: %v, 原始时间戳: %s", err, query.Timestamp)
-						timestamp = time.Now().Add(-24 * time.Hour) // 默认查询最近24小时
-					}
-				}
-			}
+	for _, format := range timeFormats {
+		timestamp, err = time.Parse(format, query.Timestamp)
+		if err == nil {
+			parsed = true
+			break
 		}
+	}
+
+	if !parsed {
+		sugar.Warnf("解析时间戳失败，使用默认值: 原始时间戳: %s", query.Timestamp)
+		timestamp = time.Now().Add(-24 * time.Hour) // 默认查询最近24小时
 	}
 
 	// 查询该时间戳之后的消息，使用UTC时间的RFC3339格式（与数据库存储格式一致）

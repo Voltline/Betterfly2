@@ -18,6 +18,7 @@ import (
 var (
 	redisOnce      sync.Once
 	redisCloseOnce sync.Once
+	gobTypesOnce   sync.Once
 	redisClient    *redis.Client
 )
 
@@ -39,9 +40,8 @@ func encode(value interface{}) ([]byte, error) {
 
 // decode 使用gob解码对象
 func decode(data []byte) (interface{}, error) {
-	var buf bytes.Buffer
-	buf.Write(data)
-	dec := gob.NewDecoder(&buf)
+	buf := bytes.NewBuffer(data)
+	dec := gob.NewDecoder(buf)
 
 	// 尝试解码为注册的类型
 	var value interface{}
@@ -52,7 +52,7 @@ func decode(data []byte) (interface{}, error) {
 	// 如果失败，尝试解码为db.Message（兼容旧格式）
 	buf.Reset()
 	buf.Write(data)
-	dec = gob.NewDecoder(&buf)
+	dec = gob.NewDecoder(buf)
 	var msg db.Message
 	if err := dec.Decode(&msg); err == nil {
 		return &msg, nil
@@ -61,7 +61,7 @@ func decode(data []byte) (interface{}, error) {
 	// 如果失败，尝试解码为db.User（兼容旧格式）
 	buf.Reset()
 	buf.Write(data)
-	dec = gob.NewDecoder(&buf)
+	dec = gob.NewDecoder(buf)
 	var user db.User
 	if err := dec.Decode(&user); err == nil {
 		return &user, nil
@@ -70,7 +70,7 @@ func decode(data []byte) (interface{}, error) {
 	// 如果失败，尝试解码为字符串
 	buf.Reset()
 	buf.Write(data)
-	dec = gob.NewDecoder(&buf)
+	dec = gob.NewDecoder(buf)
 	var str string
 	if err := dec.Decode(&str); err == nil {
 		return str, nil
@@ -138,12 +138,14 @@ func NewL2Cache() (*L2Redis, error) {
 	}, nil
 }
 
-// initGobTypes 注册gob编码的类型
+// initGobTypes 注册gob编码的类型（只执行一次）
 func initGobTypes() {
-	// 注册可能被缓存的数据类型
-	gob.Register(&db.Message{})
-	gob.Register(&db.User{})
-	gob.Register("")
+	gobTypesOnce.Do(func() {
+		// 注册可能被缓存的数据类型
+		gob.Register(&db.Message{})
+		gob.Register(&db.User{})
+		gob.Register("")
+	})
 }
 
 // Set 实现Cache接口的Set方法

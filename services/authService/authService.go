@@ -8,9 +8,10 @@ import (
 	"authService/internal/utils"
 	"context"
 	"crypto/rand"
-	"golang.org/x/crypto/bcrypt"
-	"strconv"
+	"fmt"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthService struct {
@@ -201,5 +202,5 @@ RETURN:
 }
 
 func userBriefStr(user *db.User) string {
-	return "user" + strconv.FormatInt(user.ID, 10) + "[" + user.Account + "]"
+	return fmt.Sprintf("user%d[%s]", user.ID, user.Account)
 }

@@ -17,8 +17,8 @@ import (
 
 // Pre-compiled regex patterns for efficient matching
 var (
-	deleteUserPatternMatch   = regexp.MustCompile(`DELETE USER \d+ TARGET [a-zA-Z0-9-]+`)
-	deleteUserPatternCapture = regexp.MustCompile(`DELETE USER (\d+) TARGET ([a-zA-Z0-9-]+)`)
+	deleteUserPatternMatch   = regexp.MustCompile(`DELETE USER \d+ TARGET [-a-zA-Z0-9]+`)
+	deleteUserPatternCapture = regexp.MustCompile(`DELETE USER (\d+) TARGET ([-a-zA-Z0-9]+)`)
 )
 
 // NewKafkaConsumerGroupHandler 新的Kafka消费者处理器

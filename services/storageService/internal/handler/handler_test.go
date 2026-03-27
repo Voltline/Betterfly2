@@ -61,6 +61,29 @@ func setupMockDB(t *testing.T) (*gorm.DB, sqlmock.Sqlmock) {
 	return gormDB, mock
 }
 
+func useMockDB(t *testing.T) sqlmock.Sqlmock {
+	t.Helper()
+
+	gormDB, mock := setupMockDB(t)
+	originalDBFunc := db.DB
+	db.DB = func(dst ...interface{}) *gorm.DB {
+		return gormDB
+	}
+
+	t.Cleanup(func() {
+		db.DB = originalDBFunc
+		sqlDB, err := gormDB.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("存在未满足的期望: %s", err)
+		}
+	})
+
+	return mock
+}
+
 func TestNewStorageHandler(t *testing.T) {
 	_, _ = setupMockDB(t)
 	// 注意：我们不检查模拟数据库的期望，因为这个测试只验证handler创建
@@ -76,12 +99,7 @@ func TestNewStorageHandler(t *testing.T) {
 }
 
 func TestHandleStoreNewMessage(t *testing.T) {
-	_, mock := setupMockDB(t)
-	defer func() {
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("存在未满足的期望: %s", err)
-		}
-	}()
+	mock := useMockDB(t)
 
 	handler := &StorageHandler{
 		l1Cache: newMockCache(),
@@ -107,7 +125,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	// 设置数据库期望
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs(int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", false).
+		WithArgs(int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(12345))
 	mock.ExpectCommit()
 
@@ -126,12 +144,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 }
 
 func TestHandleQueryMessage(t *testing.T) {
-	_, mock := setupMockDB(t)
-	defer func() {
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("存在未满足的期望: %s", err)
-		}
-	}()
+	mock := useMockDB(t)
 
 	handler := &StorageHandler{
 		l1Cache: newMockCache(),
@@ -175,12 +188,7 @@ func TestHandleQueryMessage(t *testing.T) {
 }
 
 func TestHandleQueryMessage_NotFound(t *testing.T) {
-	_, mock := setupMockDB(t)
-	defer func() {
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("存在未满足的期望: %s", err)
-		}
-	}()
+	mock := useMockDB(t)
 
 	handler := &StorageHandler{
 		l1Cache: newMockCache(),
@@ -216,12 +224,7 @@ func TestHandleQueryMessage_NotFound(t *testing.T) {
 }
 
 func TestHandleUpdateUserName(t *testing.T) {
-	_, mock := setupMockDB(t)
-	defer func() {
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("存在未满足的期望: %s", err)
-		}
-	}()
+	mock := useMockDB(t)
 
 	handler := &StorageHandler{
 		l1Cache: newMockCache(),
@@ -246,6 +249,11 @@ func TestHandleUpdateUserName(t *testing.T) {
 		WithArgs("NewUsername", sqlmock.AnyArg(), int64(1000)).
 		WillReturnResult(sqlmock.NewResult(0, 1)) // 影响1行
 	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT \\* FROM \"users\" WHERE \"users\".\"id\" = \\$1 ORDER BY \"users\".\"id\" LIMIT \\$2").
+		WithArgs(int64(1000), 1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "account", "name", "update_time", "avatar", "password_hash", "jwt_key",
+		}).AddRow(1000, "test-account", "NewUsername", time.Now().Format("2006-01-02 15:04:05"), "", "", []byte("key")))
 
 	// 调用处理函数
 	resp, err := handler.handleUpdateUserName(req, req.GetUpdateUserName())
@@ -258,12 +266,7 @@ func TestHandleUpdateUserName(t *testing.T) {
 }
 
 func TestHandleUpdateUserName_NotFound(t *testing.T) {
-	_, mock := setupMockDB(t)
-	defer func() {
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("存在未满足的期望: %s", err)
-		}
-	}()
+	mock := useMockDB(t)
 
 	handler := &StorageHandler{
 		l1Cache: newMockCache(),
@@ -288,6 +291,11 @@ func TestHandleUpdateUserName_NotFound(t *testing.T) {
 		WithArgs("NewUsername", sqlmock.AnyArg(), int64(99999)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 影响0行
 	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT \\* FROM \"users\" WHERE \"users\".\"id\" = \\$1 ORDER BY \"users\".\"id\" LIMIT \\$2").
+		WithArgs(int64(99999), 1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "account", "name", "update_time", "avatar", "password_hash", "jwt_key",
+		}))
 
 	// 调用处理函数
 	resp, err := handler.handleUpdateUserName(req, req.GetUpdateUserName())

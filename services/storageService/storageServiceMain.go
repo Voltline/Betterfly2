@@ -31,6 +31,8 @@ func main() {
 	}()
 
 	sugar.Infoln("存储服务启动中")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// 1. 初始化 Kafka 生产者
 	sugar.Infoln("初始化 Kafka 生产者...")
@@ -41,8 +43,10 @@ func main() {
 		// 或者可以选择退出：sugar.Fatalf("初始化 Kafka 生产者失败: %v", err)
 	}
 	defer func() {
-		if err := publisher.KafkaProducer.Close(); err != nil {
-			sugar.Errorf("关闭Kafka生产者失败: %v", err)
+		if publisher.KafkaProducer != nil {
+			if err := publisher.KafkaProducer.Close(); err != nil {
+				sugar.Errorf("关闭Kafka生产者失败: %v", err)
+			}
 		}
 	}()
 
@@ -64,12 +68,6 @@ func main() {
 		}
 	}()
 
-	// 5. 启动 Kafka 消费者
-	sugar.Infoln("启动 Kafka 消费者...")
-	if err := startKafkaConsumer(); err != nil {
-		sugar.Fatalf("启动 Kafka 消费者失败: %v", err)
-	}
-
 	// 启动metrics HTTP服务器
 	go func() {
 		metricsPort := "9091"
@@ -81,21 +79,48 @@ func main() {
 		}
 	}()
 
+	// 5. 启动 Kafka 消费者（后台运行，跟随主上下文退出）
+	sugar.Infoln("启动 Kafka 消费者...")
+	consumerErrCh := make(chan error, 1)
+	go func() {
+		consumerErrCh <- startKafkaConsumer(ctx)
+	}()
+
 	sugar.Infoln("存储服务启动完成，等待终止信号...")
 
 	// 6. 等待终止信号
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	<-sigterm
+
+	select {
+	case sig := <-sigterm:
+		sugar.Infof("收到终止信号 %s，准备关闭服务", sig)
+	case err := <-consumerErrCh:
+		if err != nil {
+			sugar.Errorf("Kafka 消费者异常退出: %v", err)
+		} else {
+			sugar.Info("Kafka 消费者已停止")
+		}
+	}
 
 	// 优雅关闭
 	sugar.Infoln("收到终止信号，正在优雅关闭...")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
 
 	// 关闭HTTP服务器
-	if err := httpServer.Shutdown(ctx); err != nil {
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		sugar.Errorf("关闭HTTP服务器失败: %v", err)
+	}
+
+	select {
+	case err := <-consumerErrCh:
+		if err != nil {
+			sugar.Errorf("等待 Kafka 消费者退出时出错: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		sugar.Warn("等待 Kafka 消费者退出超时")
 	}
 
 	sugar.Infoln("存储服务正常退出")
@@ -118,8 +143,8 @@ func initCache() {
 	// 这里主要是确保缓存系统就绪
 }
 
-// startKafkaConsumer 启动 Kafka 消费者
-func startKafkaConsumer() error {
+// startKafkaConsumer 启动 Kafka 消费者并阻塞直到上下文取消或消费失败
+func startKafkaConsumer(ctx context.Context) error {
 	sugar := logger.Sugar()
 
 	// 配置
@@ -172,52 +197,21 @@ func startKafkaConsumer() error {
 	// 创建消息处理器
 	handler := &consumer.KafkaConsumerGroupHandler{}
 
-	// 启动消费循环（在 goroutine 中）
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	consumerErrors := make(chan error, 1)
-
-	go func() {
-		sugar.Info("启动 Kafka 消息消费循环...")
-		for {
-			select {
-			case <-ctx.Done():
-				sugar.Debug("消费循环上下文已取消")
-				return
-			default:
-				if err := consumerGroupClient.Consume(ctx, []string{topic}, handler); err != nil {
-					if errors.Is(err, sarama.ErrClosedConsumerGroup) {
-						sugar.Warn("Kafka 消费者组已关闭")
-						consumerErrors <- nil
-						return
-					}
-					sugar.Errorf("消费错误: %v", err)
-					consumerErrors <- err
-					return
-				}
-			}
+	// 消费循环遵循外部上下文，避免阻塞主启动流程。
+	sugar.Info("启动 Kafka 消息消费循环...")
+	for {
+		if ctx.Err() != nil {
+			sugar.Info("Kafka 消费者收到关闭信号，停止消费")
+			return nil
 		}
-	}()
 
-	// 设置信号处理
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-
-	// 等待信号或消费者错误
-	select {
-	case err := <-consumerErrors:
-		// 消费者出错，取消上下文并返回错误
-		cancel()
-		return err
-	case <-sigterm:
-		// 收到终止信号，优雅关闭
-		sugar.Info("收到终止信号，正在优雅关闭消费者...")
-		cancel()
-		// 等待消费者goroutine退出（短暂等待）
-		time.Sleep(2 * time.Second)
-		sugar.Info("Kafka消费者已关闭")
-		return nil
+		if err := consumerGroupClient.Consume(ctx, []string{topic}, handler); err != nil {
+			if errors.Is(err, sarama.ErrClosedConsumerGroup) || ctx.Err() != nil {
+				sugar.Info("Kafka 消费者组已关闭")
+				return nil
+			}
+			return fmt.Errorf("消费错误: %v", err)
+		}
 	}
 }
 

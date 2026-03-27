@@ -22,16 +22,19 @@ type Connection struct {
 	SendChan   chan []byte
 	ShouldStop bool
 	LoggedIn   bool
+	sendMu     sync.RWMutex
+	closeOnce  sync.Once
+	closed     atomic.Bool
 }
 
 // ConnectionManager 管理所有WebSocket连接
 type ConnectionManager struct {
-	connections      *sync.Map // connectionID -> *Connection
-	userConnections  *sync.Map // userID -> connectionID
-	mutex            sync.RWMutex
-	instanceID       string // 实例标识符，用于调试
-	connectionCount  int64  // 使用原子计数器提高性能
-	loggedInCount    int64  // 已登录用户的原子计数器
+	connections     *sync.Map // connectionID -> *Connection
+	userConnections *sync.Map // userID -> connectionID
+	mutex           sync.RWMutex
+	instanceID      string // 实例标识符，用于调试
+	connectionCount int64  // 使用原子计数器提高性能
+	loggedInCount   int64  // 已登录用户的原子计数器
 }
 
 // NewConnectionManager 创建新的连接管理器
@@ -121,14 +124,8 @@ func (cm *ConnectionManager) Login(connectionID string, userID string) error {
 
 	// 4. 检查本地是否已有该用户的连接
 	if oldConnectionID, exists := cm.userConnections.Load(userID); exists {
-		// 强制登出本地旧连接
-		if oldConn, ok := cm.connections.Load(oldConnectionID); ok {
-			oldConnection := oldConn.(*Connection)
-			oldConnection.Conn.Close()
-			oldConnection.ShouldStop = true
-			cm.connections.Delete(oldConnectionID)
-			logger.Sugar().Debugf("强制登出本地旧连接: %s", oldConnectionID)
-		}
+		cm.removeConnectionLocked(oldConnectionID.(string))
+		logger.Sugar().Debugf("强制登出本地旧连接: %s", oldConnectionID)
 	}
 
 	// 5. 更新连接信息
@@ -221,6 +218,10 @@ func (cm *ConnectionManager) RemoveConnection(connectionID string) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 
+	cm.removeConnectionLocked(connectionID)
+}
+
+func (cm *ConnectionManager) removeConnectionLocked(connectionID string) {
 	if conn, ok := cm.connections.Load(connectionID); ok {
 		connection := conn.(*Connection)
 
@@ -257,21 +258,10 @@ func (cm *ConnectionManager) RemoveConnection(connectionID string) {
 			}
 		}
 
-		// 关闭连接
-		connection.Conn.Close()
-		connection.ShouldStop = true
-
-		// 安全关闭通道，避免重复关闭
-		select {
-		case <-connection.SendChan:
-			// 通道已关闭，不做任何操作
-		default:
-			close(connection.SendChan)
-		}
-
 		// 从连接池中移除
 		cm.connections.Delete(connectionID)
 		atomic.AddInt64(&cm.connectionCount, -1)
+		connection.Close()
 
 		logger.Sugar().Debugf("连接已移除: %s", connectionID)
 	}
@@ -325,13 +315,11 @@ func (cm *ConnectionManager) SendMessageToUser(userID string, message []byte) er
 		logger.Sugar().Debugf("[%s] 找到用户连接: %s -> %s", cm.instanceID, userID, connectionID)
 		if conn, ok := cm.connections.Load(connectionID); ok {
 			connection := conn.(*Connection)
-			select {
-			case connection.SendChan <- message:
-				logger.Sugar().Debugf("[%s] 消息发送成功: %s", cm.instanceID, userID)
-				return nil
-			default:
-				return fmt.Errorf("发送通道已满: %s", userID)
+			if err := connection.EnqueueMessage(message); err != nil {
+				return err
 			}
+			logger.Sugar().Debugf("[%s] 消息发送成功: %s", cm.instanceID, userID)
+			return nil
 		}
 	}
 
@@ -356,4 +344,34 @@ func (cm *ConnectionManager) GetConnectionCount() int {
 // GetLoggedInUserCount 获取已登录用户数 (O(1) using atomic counter)
 func (cm *ConnectionManager) GetLoggedInUserCount() int {
 	return int(atomic.LoadInt64(&cm.loggedInCount))
+}
+
+func (c *Connection) EnqueueMessage(message []byte) error {
+	c.sendMu.RLock()
+	defer c.sendMu.RUnlock()
+
+	if c.closed.Load() {
+		return fmt.Errorf("连接已关闭: %s", c.ID)
+	}
+
+	select {
+	case c.SendChan <- message:
+		return nil
+	default:
+		return fmt.Errorf("发送通道已满: %s", c.ID)
+	}
+}
+
+func (c *Connection) Close() {
+	c.closeOnce.Do(func() {
+		c.sendMu.Lock()
+		c.ShouldStop = true
+		c.closed.Store(true)
+		close(c.SendChan)
+		c.sendMu.Unlock()
+
+		if c.Conn != nil {
+			_ = c.Conn.Close()
+		}
+	})
 }

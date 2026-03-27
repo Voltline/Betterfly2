@@ -335,3 +335,35 @@ func TestBuildMessageResponse(t *testing.T) {
 	assert.Equal(t, "text", msgRsp.MsgType)
 	assert.Equal(t, false, msgRsp.IsGroup)
 }
+
+func TestHandleQueryFileExists_UsesCachedMetadata(t *testing.T) {
+	handler := &StorageHandler{
+		l1Cache: newMockCache(),
+		l2Cache: nil,
+	}
+
+	cacheKey := "file_exists:hash123"
+	handler.l1Cache.Set(cacheKey, fileExistsCacheEntry{
+		Exists:      true,
+		FileSize:    4096,
+		StoragePath: "ab/hash123",
+	}, time.Minute)
+
+	req := &storage.RequestMessage{
+		FromKafkaTopic: "test-topic",
+		TargetUserId:   1001,
+	}
+	query := &storage.QueryFileExists{
+		FileHash: "hash123",
+	}
+
+	resp, err := handler.handleQueryFileExists(req, query)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	fileRsp := resp.GetFileExistsRsp()
+	assert.NotNil(t, fileRsp)
+	assert.True(t, fileRsp.GetExists())
+	assert.Equal(t, int64(4096), fileRsp.GetFileSize())
+	assert.Equal(t, "ab/hash123", fileRsp.GetStoragePath())
+}

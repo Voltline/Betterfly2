@@ -21,10 +21,24 @@ type UserInfo struct {
 	Account string
 }
 
+func shouldBypassJWTAuth(path string) bool {
+	switch path {
+	case "/health":
+		return true
+	default:
+		return false
+	}
+}
+
 // JWTAuthMiddleware JWT验证中间件
 func JWTAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sugar := logger.Sugar()
+
+		if shouldBypassJWTAuth(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		// 从Header获取Authorization
 		authHeader := r.Header.Get("Authorization")

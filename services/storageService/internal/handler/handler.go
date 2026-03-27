@@ -31,6 +31,12 @@ type StorageHandler struct {
 	l2Cache cache.Cache // L2 Redis缓存，可能为nil
 }
 
+type fileExistsCacheEntry struct {
+	Exists      bool
+	FileSize    int64
+	StoragePath string
+}
+
 // NewStorageHandler 创建新的存储处理器
 func NewStorageHandler() *StorageHandler {
 	// 初始化数据库连接并自动迁移表
@@ -477,9 +483,13 @@ func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, quer
 	// 先尝试从缓存获取
 	cacheKey := fmt.Sprintf("file_exists:%s", fileHash)
 	if cached, ok := h.getFromCache(cacheKey); ok {
-		if exists, ok := cached.(bool); ok {
-			sugar.Debugf("从缓存获取文件存在性: file_hash=%s, exists=%v", fileHash, exists)
-			return h.buildFileExistsResponse(req, exists, 0, ""), nil
+		if entry, ok := cached.(fileExistsCacheEntry); ok {
+			sugar.Debugf("从缓存获取文件存在性: file_hash=%s, exists=%v", fileHash, entry.Exists)
+			return h.buildFileExistsResponse(req, entry.Exists, entry.FileSize, entry.StoragePath), nil
+		}
+		if entry, ok := cached.(*fileExistsCacheEntry); ok {
+			sugar.Debugf("从缓存获取文件存在性: file_hash=%s, exists=%v", fileHash, entry.Exists)
+			return h.buildFileExistsResponse(req, entry.Exists, entry.FileSize, entry.StoragePath), nil
 		}
 	}
 
@@ -501,8 +511,12 @@ func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, quer
 		storagePath = fileMetadata.StoragePath
 	}
 
-	// 存入缓存
-	h.setToCache(cacheKey, exists, 5*time.Minute)
+	// 存入缓存，避免缓存命中时丢失文件大小和存储路径。
+	h.setToCache(cacheKey, fileExistsCacheEntry{
+		Exists:      exists,
+		FileSize:    fileSize,
+		StoragePath: storagePath,
+	}, 5*time.Minute)
 
 	return h.buildFileExistsResponse(req, exists, fileSize, storagePath), nil
 }

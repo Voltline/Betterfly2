@@ -424,17 +424,7 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 		currentContainerID = "local"
 	}
 
-	// 构建storage同步查询请求
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   payload.GetToUserId(), // 注意：这里使用payload中的to_user_id，而不是fromID
-		Payload: &storage.RequestMessage_QuerySyncMessages{
-			QuerySyncMessages: &storage.QuerySyncMessages{
-				ToUserId:  payload.GetToUserId(),
-				Timestamp: payload.GetTimestamp(),
-			},
-		},
-	}
+	storeReq := buildSyncMessagesStorageRequest(fromID, payload, currentContainerID)
 
 	// 序列化存储请求
 	storeReqBytes, err := proto.Marshal(storeReq)
@@ -461,8 +451,26 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	logger.Sugar().Debugf("同步消息查询请求已发送到storageService: to_user_id=%d", payload.GetToUserId())
+	logger.Sugar().Debugf(
+		"同步消息查询请求已发送到storageService: requester_user_id=%d, query_target_id=%d",
+		fromID,
+		payload.GetToUserId(),
+	)
 	return nil
+}
+
+func buildSyncMessagesStorageRequest(fromID int64, payload *pb.QuerySyncMessages, currentContainerID string) *storage.RequestMessage {
+	return &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		// storage 响应需要回到发起同步请求的登录用户，而不是查询目标实体。
+		TargetUserId: fromID,
+		Payload: &storage.RequestMessage_QuerySyncMessages{
+			QuerySyncMessages: &storage.QuerySyncMessages{
+				ToUserId:  payload.GetToUserId(),
+				Timestamp: payload.GetTimestamp(),
+			},
+		},
+	}
 }
 
 // handleQueryUser 处理查询用户信息请求

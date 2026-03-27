@@ -237,11 +237,8 @@ func (h *WebSocketHandler) writeToClient(conn *connection.Connection) {
 // sendResponse 发送响应消息
 func (h *WebSocketHandler) sendResponse(conn *connection.Connection, rsp *pb.ResponseMessage) {
 	rspBytes, _ := proto.Marshal(rsp)
-	select {
-	case conn.SendChan <- rspBytes:
-		// 发送成功
-	default:
-		logger.Sugar().Errorf("发送通道已满，消息丢失: %s", conn.ID)
+	if err := conn.EnqueueMessage(rspBytes); err != nil {
+		logger.Sugar().Errorf("发送响应失败: %v", err)
 	}
 }
 

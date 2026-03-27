@@ -168,7 +168,7 @@ services:
       PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
-      KAFKA_STORAGE_TOPIC: storage-requests
+      KAFKA_STORAGE_TOPIC: storage-service
       KAFKA_CONSUMER_GROUP: storage-service-group
       AUTH_RPC_ADDR: auth_service:50051
       HTTP_PORT: ${HTTP_PORT:-8081}

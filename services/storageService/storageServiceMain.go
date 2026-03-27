@@ -150,7 +150,7 @@ func startKafkaConsumer(ctx context.Context) error {
 	// 配置
 	topic := os.Getenv("KAFKA_STORAGE_TOPIC")
 	if topic == "" {
-		topic = "storage-requests"
+		topic = "storage-service"
 	}
 
 	broker := os.Getenv("KAFKA_BROKER")

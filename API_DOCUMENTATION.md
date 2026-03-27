@@ -570,7 +570,7 @@ message DownloadFileResponse {
 - `PGSQL_DSN`: PostgreSQL数据库连接字符串
 - `REDIS_ADDR`: Redis地址（默认: localhost:6379）
 - `KAFKA_BROKER`: Kafka broker地址（逗号分隔）
-- `KAFKA_STORAGE_TOPIC`: Kafka存储服务topic（默认: storage-requests）
+- `KAFKA_STORAGE_TOPIC`: Kafka存储服务topic（默认: storage-service）
 - `KAFKA_CONSUMER_GROUP`: Kafka消费者组（默认: storage-service-group）
 - `AUTH_RPC_ADDR`: 认证服务gRPC地址（默认: localhost:50051）
 
@@ -650,4 +650,3 @@ if downloadResp.Exists {
     // 使用消息中的real_file_name恢复文件名
 }
 ```
-

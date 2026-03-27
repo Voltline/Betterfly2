@@ -208,10 +208,10 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布消息到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布消息到storage-service失败: %v", err)
 		return err
 	}
 
@@ -389,10 +389,10 @@ func handleQueryMessage(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布查询请求到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布查询请求到storage-service失败: %v", err)
 		return err
 	}
 
@@ -442,10 +442,10 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布同步查询请求到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布同步查询请求到storage-service失败: %v", err)
 		return err
 	}
 
@@ -522,10 +522,10 @@ func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布用户查询请求到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布用户查询请求到storage-service失败: %v", err)
 		return err
 	}
 
@@ -585,10 +585,10 @@ func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布用户名更新请求到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布用户名更新请求到storage-service失败: %v", err)
 		return err
 	}
 
@@ -648,10 +648,10 @@ func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	// 发布到storage-requests主题
-	err = publisher.PublishMessage(string(envBytes), "storage-requests")
+	// 发布到storage-service主题
+	err = publisher.PublishMessage(string(envBytes), "storage-service")
 	if err != nil {
-		logger.Sugar().Errorf("发布用户头像更新请求到storage-requests失败: %v", err)
+		logger.Sugar().Errorf("发布用户头像更新请求到storage-service失败: %v", err)
 		return err
 	}
 

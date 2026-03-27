@@ -13,10 +13,11 @@ import (
 
 // HTTPServer HTTP服务器
 type HTTPServer struct {
-	server          *http.Server
-	rustfsClient    *rustfs.RustFSClient
-	uploadHandler   *UploadHandler
-	downloadHandler *DownloadHandler
+	server           *http.Server
+	rustfsClient     *rustfs.RustFSClient
+	uploadHandler    *UploadHandler
+	downloadHandler  *DownloadHandler
+	readinessHandler *ReadinessHandler
 }
 
 // NewHTTPServer 创建新的HTTP服务器
@@ -35,6 +36,7 @@ func NewHTTPServer() (*HTTPServer, error) {
 	// 创建处理器
 	uploadHandler := NewUploadHandler(rustfsClient)
 	downloadHandler := NewDownloadHandler(rustfsClient)
+	readinessHandler := NewReadinessHandler(rustfsClient)
 
 	// 创建HTTP服务器
 	port := os.Getenv("HTTP_PORT")
@@ -74,6 +76,13 @@ func NewHTTPServer() (*HTTPServer, error) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		readinessHandler.HandleReady(w, r)
+	})
 
 	server := &http.Server{
 		Addr:         ":" + port,
@@ -86,10 +95,11 @@ func NewHTTPServer() (*HTTPServer, error) {
 	sugar.Infof("HTTP服务器初始化完成，端口: %s", port)
 
 	return &HTTPServer{
-		server:          server,
-		rustfsClient:    rustfsClient,
-		uploadHandler:   uploadHandler,
-		downloadHandler: downloadHandler,
+		server:           server,
+		rustfsClient:     rustfsClient,
+		uploadHandler:    uploadHandler,
+		downloadHandler:  downloadHandler,
+		readinessHandler: readinessHandler,
 	}, nil
 }
 

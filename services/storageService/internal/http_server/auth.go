@@ -25,6 +25,8 @@ func shouldBypassJWTAuth(path string) bool {
 	switch path {
 	case "/health":
 		return true
+	case "/ready":
+		return true
 	default:
 		return false
 	}

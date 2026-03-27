@@ -17,13 +17,19 @@ import (
 
 // DownloadHandler 处理文件下载请求
 type DownloadHandler struct {
-	rustfsClient *rustfs.RustFSClient
+	getFileMetadata         func(string) (*db.FileMetadata, error)
+	deleteFileMetadata      func(string) error
+	fileExistsInStorage     func(context.Context, string) (bool, error)
+	getPresignedDownloadURL func(context.Context, string, time.Duration) (string, error)
 }
 
 // NewDownloadHandler 创建新的下载处理器
 func NewDownloadHandler(rustfsClient *rustfs.RustFSClient) *DownloadHandler {
 	return &DownloadHandler{
-		rustfsClient: rustfsClient,
+		getFileMetadata:         db.GetFileMetadata,
+		deleteFileMetadata:      db.DeleteFileMetadata,
+		fileExistsInStorage:     rustfsClient.FileExists,
+		getPresignedDownloadURL: rustfsClient.GetPresignedDownloadURL,
 	}
 }
 
@@ -58,7 +64,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 	sugar.Debugf("收到下载请求: file_hash=%s", fileHash)
 
 	// 检查文件是否存在于数据库
-	fileMetadata, err := db.GetFileMetadata(fileHash)
+	fileMetadata, err := h.getFileMetadata(fileHash)
 	if err != nil {
 		sugar.Errorf("查询文件元数据失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -87,7 +93,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 
 	// 检查文件是否存在于RustFS
 	ctx := context.Background()
-	exists, err := h.rustfsClient.FileExists(ctx, fileHash)
+	exists, err := h.fileExistsInStorage(ctx, fileHash)
 	if err != nil {
 		sugar.Errorf("检查文件是否存在失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -96,7 +102,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 
 	if !exists {
 		// 文件在数据库中但不在存储中，删除数据库记录
-		_ = db.DeleteFileMetadata(fileHash)
+		_ = h.deleteFileMetadata(fileHash)
 		resp := &storage.DownloadFileResponse{
 			Exists:       false,
 			ErrorMessage: "File not found in storage",
@@ -108,7 +114,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 
 	// 生成预签名下载URL
 	expiresIn := 1 * time.Hour // URL有效期1小时
-	downloadURL, err := h.rustfsClient.GetPresignedDownloadURL(ctx, fileHash, expiresIn)
+	downloadURL, err := h.getPresignedDownloadURL(ctx, fileHash, expiresIn)
 	if err != nil {
 		sugar.Errorf("生成预签名下载URL失败: %v", err)
 		http.Error(w, "Failed to generate download URL", http.StatusInternalServerError)

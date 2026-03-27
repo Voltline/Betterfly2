@@ -17,13 +17,31 @@ import (
 
 // UploadHandler 处理文件上传请求
 type UploadHandler struct {
-	rustfsClient *rustfs.RustFSClient
+	fileExists                func(string) (bool, error)
+	upsertPendingFileMetadata func(string, int64, string) error
+	deleteFileMetadata        func(string) error
+	updateFileMetadata        func(string, int64, string) error
+	storeFileMetadata         func(string, int64, string) error
+	fileExistsInStorage       func(context.Context, string) (bool, error)
+	downloadFile              func(context.Context, string) (io.ReadCloser, error)
+	deleteFile                func(context.Context, string) error
+	getPresignedUploadURL     func(context.Context, string, time.Duration) (string, error)
+	verifyFileHash            func(io.Reader, string) (bool, error)
 }
 
 // NewUploadHandler 创建新的上传处理器
 func NewUploadHandler(rustfsClient *rustfs.RustFSClient) *UploadHandler {
 	return &UploadHandler{
-		rustfsClient: rustfsClient,
+		fileExists:                db.FileExists,
+		upsertPendingFileMetadata: db.UpsertPendingFileMetadata,
+		deleteFileMetadata:        db.DeleteFileMetadata,
+		updateFileMetadata:        db.UpdateFileMetadata,
+		storeFileMetadata:         db.StoreFileMetadata,
+		fileExistsInStorage:       rustfsClient.FileExists,
+		downloadFile:              rustfsClient.DownloadFile,
+		deleteFile:                rustfsClient.DeleteFile,
+		getPresignedUploadURL:     rustfsClient.GetPresignedUploadURL,
+		verifyFileHash:            rustfs.VerifyFileHash,
 	}
 }
 
@@ -68,7 +86,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	storagePath := rustfs.GetStoragePath(fileHash)
 
 	// 检查文件是否已存在
-	exists, err := db.FileExists(fileHash)
+	exists, err := h.fileExists(fileHash)
 	if err != nil {
 		sugar.Errorf("查询文件是否存在失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -86,7 +104,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 记录待验证状态，确保上传完成前后元数据状态可追踪。
-	if err := db.UpsertPendingFileMetadata(fileHash, fileSize, storagePath); err != nil {
+	if err := h.upsertPendingFileMetadata(fileHash, fileSize, storagePath); err != nil {
 		sugar.Errorf("记录待验证文件元数据失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -95,7 +113,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	// 生成预签名上传URL
 	ctx := context.Background()
 	expiresIn := 1 * time.Hour // URL有效期1小时
-	uploadURL, err := h.rustfsClient.GetPresignedUploadURL(ctx, fileHash, expiresIn)
+	uploadURL, err := h.getPresignedUploadURL(ctx, fileHash, expiresIn)
 	if err != nil {
 		sugar.Errorf("生成预签名上传URL失败: %v", err)
 		http.Error(w, "Failed to generate upload URL", http.StatusInternalServerError)
@@ -145,7 +163,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 
 	// 检查文件是否存在于RustFS
 	ctx := context.Background()
-	exists, err := h.rustfsClient.FileExists(ctx, fileHash)
+	exists, err := h.fileExistsInStorage(ctx, fileHash)
 	if err != nil {
 		sugar.Errorf("检查文件是否存在失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -153,7 +171,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !exists {
-		_ = db.DeleteFileMetadata(fileHash)
+		_ = h.deleteFileMetadata(fileHash)
 		resp := &storage.VerifyUploadResponse{
 			Success:      false,
 			ErrorMessage: "File not found in storage",
@@ -163,7 +181,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 下载文件并验证哈希
-	fileReader, err := h.rustfsClient.DownloadFile(ctx, fileHash)
+	fileReader, err := h.downloadFile(ctx, fileHash)
 	if err != nil {
 		sugar.Errorf("下载文件失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -179,7 +197,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	valid, err := rustfs.VerifyFileHash(bytes.NewReader(fileData), fileHash)
+	valid, err := h.verifyFileHash(bytes.NewReader(fileData), fileHash)
 	if err != nil {
 		sugar.Errorf("验证文件哈希失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -188,8 +206,8 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 
 	if !valid {
 		// 哈希不匹配，删除文件
-		_ = h.rustfsClient.DeleteFile(ctx, fileHash)
-		_ = db.DeleteFileMetadata(fileHash)
+		_ = h.deleteFile(ctx, fileHash)
+		_ = h.deleteFileMetadata(fileHash)
 		resp := &storage.VerifyUploadResponse{
 			Success:      false,
 			ErrorMessage: "File hash mismatch",
@@ -202,11 +220,11 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	// 保存文件元数据到数据库
 	fileSize := int64(len(fileData))
 	storagePath := rustfs.GetStoragePath(fileHash)
-	err = db.UpdateFileMetadata(fileHash, fileSize, storagePath)
+	err = h.updateFileMetadata(fileHash, fileSize, storagePath)
 	if err != nil {
 		sugar.Errorf("保存文件元数据失败: %v", err)
 		// 如果待验证记录不存在，回退为创建已验证记录，兼容旧流程。
-		if fallbackErr := db.StoreFileMetadata(fileHash, fileSize, storagePath); fallbackErr != nil {
+		if fallbackErr := h.storeFileMetadata(fileHash, fileSize, storagePath); fallbackErr != nil {
 			sugar.Errorf("回退创建文件元数据失败: %v", fallbackErr)
 		}
 	}

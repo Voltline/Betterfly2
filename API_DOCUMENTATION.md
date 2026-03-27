@@ -2,8 +2,8 @@
 
 本文档描述了 Betterfly2 存储服务的所有 API 接口。
 
-**文档版本**: 1.0  
-**最后更新**: 2025-12-06
+**文档版本**: 1.1  
+**最后更新**: 2026-03-27
 
 ## 目录
 
@@ -19,7 +19,7 @@
 
 **基础URL**: `http://localhost:8081/storage_service` (开发环境)
 
-**认证方式**: 所有接口都需要在请求头中携带 JWT Token 和用户ID
+**认证方式**: 文件控制面接口都需要在请求头中携带 JWT Token 和用户ID；`/health` 与 `/ready` 用于探针检查，可匿名访问
 
 **请求头设置**:
 ```
@@ -242,6 +242,31 @@ X-User-ID: <USER_ID>
 **响应**:
 ```
 OK
+```
+
+---
+
+### 5. 就绪检查
+
+**接口**: `GET /ready`
+
+**描述**: 检查文件控制面的关键依赖是否可用。当前会检查 PostgreSQL 连接和 RustFS bucket。
+
+**认证要求**: 无
+
+**成功响应** (JSON):
+```json
+{
+  "ready": true
+}
+```
+
+**失败响应** (JSON):
+```json
+{
+  "ready": false,
+  "error_message": "database not ready: ..."
+}
 ```
 
 ---

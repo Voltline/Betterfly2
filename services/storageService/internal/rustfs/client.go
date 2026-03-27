@@ -231,6 +231,17 @@ func (c *RustFSClient) GetPresignedDownloadURL(ctx context.Context, fileHash str
 	return presignResult.URL, nil
 }
 
+// HealthCheck 检查对象存储是否可用
+func (c *RustFSClient) HealthCheck(ctx context.Context) error {
+	_, err := c.client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(c.bucket),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to check bucket health: %v", err)
+	}
+	return nil
+}
+
 // VerifyFileHash 验证文件哈希值
 func VerifyFileHash(reader io.Reader, expectedHash string) (bool, error) {
 	hasher := sha512.New()

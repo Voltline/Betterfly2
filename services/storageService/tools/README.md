@@ -117,3 +117,14 @@ go run calculate_file_hash.go -file your_file.txt
    - Headers: 同上
    - Body: `{"file_hash": "<文件哈希>"}`
 
+5. **通过普通消息发送文件消息**:
+   - `msg_type = "file"`
+   - `msg = file_hash`
+   - `real_file_name = 原始文件名`
+
+## 探针接口
+
+- 存活检查: `GET http://localhost:8081/health`
+- 就绪检查: `GET http://localhost:8081/ready`
+
+`/ready` 会检查 PostgreSQL 和 RustFS 是否可用，适合容器探针或反向代理健康检查。

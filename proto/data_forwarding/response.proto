@@ -2,8 +2,6 @@ syntax = "proto3";
 package df_interface;
 option go_package = "Betterfly2/proto/data_forwarding";
 
-import "data_forwarding/common.proto";
-
 enum LoginResult {
   LOGIN_OK = 0;
   ACCOUNT_NOT_EXIST = 1;
@@ -36,30 +34,6 @@ message Refused { // 就是空的
 
 message Server {
   string server_msg = 1;
-}
-
-message _FileUploadResponse {
-  oneof result {
-    string upload_url = 1;
-    bool already_exists = 2;
-  }
-}
-
-message _FileDownloadResponse {
-  oneof result {
-    string download_url = 1;
-    bool not_found = 2;
-  }
-}
-
-message FileResponse {
-  string file_full_name = 1; // file_hash + file_suffix
-  FileOperation operation = 2;
-
-  oneof result {
-    _FileUploadResponse upload = 3;
-    _FileDownloadResponse download = 4;
-  }
 }
 
 message Warn {

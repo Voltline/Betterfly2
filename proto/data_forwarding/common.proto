@@ -2,11 +2,6 @@ syntax = "proto3";
 package df_interface;
 option go_package = "Betterfly2/proto/data_forwarding";
 
-enum FileOperation {
-  UPLOAD = 0;
-  DOWNLOAD = 1;
-}
-
 message Post {
   int64 from_id = 1;
   bool is_group = 2;

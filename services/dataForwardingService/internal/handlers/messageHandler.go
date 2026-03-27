@@ -50,8 +50,6 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 		sugar.Debugf("收到 InsertGroup 消息")
 	case *pb.RequestMessage_InsertGroupUser:
 		sugar.Debugf("收到 InsertGroupUser 消息")
-	case *pb.RequestMessage_FileRequest:
-		sugar.Debugf("收到 FileRequest 消息")
 	case *pb.RequestMessage_UpdateAvatar:
 		sugar.Debugf("收到 UpdateAvatar 消息")
 	case *pb.RequestMessage_UpdateUserName:

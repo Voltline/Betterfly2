@@ -8,6 +8,8 @@ import "data_forwarding/response.proto";
 
 message RequestMessage {
   string jwt = 1;
+  reserved 11;
+  reserved "file_request";
   oneof payload {
     LoginReq login = 2;
     SignupReq signup = 3;
@@ -18,7 +20,6 @@ message RequestMessage {
     QueryGroup query_group = 8;
     InsertGroup insert_group = 9;
     InsertGroupUser insert_group_user = 10;
-    FileRequest file_request = 11;
     UpdateAvatar update_avatar = 12;
     QueryMessage query_message = 13;
     QuerySyncMessages query_sync_messages = 14;
@@ -28,12 +29,13 @@ message RequestMessage {
 }
 
 message ResponseMessage {
+  reserved 5;
+  reserved "file_response";
   oneof payload {
     LoginRsp login = 1;
     SignupRsp signup = 2;
     Refused refused = 3;
     Server server = 4;
-    FileResponse file_response = 5;
     Post post = 6;
     Warn warn = 7;
     UserInfo user_info = 8;

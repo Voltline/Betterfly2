@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // StoreFileMetadata 存储文件元数据
@@ -14,11 +15,35 @@ func StoreFileMetadata(fileHash string, fileSize int64, storagePath string) erro
 		FileHash:    fileHash,
 		FileSize:    fileSize,
 		StoragePath: storagePath,
+		IsVerified:  true,
 		CreatedAt:   nowTime,
 		UpdatedAt:   nowTime,
 	}
 	err := DB().Create(fileMetadata).Error
 	return err
+}
+
+// UpsertPendingFileMetadata 记录待验证文件元数据
+func UpsertPendingFileMetadata(fileHash string, fileSize int64, storagePath string) error {
+	nowTime := utils.NowTime()
+	fileMetadata := &FileMetadata{
+		FileHash:    fileHash,
+		FileSize:    fileSize,
+		StoragePath: storagePath,
+		IsVerified:  false,
+		CreatedAt:   nowTime,
+		UpdatedAt:   nowTime,
+	}
+
+	return DB().Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "file_hash"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"file_size":    fileSize,
+			"storage_path": storagePath,
+			"is_verified":  false,
+			"updated_at":   nowTime,
+		}),
+	}).Create(fileMetadata).Error
 }
 
 // GetFileMetadata 根据文件哈希获取文件元数据
@@ -37,7 +62,7 @@ func GetFileMetadata(fileHash string) (*FileMetadata, error) {
 // FileExists 检查文件是否存在
 func FileExists(fileHash string) (bool, error) {
 	var count int64
-	err := DB().Model(&FileMetadata{}).Where("file_hash = ?", fileHash).Count(&count).Error
+	err := DB().Model(&FileMetadata{}).Where("file_hash = ? AND is_verified = ?", fileHash, true).Count(&count).Error
 	if err != nil {
 		return false, err
 	}
@@ -52,6 +77,7 @@ func UpdateFileMetadata(fileHash string, fileSize int64, storagePath string) err
 		Updates(map[string]interface{}{
 			"file_size":    fileSize,
 			"storage_path": storagePath,
+			"is_verified":  true,
 			"updated_at":   nowTime,
 		}).Error
 }

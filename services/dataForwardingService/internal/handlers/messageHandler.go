@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 )
@@ -235,6 +236,9 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 		return errors.New("post消息为空")
 	}
 	payload.FromId = fromID
+	if err := validatePostPayload(payload); err != nil {
+		return err
+	}
 
 	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 	targetTopic := redisClient.GetContainerByConnection(targetUserID)
@@ -306,6 +310,9 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 	payload := message.GetPost()
 	logger.Sugar().Debugf("InplaceHandlePostMessage-payload: %s", payload.String())
+	if err := validatePostPayload(payload); err != nil {
+		return err
+	}
 
 	// 构建响应消息
 	rsp := &pb.ResponseMessage{
@@ -335,6 +342,32 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 		return err
 	}
 	logger.Sugar().Debugf("%d 成功向 %d 发送消息", payload.GetFromId(), payload.GetToId())
+
+	return nil
+}
+
+func validatePostPayload(payload *pb.Post) error {
+	if payload == nil {
+		return errors.New("post消息为空")
+	}
+
+	msgType := strings.TrimSpace(payload.GetMsgType())
+	msg := strings.TrimSpace(payload.GetMsg())
+	realFileName := strings.TrimSpace(payload.GetRealFileName())
+
+	if msgType == "file" {
+		if msg == "" {
+			return errors.New("文件消息缺少file_hash")
+		}
+		if realFileName == "" {
+			return errors.New("文件消息缺少real_file_name")
+		}
+		return nil
+	}
+
+	if realFileName != "" {
+		payload.RealFileName = ""
+	}
 
 	return nil
 }

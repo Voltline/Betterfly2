@@ -512,7 +512,7 @@ func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, quer
 		return nil, err
 	}
 
-	exists := fileMetadata != nil
+	exists := fileMetadata != nil && fileMetadata.IsVerified
 	var fileSize int64
 	var storagePath string
 	if exists {

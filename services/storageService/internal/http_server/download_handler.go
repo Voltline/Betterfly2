@@ -75,6 +75,15 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 		sugar.Debugf("文件不存在: file_hash=%s", fileHash)
 		return
 	}
+	if !fileMetadata.IsVerified {
+		resp := &storage.DownloadFileResponse{
+			Exists:       false,
+			ErrorMessage: "File not verified",
+		}
+		h.sendResponse(w, resp)
+		sugar.Debugf("文件尚未完成校验: file_hash=%s", fileHash)
+		return
+	}
 
 	// 检查文件是否存在于RustFS
 	ctx := context.Background()

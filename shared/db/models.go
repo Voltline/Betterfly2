@@ -36,6 +36,7 @@ type FileMetadata struct {
 	FileHash    string `gorm:"primaryKey;type:varchar(128);comment:文件SHA512哈希值，作为主键"`
 	FileSize    int64  `gorm:"comment:文件大小（字节）"`
 	StoragePath string `gorm:"type:varchar(512);comment:文件在对象存储中的路径"`
+	IsVerified  bool   `gorm:"type:bool;default:false;comment:文件是否已经完成哈希校验并可对外提供下载"`
 	CreatedAt   string `gorm:"type:varchar(25);comment:文件创建时间"`
 	UpdatedAt   string `gorm:"type:varchar(25);comment:文件更新时间"`
 }

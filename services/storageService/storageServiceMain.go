@@ -214,10 +214,3 @@ func startKafkaConsumer(ctx context.Context) error {
 		}
 	}
 }
-
-// waitForShutdown 等待终止信号
-func waitForShutdown() {
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	<-sigterm
-}

@@ -65,6 +65,8 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 
 	sugar.Debugf("收到上传请求: file_hash=%s, file_size=%d", fileHash, fileSize)
 
+	storagePath := rustfs.GetStoragePath(fileHash)
+
 	// 检查文件是否已存在
 	exists, err := db.FileExists(fileHash)
 	if err != nil {
@@ -80,6 +82,13 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 		}
 		h.sendResponse(w, resp)
 		sugar.Debugf("文件已存在: file_hash=%s", fileHash)
+		return
+	}
+
+	// 记录待验证状态，确保上传完成前后元数据状态可追踪。
+	if err := db.UpsertPendingFileMetadata(fileHash, fileSize, storagePath); err != nil {
+		sugar.Errorf("记录待验证文件元数据失败: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -144,6 +153,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	if !exists {
+		_ = db.DeleteFileMetadata(fileHash)
 		resp := &storage.VerifyUploadResponse{
 			Success:      false,
 			ErrorMessage: "File not found in storage",
@@ -179,6 +189,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	if !valid {
 		// 哈希不匹配，删除文件
 		_ = h.rustfsClient.DeleteFile(ctx, fileHash)
+		_ = db.DeleteFileMetadata(fileHash)
 		resp := &storage.VerifyUploadResponse{
 			Success:      false,
 			ErrorMessage: "File hash mismatch",
@@ -189,12 +200,15 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 保存文件元数据到数据库
-	storagePath := rustfs.GetStoragePath(fileHash)
 	fileSize := int64(len(fileData))
-	err = db.StoreFileMetadata(fileHash, fileSize, storagePath)
+	storagePath := rustfs.GetStoragePath(fileHash)
+	err = db.UpdateFileMetadata(fileHash, fileSize, storagePath)
 	if err != nil {
 		sugar.Errorf("保存文件元数据失败: %v", err)
-		// 即使保存失败，也返回成功，因为文件已经上传
+		// 如果待验证记录不存在，回退为创建已验证记录，兼容旧流程。
+		if fallbackErr := db.StoreFileMetadata(fileHash, fileSize, storagePath); fallbackErr != nil {
+			sugar.Errorf("回退创建文件元数据失败: %v", fallbackErr)
+		}
 	}
 
 	resp := &storage.VerifyUploadResponse{

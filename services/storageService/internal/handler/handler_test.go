@@ -94,11 +94,12 @@ func TestHandleStoreNewMessage(t *testing.T) {
 		TargetUserId:   1001,
 		Payload: &storage.RequestMessage_StoreNewMessage{
 			StoreNewMessage: &storage.StoreNewMessage{
-				FromUserId:  1000,
-				ToUserId:    1001,
-				Content:     "Hello, World!",
-				MessageType: "text",
-				IsGroup:     false,
+				FromUserId:   1000,
+				ToUserId:     1001,
+				Content:      "Hello, World!",
+				MessageType:  "text",
+				IsGroup:      false,
+				RealFileName: "",
 			},
 		},
 	}
@@ -309,13 +310,14 @@ func TestBuildMessageResponse(t *testing.T) {
 
 	// 创建测试消息
 	message := &db.Message{
-		MessageID:   12345,
-		FromUserID:  1000,
-		ToUserID:    1001,
-		Content:     "Test message",
-		Timestamp:   "2024-01-01 12:00:00",
-		MessageType: "text",
-		IsGroup:     false,
+		MessageID:    12345,
+		FromUserID:   1000,
+		ToUserID:     1001,
+		Content:      "Test message",
+		Timestamp:    "2024-01-01 12:00:00",
+		MessageType:  "text",
+		RealFileName: "",
+		IsGroup:      false,
 	}
 
 	// 构建响应
@@ -334,6 +336,31 @@ func TestBuildMessageResponse(t *testing.T) {
 	assert.Equal(t, "2024-01-01 12:00:00", msgRsp.Timestamp)
 	assert.Equal(t, "text", msgRsp.MsgType)
 	assert.Equal(t, false, msgRsp.IsGroup)
+}
+
+func TestBuildMessageResponse_PreservesRealFileName(t *testing.T) {
+	handler := &StorageHandler{}
+	req := &storage.RequestMessage{
+		FromKafkaTopic: "test-topic",
+		TargetUserId:   1001,
+	}
+	message := &db.Message{
+		MessageID:    12346,
+		FromUserID:   1000,
+		ToUserID:     1001,
+		Content:      "sha512-hash",
+		Timestamp:    "2024-01-01 12:00:01",
+		MessageType:  "file",
+		RealFileName: "report.pdf",
+		IsGroup:      false,
+	}
+
+	resp := handler.buildMessageResponse(req, message)
+
+	msgRsp := resp.GetMsgRsp()
+	assert.NotNil(t, msgRsp)
+	assert.Equal(t, "file", msgRsp.GetMsgType())
+	assert.Equal(t, "report.pdf", msgRsp.GetRealFileName())
 }
 
 func TestHandleQueryFileExists_UsesCachedMetadata(t *testing.T) {

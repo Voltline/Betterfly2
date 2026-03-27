@@ -118,7 +118,14 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 
 	// 保存到数据库
 	start := time.Now()
-	messageID, err := db.StoreNewMessage(msg.FromUserId, msg.ToUserId, msg.Content, msg.MessageType, msg.IsGroup)
+	messageID, err := db.StoreNewMessage(
+		msg.FromUserId,
+		msg.ToUserId,
+		msg.Content,
+		msg.MessageType,
+		msg.GetRealFileName(),
+		msg.IsGroup,
+	)
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
 		sugar.Errorf("保存消息到数据库失败: %v", err)
@@ -223,12 +230,13 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 	var msgResponses []*storage.MessageRsp
 	for _, msg := range messages {
 		msgResponses = append(msgResponses, &storage.MessageRsp{
-			FromUserId: msg.FromUserID,
-			ToUserId:   msg.ToUserID,
-			Content:    msg.Content,
-			Timestamp:  msg.Timestamp,
-			MsgType:    msg.MessageType,
-			IsGroup:    msg.IsGroup,
+			FromUserId:   msg.FromUserID,
+			ToUserId:     msg.ToUserID,
+			Content:      msg.Content,
+			Timestamp:    msg.Timestamp,
+			MsgType:      msg.MessageType,
+			IsGroup:      msg.IsGroup,
+			RealFileName: msg.RealFileName,
 		})
 	}
 
@@ -341,12 +349,13 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_MsgRsp{
 			MsgRsp: &storage.MessageRsp{
-				FromUserId: msg.FromUserID,
-				ToUserId:   msg.ToUserID,
-				Content:    msg.Content,
-				Timestamp:  msg.Timestamp,
-				MsgType:    msg.MessageType,
-				IsGroup:    msg.IsGroup,
+				FromUserId:   msg.FromUserID,
+				ToUserId:     msg.ToUserID,
+				Content:      msg.Content,
+				Timestamp:    msg.Timestamp,
+				MsgType:      msg.MessageType,
+				IsGroup:      msg.IsGroup,
+				RealFileName: msg.RealFileName,
 			},
 		},
 	}

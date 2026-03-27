@@ -181,11 +181,12 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 		TargetUserId:   payload.GetToId(),
 		Payload: &storage.RequestMessage_StoreNewMessage{
 			StoreNewMessage: &storage.StoreNewMessage{
-				FromUserId:  payload.GetFromId(),
-				ToUserId:    payload.GetToId(),
-				Content:     payload.GetMsg(),
-				MessageType: payload.GetMsgType(),
-				IsGroup:     payload.GetIsGroup(),
+				FromUserId:   payload.GetFromId(),
+				ToUserId:     payload.GetToId(),
+				Content:      payload.GetMsg(),
+				MessageType:  payload.GetMsgType(),
+				IsGroup:      payload.GetIsGroup(),
+				RealFileName: payload.GetRealFileName(),
 			},
 		},
 	}

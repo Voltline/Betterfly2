@@ -243,12 +243,13 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_MessageRsp{
 				MessageRsp: &pb.MessageRsp{
-					FromUserId: msg.GetFromUserId(),
-					ToUserId:   msg.GetToUserId(),
-					Content:    msg.GetContent(),
-					Timestamp:  msg.GetTimestamp(),
-					MsgType:    msg.GetMsgType(),
-					IsGroup:    msg.GetIsGroup(),
+					FromUserId:   msg.GetFromUserId(),
+					ToUserId:     msg.GetToUserId(),
+					Content:      msg.GetContent(),
+					Timestamp:    msg.GetTimestamp(),
+					MsgType:      msg.GetMsgType(),
+					IsGroup:      msg.GetIsGroup(),
+					RealFileName: msg.GetRealFileName(),
 				},
 			},
 		}
@@ -262,12 +263,13 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		var dfMsgs []*pb.MessageRsp
 		for _, msg := range syncMsgs.GetMsgs() {
 			dfMsgs = append(dfMsgs, &pb.MessageRsp{
-				FromUserId: msg.GetFromUserId(),
-				ToUserId:   msg.GetToUserId(),
-				Content:    msg.GetContent(),
-				Timestamp:  msg.GetTimestamp(),
-				MsgType:    msg.GetMsgType(),
-				IsGroup:    msg.GetIsGroup(),
+				FromUserId:   msg.GetFromUserId(),
+				ToUserId:     msg.GetToUserId(),
+				Content:      msg.GetContent(),
+				Timestamp:    msg.GetTimestamp(),
+				MsgType:      msg.GetMsgType(),
+				IsGroup:      msg.GetIsGroup(),
+				RealFileName: msg.GetRealFileName(),
 			})
 		}
 

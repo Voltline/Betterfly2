@@ -293,6 +293,7 @@ message StoreNewMessage {
   string content = 3;
   string message_type = 4; // text, image, gif, file
   bool is_group = 5;
+  string real_file_name = 6; // 文件消息对应的原始文件名，非文件消息为空
 }
 ```
 
@@ -326,6 +327,7 @@ message MessageRsp {
   string timestamp = 4;
   string msg_type = 5;
   bool is_group = 6;
+  string real_file_name = 7;
 }
 ```
 

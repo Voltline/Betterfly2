@@ -7,14 +7,15 @@ import (
 )
 
 // StoreNewMessage 存储一条新消息，返回消息ID
-func StoreNewMessage(fromUserID, toUserID int64, content, messageType string, isGroup bool) (int64, error) {
+func StoreNewMessage(fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool) (int64, error) {
 	message := &Message{
-		FromUserID:  fromUserID,
-		ToUserID:    toUserID,
-		Content:     content,
-		Timestamp:   utils.NowTime(),
-		MessageType: messageType,
-		IsGroup:     isGroup,
+		FromUserID:   fromUserID,
+		ToUserID:     toUserID,
+		Content:      content,
+		Timestamp:    utils.NowTime(),
+		MessageType:  messageType,
+		RealFileName: realFileName,
+		IsGroup:      isGroup,
 	}
 	err := DB().Create(message).Error
 	if err != nil {

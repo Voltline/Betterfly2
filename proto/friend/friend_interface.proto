@@ -1,0 +1,163 @@
+syntax = "proto3";
+package friend_interface;
+option go_package = "Betterfly2/proto/friend";
+
+message AddDirectFriend {
+  int64 user_id = 1;
+  int64 friend_id = 2;
+}
+
+message QueryFriendList {
+  int64 user_id = 1;
+}
+
+message RemoveDirectFriend {
+  int64 user_id = 1;
+  int64 friend_id = 2;
+}
+
+message UpdateFriendAlias {
+  int64 user_id = 1;
+  int64 friend_id = 2;
+  string alias = 3;
+}
+
+message UpdateFriendNotify {
+  int64 user_id = 1;
+  int64 friend_id = 2;
+  bool is_notify = 3;
+}
+
+message CreateGroup {
+  int64 owner_user_id = 1;
+  int64 group_id = 2;
+  string group_name = 3;
+}
+
+message QueryGroup {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  bool client_need_save = 3;
+}
+
+message AddGroupMember {
+  int64 user_id = 1;
+  int64 group_id = 2;
+}
+
+message QueryGroupMembers {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+}
+
+message RemoveGroupMember {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+}
+
+message UpdateGroupAvatar {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  string avatar_hash = 3;
+}
+
+message FriendRelationRsp {
+  int64 user_id = 1;
+  int64 friend_id = 2;
+  bool is_friend = 3;
+  string update_time = 4;
+}
+
+message FriendContact {
+  int64 user_id = 1;
+  string account = 2;
+  string name = 3;
+  string avatar = 4;
+  string alias = 5;
+  bool is_notify = 6;
+  string update_time = 7;
+}
+
+message FriendListRsp {
+  repeated FriendContact contacts = 1;
+}
+
+message FriendOperationRsp {
+  string operation = 1;
+  int64 user_id = 2;
+  int64 friend_id = 3;
+  string update_time = 4;
+}
+
+message GroupInfoRsp {
+  int64 group_id = 1;
+  string group_name = 2;
+  string avatar = 3;
+  int64 owner_user_id = 4;
+  string update_time = 5;
+  bool client_need_save = 6;
+}
+
+message GroupOperationRsp {
+  string operation = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+  string update_time = 4;
+}
+
+message GroupMemberContact {
+  int64 user_id = 1;
+  string account = 2;
+  string name = 3;
+  string avatar = 4;
+  string role = 5;
+  string update_time = 6;
+}
+
+message GroupMemberListRsp {
+  int64 group_id = 1;
+  repeated GroupMemberContact members = 2;
+}
+
+enum FriendResult {
+  FRIEND_OK = 0;
+  RECORD_NOT_EXIST = 1;
+  ALREADY_FRIEND = 2;
+  INVALID_ARGUMENT = 3;
+  ALREADY_EXIST = 4;
+  SERVICE_ERROR = 10;
+}
+
+message RequestMessage {
+  string from_kafka_topic = 1;
+  int64 target_user_id = 2;
+
+  oneof payload {
+    AddDirectFriend add_direct_friend = 3;
+    QueryFriendList query_friend_list = 4;
+    RemoveDirectFriend remove_direct_friend = 5;
+    UpdateFriendAlias update_friend_alias = 6;
+    UpdateFriendNotify update_friend_notify = 7;
+    CreateGroup create_group = 8;
+    QueryGroup query_group = 9;
+    AddGroupMember add_group_member = 10;
+    UpdateGroupAvatar update_group_avatar = 11;
+    QueryGroupMembers query_group_members = 12;
+    RemoveGroupMember remove_group_member = 13;
+  }
+}
+
+message ResponseMessage {
+  FriendResult result = 1;
+  int64 target_user_id = 2;
+
+  oneof payload {
+    FriendRelationRsp friend_relation_rsp = 3;
+    FriendListRsp friend_list_rsp = 4;
+    FriendOperationRsp friend_operation_rsp = 5;
+    GroupInfoRsp group_info_rsp = 6;
+    GroupOperationRsp group_operation_rsp = 7;
+    GroupMemberListRsp group_member_list_rsp = 8;
+  }
+}

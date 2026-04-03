@@ -26,6 +26,27 @@ message InsertContact {
   int64 to_insert_user_id = 2;
 }
 
+message QueryContacts {
+  int64 from_user_id = 1;
+}
+
+message DeleteContact {
+  int64 from_user_id = 1;
+  int64 to_delete_user_id = 2;
+}
+
+message UpdateContactAlias {
+  int64 from_user_id = 1;
+  int64 target_user_id = 2;
+  string new_alias = 3;
+}
+
+message UpdateContactNotify {
+  int64 from_user_id = 1;
+  int64 target_user_id = 2;
+  bool is_notify = 3;
+}
+
 message QueryGroup {
   int64 from_user_id = 1;
   int64 to_query_group_id = 2;
@@ -39,6 +60,16 @@ message InsertGroup {
 }
 
 message InsertGroupUser { // 又名：加入群组
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+}
+
+message QueryGroupMembers {
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+}
+
+message DeleteGroupUser { // 又名：退出群组
   int64 from_user_id = 1;
   int64 target_group_id = 2;
 }

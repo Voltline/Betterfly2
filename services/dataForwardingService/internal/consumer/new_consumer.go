@@ -3,6 +3,7 @@ package consumer
 import (
 	pb "Betterfly2/proto/data_forwarding"
 	envelope "Betterfly2/proto/envelope"
+	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/handlers"
@@ -93,6 +94,17 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 				}
 				session.MarkMessage(msg, "")
 				continue
+			case envelope.MessageType_FRIEND_RESPONSE:
+				friendResp := &friend.ResponseMessage{}
+				if err := proto.Unmarshal(env.Payload, friendResp); err != nil {
+					sugar.Errorf("解析Envelope中的FRIEND_RESPONSE payload失败: %v", err)
+					continue
+				}
+				if err := h.handleFriendResponse(friendResp); err != nil {
+					sugar.Errorf("处理friend响应失败: %v", err)
+				}
+				session.MarkMessage(msg, "")
+				continue
 			case envelope.MessageType_DF_REQUEST:
 				requestMsg, err := handlers.HandleRequestData(env.Payload)
 				if err != nil {
@@ -115,8 +127,10 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 				sugar.Warnf("收到STORAGE_REQUEST类型Envelope，但data forwarding服务不处理，忽略")
 				continue
 			case envelope.MessageType_DF_RESPONSE:
-				// DF_RESPONSE可能由其他服务处理
-				sugar.Warnf("收到DF_RESPONSE类型Envelope，但当前消费者不处理，忽略")
+				if err := h.handleDFResponse(env.Payload); err != nil {
+					sugar.Errorf("处理DF响应失败: %v", err)
+				}
+				session.MarkMessage(msg, "")
 				continue
 			case envelope.MessageType_TEXT:
 				// 文本消息，可能用于降级方案，但已经在前面的正则匹配中处理
@@ -163,6 +177,338 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 		}
 
 		session.MarkMessage(msg, "")
+	}
+	return nil
+}
+
+func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.ResponseMessage) error {
+	if h.wsHandler == nil {
+		return fmt.Errorf("WebSocket处理器未设置，无法转发好友响应")
+	}
+
+	var dfResp *pb.ResponseMessage
+	switch friendResp.Result {
+	case friend.FriendResult_FRIEND_OK:
+		switch payload := friendResp.Payload.(type) {
+		case *friend.ResponseMessage_FriendListRsp:
+			dfResp = buildContactListResponse(payload.FriendListRsp)
+		case *friend.ResponseMessage_FriendOperationRsp:
+			dfResp = buildFriendOperationResponse(payload.FriendOperationRsp, "操作成功")
+		case *friend.ResponseMessage_GroupInfoRsp:
+			dfResp = buildGroupInfoResponse(payload.GroupInfoRsp)
+		case *friend.ResponseMessage_GroupOperationRsp:
+			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "操作成功")
+		case *friend.ResponseMessage_GroupMemberListRsp:
+			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
+		default:
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Server{
+					Server: &pb.Server{
+						ServerMsg: "添加好友成功",
+					},
+				},
+			}
+		}
+	case friend.FriendResult_ALREADY_FRIEND:
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_Server{
+				Server: &pb.Server{
+					ServerMsg: "你们已经是好友了",
+				},
+			},
+		}
+	case friend.FriendResult_RECORD_NOT_EXIST:
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendOperationRsp); ok {
+			dfResp = buildFriendOperationResponse(payload.FriendOperationRsp, "记录不存在")
+		} else if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupOperationRsp); ok {
+			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "记录不存在")
+		} else if _, ok := friendResp.Payload.(*friend.ResponseMessage_GroupInfoRsp); ok {
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "群组不存在或你不在该群中",
+					},
+				},
+			}
+		} else if _, ok := friendResp.Payload.(*friend.ResponseMessage_GroupMemberListRsp); ok {
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "群组不存在或你不在该群中",
+					},
+				},
+			}
+		} else {
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "目标用户不存在",
+					},
+				},
+			}
+		}
+	case friend.FriendResult_INVALID_ARGUMENT:
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendOperationRsp); ok {
+			dfResp = buildFriendOperationResponse(payload.FriendOperationRsp, "好友请求不合法")
+		} else if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupOperationRsp); ok {
+			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "群组请求不合法")
+		} else {
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "添加好友请求不合法",
+					},
+				},
+			}
+		}
+	case friend.FriendResult_ALREADY_EXIST:
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupOperationRsp); ok {
+			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "已存在")
+		} else {
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{
+						WarningMessage: "目标已存在",
+					},
+				},
+			}
+		}
+	default:
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendListRsp); ok {
+			dfResp = buildContactListResponse(payload.FriendListRsp)
+			break
+		}
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendOperationRsp); ok {
+			dfResp = buildFriendOperationResponse(payload.FriendOperationRsp, "好友服务处理失败")
+			break
+		}
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupInfoRsp); ok {
+			dfResp = buildGroupInfoResponse(payload.GroupInfoRsp)
+			break
+		}
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupMemberListRsp); ok {
+			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
+			break
+		}
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupOperationRsp); ok {
+			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "群组服务处理失败")
+			break
+		}
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_Warn{
+				Warn: &pb.Warn{
+					WarningMessage: "好友服务处理失败",
+				},
+			},
+		}
+	}
+
+	respBytes, err := proto.Marshal(dfResp)
+	if err != nil {
+		return fmt.Errorf("序列化好友响应消息失败: %v", err)
+	}
+
+	targetUserID := strconv.FormatInt(friendResp.TargetUserId, 10)
+	if err := h.wsHandler.SendMessage(targetUserID, respBytes); err != nil {
+		return fmt.Errorf("发送好友响应给用户 %s 失败: %v", targetUserID, err)
+	}
+	return nil
+}
+
+func buildGroupInfoResponse(groupInfo *friend.GroupInfoRsp) *pb.ResponseMessage {
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_GroupInfo{
+			GroupInfo: &pb.GroupInfo{
+				ClientNeedSave: groupInfo.GetClientNeedSave(),
+				QueryGroupId:   groupInfo.GetGroupId(),
+				QueryGroupName: groupInfo.GetGroupName(),
+				Avatar:         groupInfo.GetAvatar(),
+			},
+		},
+	}
+}
+
+func buildGroupMembersResponse(groupMembers *friend.GroupMemberListRsp) *pb.ResponseMessage {
+	var members []*pb.GroupMemberInfo
+	for _, member := range groupMembers.GetMembers() {
+		members = append(members, &pb.GroupMemberInfo{
+			UserId:     member.GetUserId(),
+			Account:    member.GetAccount(),
+			Name:       member.GetName(),
+			Avatar:     member.GetAvatar(),
+			Role:       member.GetRole(),
+			UpdateTime: member.GetUpdateTime(),
+		})
+	}
+
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_GroupMembersRsp{
+			GroupMembersRsp: &pb.GroupMembersRsp{
+				GroupId: groupMembers.GetGroupId(),
+				Members: members,
+			},
+		},
+	}
+}
+
+func buildContactListResponse(friendList *friend.FriendListRsp) *pb.ResponseMessage {
+	var contacts []*pb.ContactInfo
+	for _, contact := range friendList.GetContacts() {
+		contacts = append(contacts, &pb.ContactInfo{
+			UserId:     contact.GetUserId(),
+			Account:    contact.GetAccount(),
+			Name:       contact.GetName(),
+			Avatar:     contact.GetAvatar(),
+			Alias:      contact.GetAlias(),
+			IsNotify:   contact.GetIsNotify(),
+			UpdateTime: contact.GetUpdateTime(),
+		})
+	}
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_ContactListRsp{
+			ContactListRsp: &pb.ContactListRsp{
+				Contacts: contacts,
+			},
+		},
+	}
+}
+
+func buildFriendOperationResponse(operation *friend.FriendOperationRsp, fallback string) *pb.ResponseMessage {
+	message := fallback
+
+	switch operation.GetOperation() {
+	case "remove_direct_friend":
+		if fallback == "操作成功" {
+			message = "删除好友成功"
+		} else if fallback == "记录不存在" {
+			message = "好友关系不存在"
+		} else if fallback == "好友请求不合法" {
+			message = "删除好友请求不合法"
+		}
+	case "update_friend_alias":
+		if fallback == "操作成功" {
+			message = "好友备注更新成功"
+		} else if fallback == "记录不存在" {
+			message = "好友关系不存在，无法更新备注"
+		} else if fallback == "好友请求不合法" {
+			message = "好友备注更新请求不合法"
+		}
+	case "update_friend_notify":
+		if fallback == "操作成功" {
+			message = "好友通知设置更新成功"
+		} else if fallback == "记录不存在" {
+			message = "好友关系不存在，无法更新通知设置"
+		} else if fallback == "好友请求不合法" {
+			message = "好友通知设置请求不合法"
+		}
+	}
+
+	if fallback == "操作成功" {
+		return &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_Server{
+				Server: &pb.Server{
+					ServerMsg: message,
+				},
+			},
+		}
+	}
+
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_Warn{
+			Warn: &pb.Warn{
+				WarningMessage: message,
+			},
+		},
+	}
+}
+
+func buildGroupOperationResponse(operation *friend.GroupOperationRsp, fallback string) *pb.ResponseMessage {
+	message := fallback
+
+	switch operation.GetOperation() {
+	case "create_group":
+		if fallback == "操作成功" {
+			message = "创建群组成功"
+		} else if fallback == "记录不存在" {
+			message = "创建群组失败，用户不存在"
+		} else if fallback == "群组请求不合法" {
+			message = "创建群组请求不合法"
+		} else if fallback == "已存在" {
+			message = "群组已存在"
+		}
+	case "add_group_member":
+		if fallback == "操作成功" {
+			message = "加入群组成功"
+		} else if fallback == "记录不存在" {
+			message = "群组不存在或用户不存在"
+		} else if fallback == "群组请求不合法" {
+			message = "加入群组请求不合法"
+		} else if fallback == "已存在" {
+			message = "你已经在该群中了"
+		}
+	case "update_group_avatar":
+		if fallback == "操作成功" {
+			message = "群头像更新成功"
+		} else if fallback == "记录不存在" {
+			message = "群组不存在或你不在该群中"
+		} else if fallback == "群组请求不合法" {
+			message = "群头像更新请求不合法"
+		}
+	case "remove_group_member":
+		if fallback == "操作成功" {
+			message = "退出群组成功"
+		} else if fallback == "记录不存在" {
+			message = "群组不存在或你不在该群中"
+		} else if fallback == "群组请求不合法" {
+			message = "退出群组请求不合法"
+		}
+	}
+
+	if fallback == "操作成功" {
+		return &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_Server{
+				Server: &pb.Server{
+					ServerMsg: message,
+				},
+			},
+		}
+	}
+
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_Warn{
+			Warn: &pb.Warn{
+				WarningMessage: message,
+			},
+		},
+	}
+}
+
+func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
+	if h.wsHandler == nil {
+		return fmt.Errorf("WebSocket处理器未设置，无法转发DF响应")
+	}
+
+	groupDelivery := &pb.GroupPostDelivery{}
+	if err := proto.Unmarshal(payload, groupDelivery); err != nil {
+		return fmt.Errorf("解析GroupPostDelivery失败: %v", err)
+	}
+	if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
+		return fmt.Errorf("GroupPostDelivery内容不完整")
+	}
+
+	resp := &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_Post{
+			Post: groupDelivery.GetPost(),
+		},
+	}
+	respBytes, err := proto.Marshal(resp)
+	if err != nil {
+		return fmt.Errorf("序列化群消息响应失败: %v", err)
+	}
+
+	targetUserID := strconv.FormatInt(groupDelivery.GetTargetUserId(), 10)
+	if err := h.wsHandler.SendMessage(targetUserID, respBytes); err != nil {
+		return fmt.Errorf("转发群消息给用户 %s 失败: %v", targetUserID, err)
 	}
 	return nil
 }

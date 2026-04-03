@@ -50,10 +50,39 @@ message UserInfo {
   string update_time = 7;
 }
 
+message ContactInfo {
+  int64 user_id = 1;
+  string account = 2;
+  string name = 3;
+  string avatar = 4;
+  string alias = 5;
+  bool is_notify = 6;
+  string update_time = 7;
+}
+
+message ContactListRsp {
+  repeated ContactInfo contacts = 1;
+}
+
 message GroupInfo {
   bool client_need_save = 1; // 对于原先的msg字段, 0保存，1不保存
   int64 query_group_id = 2;
   string query_group_name = 3;
+  string avatar = 4;
+}
+
+message GroupMemberInfo {
+  int64 user_id = 1;
+  string account = 2;
+  string name = 3;
+  string avatar = 4;
+  string role = 5;
+  string update_time = 6;
+}
+
+message GroupMembersRsp {
+  int64 group_id = 1;
+  repeated GroupMemberInfo members = 2;
 }
 
 // 单条消息响应

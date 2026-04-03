@@ -21,6 +21,22 @@ type Friend struct {
 	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间，用于同步"`
 }
 
+type Group struct {
+	GroupID     int64  `gorm:"primaryKey;comment:群组ID，唯一"`
+	Name        string `gorm:"type:varchar(100);comment:群组名称"`
+	Avatar      string `gorm:"type:varchar(255);comment:群头像URL"`
+	OwnerUserID int64  `gorm:"type:int8;comment:群主用户ID"`
+	IsDelete    bool   `gorm:"type:bool;default:false;comment:群组是否已删除"`
+	UpdateTime  string `gorm:"type:varchar(25);comment:上次更新时间"`
+}
+
+type GroupMember struct {
+	GroupID    int64  `gorm:"primaryKey;comment:群组ID"`
+	UserID     int64  `gorm:"primaryKey;comment:成员用户ID"`
+	Role       string `gorm:"type:varchar(20);comment:成员角色，例如owner/member"`
+	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间"`
+}
+
 type Message struct {
 	MessageID    int64  `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
 	FromUserID   int64  `gorm:"type:int8;comment:消息来源用户ID"`

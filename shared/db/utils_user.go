@@ -26,6 +26,13 @@ func UpdateUserJwtKeyById(id int64, jwtKey []byte) error {
 
 func AddUser(user *User) error {
 	user.UpdateTime = utils.NowTime()
+	if user.ID == 0 {
+		var maxID int64
+		if err := DB().Raw("SELECT COALESCE(MAX(id), 0) FROM users").Scan(&maxID).Error; err != nil {
+			return err
+		}
+		user.ID = maxID + 1
+	}
 	return DB().Create(user).Error
 }
 

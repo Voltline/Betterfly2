@@ -78,6 +78,7 @@ services:
       - kafka2
     environment:
       PORT: 54342
+      PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
@@ -98,6 +99,7 @@ services:
       - kafka2
     environment:
       PORT: 54343
+      PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
@@ -221,18 +223,19 @@ services:
     depends_on:
       - prometheus
 
-#  friend_service:
-#    build:
-#      context: ..
-#      dockerfile: services/friendService/Dockerfile
-#    container_name: friendService
-#    environment:
-#      PORT: 54401
-#      PGSQL_DSN: ${PGSQL_DSN}
-#    ports:
-#      - "54401:54401"
-#    networks:
-#      - backend
+  friend_service:
+    build:
+      context: ..
+      dockerfile: services/friendService/Dockerfile
+    container_name: friendService
+    environment:
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      PORT: 54401
+      PGSQL_DSN: ${PGSQL_DSN}
+    ports:
+      - "54401:54401"
+    networks:
+      - backend
 
 networks:
   backend:

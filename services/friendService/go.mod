@@ -8,6 +8,7 @@ require (
 	Betterfly2/proto v0.0.0
 	Betterfly2/proto/friend v0.0.0
 	Betterfly2/shared v0.0.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/IBM/sarama v1.45.2
 	google.golang.org/protobuf v1.36.6
 )

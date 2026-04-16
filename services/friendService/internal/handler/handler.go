@@ -346,17 +346,6 @@ func (h *FriendHandler) handleQueryGroup(req *friend.RequestMessage, payload *fr
 		}, nil
 	}
 
-	isMember, err := db.IsActiveGroupMember(payload.GetGroupId(), payload.GetRequestUserId())
-	if err != nil {
-		return nil, err
-	}
-	if !isMember {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_RECORD_NOT_EXIST,
-			TargetUserId: req.TargetUserId,
-		}, nil
-	}
-
 	return &friend.ResponseMessage{
 		Result:       friend.FriendResult_FRIEND_OK,
 		TargetUserId: req.TargetUserId,

@@ -20,7 +20,34 @@ type RustFSClient struct {
 	client           *s3.Client
 	bucket           string
 	presign          *s3.PresignClient
+	internalEndpoint string
 	externalEndpoint string // 外部可访问的endpoint（用于预签名URL）
+	region           string
+	accessKeyID      string
+	secretAccessKey  string
+}
+
+func buildPresignClient(region, accessKeyID, secretAccessKey, endpoint string) *s3.PresignClient {
+	cfg := aws.Config{
+		Region: region,
+		EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+			return aws.Endpoint{
+				URL:           endpoint,
+				SigningRegion: region,
+			}, nil
+		}),
+		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
+	}
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.UsePathStyle = true
+	})
+	return s3.NewPresignClient(client, func(options *s3.PresignOptions) {
+		options.ClientOptions = []func(oo *s3.Options){
+			func(oo *s3.Options) {
+				oo.UsePathStyle = true
+			},
+		}
+	})
 }
 
 // NewRustFSClient 创建新的RustFS客户端
@@ -62,36 +89,12 @@ func NewRustFSClient() (*RustFSClient, error) {
 		o.UsePathStyle = true
 	})
 
-	// 如果没有配置外部endpoint，使用内部endpoint
-	if externalEndpoint == "" {
-		externalEndpoint = endpoint
-		sugar.Warnf("RUSTFS_EXTERNAL_ENDPOINT_URL not set, using internal endpoint: %s", endpoint)
+	presignEndpoint := externalEndpoint
+	if presignEndpoint == "" {
+		presignEndpoint = endpoint
+		sugar.Warnf("RUSTFS_EXTERNAL_ENDPOINT_URL not set, presigned URLs will fall back to the internal endpoint unless overridden per request")
 	}
-
-	// 构建用于内部操作的S3客户端（使用内部endpoint）
-	// 构建用于预签名的S3客户端（使用外部endpoint，这样生成的URL客户端可以直接访问）
-	externalCfg := aws.Config{
-		Region: region,
-		EndpointResolverWithOptions: aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL:           externalEndpoint,
-				SigningRegion: region,
-			}, nil
-		}),
-		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, "")),
-	}
-	externalClient := s3.NewFromConfig(externalCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
-	})
-
-	// 构建预签名客户端（使用外部endpoint，这样生成的URL可以直接被客户端访问）
-	presignClient := s3.NewPresignClient(externalClient, func(options *s3.PresignOptions) {
-		options.ClientOptions = []func(oo *s3.Options){
-			func(oo *s3.Options) {
-				oo.UsePathStyle = true
-			},
-		}
-	})
+	presignClient := buildPresignClient(region, accessKeyID, secretAccessKey, presignEndpoint)
 
 	// 确保bucket存在
 	ctx := context.Background()
@@ -114,7 +117,11 @@ func NewRustFSClient() (*RustFSClient, error) {
 		client:           client,
 		bucket:           bucket,
 		presign:          presignClient,
+		internalEndpoint: endpoint,
 		externalEndpoint: externalEndpoint,
+		region:           region,
+		accessKeyID:      accessKeyID,
+		secretAccessKey:  secretAccessKey,
 	}, nil
 }
 
@@ -183,14 +190,19 @@ func (c *RustFSClient) FileExists(ctx context.Context, fileHash string) (bool, e
 
 // GetPresignedUploadURL 获取预签名上传URL
 func (c *RustFSClient) GetPresignedUploadURL(ctx context.Context, fileHash string, expiresIn time.Duration) (string, error) {
+	return c.GetPresignedUploadURLForEndpoint(ctx, fileHash, expiresIn, "")
+}
+
+func (c *RustFSClient) GetPresignedUploadURLForEndpoint(ctx context.Context, fileHash string, expiresIn time.Duration, externalEndpoint string) (string, error) {
 	storagePath := GetStoragePath(fileHash)
+	presignClient, endpoint := c.presignClientForEndpoint(externalEndpoint)
 
 	putObjectInput := s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(storagePath),
 	}
 
-	presignResult, err := c.presign.PresignPutObject(ctx, &putObjectInput, func(po *s3.PresignOptions) {
+	presignResult, err := presignClient.PresignPutObject(ctx, &putObjectInput, func(po *s3.PresignOptions) {
 		po.ClientOptions = []func(oo *s3.Options){
 			func(oo *s3.Options) {
 				oo.UsePathStyle = true
@@ -202,20 +214,25 @@ func (c *RustFSClient) GetPresignedUploadURL(ctx context.Context, fileHash strin
 		return "", fmt.Errorf("failed to generate presigned upload URL: %v", err)
 	}
 
-	logger.Sugar().Debugf("生成预签名上传URL (使用外部endpoint): %s", presignResult.URL)
+	logger.Sugar().Debugf("生成预签名上传URL (endpoint=%s): %s", endpoint, presignResult.URL)
 	return presignResult.URL, nil
 }
 
 // GetPresignedDownloadURL 获取预签名下载URL
 func (c *RustFSClient) GetPresignedDownloadURL(ctx context.Context, fileHash string, expiresIn time.Duration) (string, error) {
+	return c.GetPresignedDownloadURLForEndpoint(ctx, fileHash, expiresIn, "")
+}
+
+func (c *RustFSClient) GetPresignedDownloadURLForEndpoint(ctx context.Context, fileHash string, expiresIn time.Duration, externalEndpoint string) (string, error) {
 	storagePath := GetStoragePath(fileHash)
+	presignClient, endpoint := c.presignClientForEndpoint(externalEndpoint)
 
 	getObjectInput := s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(storagePath),
 	}
 
-	presignResult, err := c.presign.PresignGetObject(ctx, &getObjectInput, func(po *s3.PresignOptions) {
+	presignResult, err := presignClient.PresignGetObject(ctx, &getObjectInput, func(po *s3.PresignOptions) {
 		po.ClientOptions = []func(oo *s3.Options){
 			func(oo *s3.Options) {
 				oo.UsePathStyle = true
@@ -227,8 +244,23 @@ func (c *RustFSClient) GetPresignedDownloadURL(ctx context.Context, fileHash str
 		return "", fmt.Errorf("failed to generate presigned download URL: %v", err)
 	}
 
-	logger.Sugar().Debugf("生成预签名下载URL: %s", presignResult.URL)
+	logger.Sugar().Debugf("生成预签名下载URL (endpoint=%s): %s", endpoint, presignResult.URL)
 	return presignResult.URL, nil
+}
+
+func (c *RustFSClient) presignClientForEndpoint(externalEndpoint string) (*s3.PresignClient, string) {
+	resolvedEndpoint := externalEndpoint
+	if resolvedEndpoint == "" {
+		if c.externalEndpoint != "" {
+			resolvedEndpoint = c.externalEndpoint
+		} else {
+			resolvedEndpoint = c.internalEndpoint
+		}
+	}
+	if resolvedEndpoint == c.externalEndpoint || (c.externalEndpoint == "" && resolvedEndpoint == c.internalEndpoint) {
+		return c.presign, resolvedEndpoint
+	}
+	return buildPresignClient(c.region, c.accessKeyID, c.secretAccessKey, resolvedEndpoint), resolvedEndpoint
 }
 
 // HealthCheck 检查对象存储是否可用

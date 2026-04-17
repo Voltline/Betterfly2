@@ -612,6 +612,8 @@ message DownloadFileResponse {
 - `RUSTFS_ACCESS_KEY_ID`: RustFS访问密钥ID（必需）
 - `RUSTFS_SECRET_ACCESS_KEY`: RustFS秘密访问密钥（必需）
 - `RUSTFS_ENDPOINT_URL`: RustFS端点URL（必需）
+- `RUSTFS_EXTERNAL_ENDPOINT_URL`: 客户端可直接访问的RustFS外部地址（可选，推荐在生产环境显式配置）
+- `RUSTFS_EXTERNAL_PORT`: 未显式配置外部地址时，基于当前HTTP请求推导RustFS地址所使用的端口（默认: 9000）
 - `RUSTFS_BUCKET`: RustFS存储桶名称（默认: betterfly-files）
 
 ---

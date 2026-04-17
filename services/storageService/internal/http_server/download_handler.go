@@ -21,6 +21,7 @@ type DownloadHandler struct {
 	deleteFileMetadata      func(string) error
 	fileExistsInStorage     func(context.Context, string) (bool, error)
 	getPresignedDownloadURL func(context.Context, string, time.Duration) (string, error)
+	getPresignedDownloadFor func(context.Context, string, time.Duration, string) (string, error)
 }
 
 // NewDownloadHandler 创建新的下载处理器
@@ -30,6 +31,7 @@ func NewDownloadHandler(rustfsClient *rustfs.RustFSClient) *DownloadHandler {
 		deleteFileMetadata:      db.DeleteFileMetadata,
 		fileExistsInStorage:     rustfsClient.FileExists,
 		getPresignedDownloadURL: rustfsClient.GetPresignedDownloadURL,
+		getPresignedDownloadFor: rustfsClient.GetPresignedDownloadURLForEndpoint,
 	}
 }
 
@@ -114,7 +116,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 
 	// 生成预签名下载URL
 	expiresIn := 1 * time.Hour // URL有效期1小时
-	downloadURL, err := h.getPresignedDownloadURL(ctx, fileHash, expiresIn)
+	downloadURL, err := h.getDownloadURL(ctx, r, fileHash, expiresIn)
 	if err != nil {
 		sugar.Errorf("生成预签名下载URL失败: %v", err)
 		http.Error(w, "Failed to generate download URL", http.StatusInternalServerError)
@@ -130,6 +132,13 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 
 	h.sendResponse(w, resp)
 	sugar.Debugf("生成下载URL成功: file_hash=%s", fileHash)
+}
+
+func (h *DownloadHandler) getDownloadURL(ctx context.Context, r *http.Request, fileHash string, expiresIn time.Duration) (string, error) {
+	if h.getPresignedDownloadFor != nil {
+		return h.getPresignedDownloadFor(ctx, fileHash, expiresIn, resolveRustFSExternalEndpoint(r))
+	}
+	return h.getPresignedDownloadURL(ctx, fileHash, expiresIn)
 }
 
 // sendResponse 发送响应（支持JSON和Protobuf）

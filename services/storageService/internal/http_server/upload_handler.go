@@ -26,6 +26,7 @@ type UploadHandler struct {
 	downloadFile              func(context.Context, string) (io.ReadCloser, error)
 	deleteFile                func(context.Context, string) error
 	getPresignedUploadURL     func(context.Context, string, time.Duration) (string, error)
+	getPresignedUploadURLFor  func(context.Context, string, time.Duration, string) (string, error)
 	verifyFileHash            func(io.Reader, string) (bool, error)
 }
 
@@ -41,6 +42,7 @@ func NewUploadHandler(rustfsClient *rustfs.RustFSClient) *UploadHandler {
 		downloadFile:              rustfsClient.DownloadFile,
 		deleteFile:                rustfsClient.DeleteFile,
 		getPresignedUploadURL:     rustfsClient.GetPresignedUploadURL,
+		getPresignedUploadURLFor:  rustfsClient.GetPresignedUploadURLForEndpoint,
 		verifyFileHash:            rustfs.VerifyFileHash,
 	}
 }
@@ -113,7 +115,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	// 生成预签名上传URL
 	ctx := context.Background()
 	expiresIn := 1 * time.Hour // URL有效期1小时
-	uploadURL, err := h.getPresignedUploadURL(ctx, fileHash, expiresIn)
+	uploadURL, err := h.getUploadURL(ctx, r, fileHash, expiresIn)
 	if err != nil {
 		sugar.Errorf("生成预签名上传URL失败: %v", err)
 		http.Error(w, "Failed to generate upload URL", http.StatusInternalServerError)
@@ -128,6 +130,13 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 
 	h.sendResponse(w, resp)
 	sugar.Debugf("生成上传URL成功: file_hash=%s", fileHash)
+}
+
+func (h *UploadHandler) getUploadURL(ctx context.Context, r *http.Request, fileHash string, expiresIn time.Duration) (string, error) {
+	if h.getPresignedUploadURLFor != nil {
+		return h.getPresignedUploadURLFor(ctx, fileHash, expiresIn, resolveRustFSExternalEndpoint(r))
+	}
+	return h.getPresignedUploadURL(ctx, fileHash, expiresIn)
 }
 
 // HandleVerifyUpload 处理上传验证请求（第二阶段：验证上传的文件）

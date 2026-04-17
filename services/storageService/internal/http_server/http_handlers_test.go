@@ -58,18 +58,23 @@ func TestHandleUploadRequest_CreatesPendingMetadataAndReturnsUploadURL(t *testin
 			}
 			return nil
 		},
-		getPresignedUploadURL: func(ctx context.Context, fileHash string, expiresIn time.Duration) (string, error) {
+		getPresignedUploadURLFor: func(ctx context.Context, fileHash string, expiresIn time.Duration, endpoint string) (string, error) {
 			if fileHash != "new-hash" {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			if expiresIn != time.Hour {
 				t.Fatalf("unexpected expiresIn: %s", expiresIn)
 			}
+			if endpoint != "https://storage.example.com:9000" {
+				t.Fatalf("unexpected endpoint: %s", endpoint)
+			}
 			return "https://example.com/upload", nil
 		},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"new-hash","file_size":456}`))
+	req.Host = "storage.example.com:8081"
+	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 
 	handler.HandleUploadRequest(rec, req)
@@ -234,18 +239,23 @@ func TestHandleDownloadRequest_ReturnsDownloadURLForVerifiedFile(t *testing.T) {
 			}, nil
 		},
 		fileExistsInStorage: func(context.Context, string) (bool, error) { return true, nil },
-		getPresignedDownloadURL: func(ctx context.Context, fileHash string, expiresIn time.Duration) (string, error) {
+		getPresignedDownloadFor: func(ctx context.Context, fileHash string, expiresIn time.Duration, endpoint string) (string, error) {
 			if fileHash != "verified-hash" {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			if expiresIn != time.Hour {
 				t.Fatalf("unexpected expiresIn: %s", expiresIn)
 			}
+			if endpoint != "https://storage.example.com:9000" {
+				t.Fatalf("unexpected endpoint: %s", endpoint)
+			}
 			return "https://example.com/download", nil
 		},
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash=verified-hash", nil)
+	req.Host = "storage.example.com:8081"
+	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 
 	handler.HandleDownloadRequest(rec, req)
@@ -274,6 +284,18 @@ func TestHandleDownloadRequest_ReturnsDownloadURLForVerifiedFile(t *testing.T) {
 	}
 	if resp.FileSize != 789 {
 		t.Fatalf("unexpected file size: %d", resp.FileSize)
+	}
+}
+
+func TestResolveRustFSExternalEndpoint_UsesExplicitConfigWhenPresent(t *testing.T) {
+	t.Setenv("RUSTFS_EXTERNAL_ENDPOINT_URL", "https://files.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/storage_service/upload", nil)
+	req.Host = "storage.example.com:8081"
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if got := resolveRustFSExternalEndpoint(req); got != "https://files.example.com" {
+		t.Fatalf("unexpected endpoint: %s", got)
 	}
 }
 

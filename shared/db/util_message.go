@@ -37,12 +37,40 @@ func GetMessageByID(messageID int64) (*Message, error) {
 	return &message, nil
 }
 
-// GetSyncMessagesByTimestamp 获取同步信息
-// TODO: 因为还没实现群聊，所以暂时还没查群聊的消息
+// GetSyncMessagesByTimestamp 获取同步消息。
+// 当前会返回：
+// 1. 发给该用户的单聊消息
+// 2. 该用户当前已加入群组中的群聊消息
+// 群聊消息会额外要求消息时间晚于该成员记录的 update_time，
+// 避免把用户入群前的旧消息同步回来。
 func GetSyncMessagesByTimestamp(toUserID int64, timestamp string) ([]Message, error) {
 	var messages []Message
-	err := DB().Where("to_user_id = ? AND timestamp > ?", toUserID, timestamp).
-		Order("timestamp ASC").
-		Find(&messages).Error
+	err := DB().Raw(`
+SELECT
+  m.message_id,
+  m.from_user_id,
+  m.to_user_id,
+  m.content,
+  m.timestamp,
+  m.message_type,
+  m.real_file_name,
+  m.is_group
+FROM messages AS m
+WHERE
+  (m.is_group = FALSE AND m.to_user_id = ? AND m.timestamp > ?)
+  OR
+  (
+    m.is_group = TRUE
+    AND EXISTS (
+      SELECT 1
+      FROM group_members AS gm
+      WHERE gm.group_id = m.to_user_id
+        AND gm.user_id = ?
+        AND m.timestamp > gm.update_time
+        AND m.timestamp > ?
+    )
+  )
+ORDER BY m.timestamp ASC
+`, toUserID, timestamp, toUserID, timestamp).Scan(&messages).Error
 	return messages, err
 }

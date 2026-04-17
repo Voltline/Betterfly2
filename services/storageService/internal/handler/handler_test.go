@@ -307,6 +307,54 @@ func TestHandleUpdateUserName_NotFound(t *testing.T) {
 	assert.Equal(t, int64(1001), resp.TargetUserId)
 }
 
+func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
+	mock := useMockDB(t)
+
+	handler := &StorageHandler{
+		l1Cache: newMockCache(),
+		l2Cache: nil,
+	}
+
+	req := &storage.RequestMessage{
+		FromKafkaTopic: "test-topic",
+		TargetUserId:   1001,
+		Payload: &storage.RequestMessage_QuerySyncMessages{
+			QuerySyncMessages: &storage.QuerySyncMessages{
+				ToUserId:  1001,
+				Timestamp: "2026-04-17T10:00:00Z",
+			},
+		},
+	}
+
+	mock.ExpectQuery(`SELECT\s+m\.message_id,\s+m\.from_user_id,\s+m\.to_user_id,\s+m\.content,\s+m\.timestamp,\s+m\.message_type,\s+m\.real_file_name,\s+m\.is_group\s+FROM messages AS m\s+WHERE\s+\(m\.is_group = FALSE AND m\.to_user_id = \$1 AND m\.timestamp > \$2\)\s+OR\s+\(\s*m\.is_group = TRUE\s+AND EXISTS \(\s*SELECT 1\s+FROM group_members AS gm\s+WHERE gm\.group_id = m\.to_user_id\s+AND gm\.user_id = \$3\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$4\s*\)\s*\)\s+ORDER BY m\.timestamp ASC`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", int64(1001), "2026-04-17T10:00:00Z").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
+		}).
+			AddRow(20001, 2002, 1001, "direct-msg", "2026-04-17T10:05:00Z", "text", "", false).
+			AddRow(20002, 1001, 9001, "own-group-msg", "2026-04-17T10:06:00Z", "text", "", true).
+			AddRow(20003, 3003, 9001, "other-group-msg", "2026-04-17T10:07:00Z", "text", "", true))
+
+	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, storage.StorageResult_OK, resp.Result)
+
+	syncRsp := resp.GetSyncMsgsRsp()
+	assert.NotNil(t, syncRsp)
+	if syncRsp != nil && assert.Len(t, syncRsp.GetMsgs(), 3) {
+		assert.Equal(t, int64(1001), syncRsp.GetMsgs()[0].GetToUserId())
+		assert.False(t, syncRsp.GetMsgs()[0].GetIsGroup())
+		assert.Equal(t, int64(1001), syncRsp.GetMsgs()[1].GetFromUserId())
+		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[1].GetToUserId())
+		assert.True(t, syncRsp.GetMsgs()[1].GetIsGroup())
+		assert.Equal(t, int64(3003), syncRsp.GetMsgs()[2].GetFromUserId())
+		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[2].GetToUserId())
+		assert.True(t, syncRsp.GetMsgs()[2].GetIsGroup())
+	}
+}
+
 func TestBuildMessageResponse(t *testing.T) {
 	handler := &StorageHandler{}
 

@@ -69,6 +69,10 @@ message QueryGroupMembers {
   int64 target_group_id = 2;
 }
 
+message QueryJoinedGroups {
+  int64 from_user_id = 1;
+}
+
 message DeleteGroupUser { // 又名：退出群组
   int64 from_user_id = 1;
   int64 target_group_id = 2;

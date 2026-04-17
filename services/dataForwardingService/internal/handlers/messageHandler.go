@@ -72,6 +72,9 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 	case *pb.RequestMessage_QueryGroupMembers:
 		sugar.Debugf("收到 QueryGroupMembers 消息")
 		err = handleQueryGroupMembers(fromID, message)
+	case *pb.RequestMessage_QueryJoinedGroups:
+		sugar.Debugf("收到 QueryJoinedGroups 消息")
+		err = handleQueryJoinedGroups(fromID, message)
 	case *pb.RequestMessage_DeleteGroupUser:
 		sugar.Debugf("收到 DeleteGroupUser 消息")
 		err = handleDeleteGroupUser(fromID, message)
@@ -796,6 +799,46 @@ func handleQueryGroupMembers(fromID int64, message *pb.RequestMessage) error {
 
 	logger.Sugar().Debugf("群成员列表查询请求已发送到friendService: user_id=%d, group_id=%d", fromID, payload.GetTargetGroupId())
 	return nil
+}
+
+func handleQueryJoinedGroups(fromID int64, message *pb.RequestMessage) error {
+	jwt := message.GetJwt()
+	if jwt == "" {
+		return errors.New("用户未携带有效JWT，无法查询已加入群列表")
+	}
+	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+		return err
+	}
+
+	payload := message.GetQueryJoinedGroups()
+	if payload == nil {
+		return errors.New("query_joined_groups消息为空")
+	}
+
+	currentContainerID := os.Getenv("HOSTNAME")
+	if currentContainerID == "" {
+		currentContainerID = "local"
+	}
+
+	if err := publishFriendRequest(buildQueryJoinedGroupsFriendRequest(fromID, currentContainerID)); err != nil {
+		logger.Sugar().Errorf("发布QueryJoinedGroups请求到friend-service失败: %v", err)
+		return err
+	}
+
+	logger.Sugar().Debugf("已加入群列表查询请求已发送到friendService: user_id=%d", fromID)
+	return nil
+}
+
+func buildQueryJoinedGroupsFriendRequest(fromID int64, currentContainerID string) *friend.RequestMessage {
+	return &friend.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   fromID,
+		Payload: &friend.RequestMessage_QueryJoinedGroups{
+			QueryJoinedGroups: &friend.QueryJoinedGroups{
+				UserId: fromID,
+			},
+		},
+	}
 }
 
 func buildQueryGroupMembersFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {

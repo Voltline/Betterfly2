@@ -85,6 +85,18 @@ message GroupMembersRsp {
   repeated GroupMemberInfo members = 2;
 }
 
+message JoinedGroupInfo {
+  int64 group_id = 1;
+  string group_name = 2;
+  string avatar = 3;
+  int64 owner_user_id = 4;
+  string update_time = 5;
+}
+
+message JoinedGroupsRsp {
+  repeated JoinedGroupInfo groups = 1;
+}
+
 // 单条消息响应
 message MessageRsp {
   int64 from_user_id = 1;

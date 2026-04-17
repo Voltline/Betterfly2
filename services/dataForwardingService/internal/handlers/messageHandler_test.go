@@ -237,6 +237,21 @@ func TestBuildQueryGroupMembersFriendRequestRoutesResponseToRequester(t *testing
 	}
 }
 
+func TestBuildQueryJoinedGroupsFriendRequestRoutesResponseToRequester(t *testing.T) {
+	req := buildQueryJoinedGroupsFriendRequest(1001, "df-pod-1")
+
+	payload, ok := req.Payload.(*friend.RequestMessage_QueryJoinedGroups)
+	if !ok {
+		t.Fatalf("expected QueryJoinedGroups payload, got %T", req.Payload)
+	}
+	if req.FromKafkaTopic != "df-pod-1" || req.TargetUserId != 1001 {
+		t.Fatalf("unexpected routing metadata topic=%s target=%d", req.FromKafkaTopic, req.TargetUserId)
+	}
+	if payload.QueryJoinedGroups.GetUserId() != 1001 {
+		t.Fatalf("unexpected query joined groups payload user=%d", payload.QueryJoinedGroups.GetUserId())
+	}
+}
+
 func TestBuildDeleteGroupUserFriendRequestRoutesResponseToRequester(t *testing.T) {
 	req := buildDeleteGroupUserFriendRequest(1001, 3003, "df-pod-1")
 

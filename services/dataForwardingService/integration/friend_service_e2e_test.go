@@ -144,6 +144,19 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 		t.Fatalf("expected group name codex-e2e-group, got %q", groupInfo.GetQueryGroupName())
 	}
 
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_QueryJoinedGroups{
+		QueryJoinedGroups: &pb.QueryJoinedGroups{
+			FromUserId: user1.userID,
+		},
+	}))
+	joinedGroups := user1.expectJoinedGroups()
+	if len(joinedGroups.GetGroups()) != 1 {
+		t.Fatalf("expected 1 joined group for user1 after create, got %d", len(joinedGroups.GetGroups()))
+	}
+	if group := findJoinedGroup(joinedGroups.GetGroups(), groupID); group == nil {
+		t.Fatalf("expected created group %d to appear in user1 joined groups", groupID)
+	}
+
 	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_InsertGroupUser{
 		InsertGroupUser: &pb.InsertGroupUser{
 			FromUserId:    user2.userID,
@@ -169,6 +182,16 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 	}
 	if member2 == nil || member2.GetRole() != "member" {
 		t.Fatalf("expected user2 to be member, got %+v", member2)
+	}
+
+	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_QueryJoinedGroups{
+		QueryJoinedGroups: &pb.QueryJoinedGroups{
+			FromUserId: user2.userID,
+		},
+	}))
+	joinedGroups = user2.expectJoinedGroups()
+	if group := findJoinedGroup(joinedGroups.GetGroups(), groupID); group == nil {
+		t.Fatalf("expected joined group %d to appear in user2 joined groups", groupID)
 	}
 
 	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_UpdateAvatar{
@@ -226,6 +249,16 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 	}
 	if findGroupMember(groupMembers.GetMembers(), user2.userID) != nil {
 		t.Fatal("expected user2 to be absent from group after leaving")
+	}
+
+	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_QueryJoinedGroups{
+		QueryJoinedGroups: &pb.QueryJoinedGroups{
+			FromUserId: user2.userID,
+		},
+	}))
+	joinedGroups = user2.expectJoinedGroups()
+	if group := findJoinedGroup(joinedGroups.GetGroups(), groupID); group != nil {
+		t.Fatalf("expected group %d to be absent from user2 joined groups after leaving", groupID)
 	}
 
 	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_Post{
@@ -391,6 +424,14 @@ func (c *wsTestClient) expectGroupMembers() *pb.GroupMembersRsp {
 	return resp.GetGroupMembersRsp()
 }
 
+func (c *wsTestClient) expectJoinedGroups() *pb.JoinedGroupsRsp {
+	c.t.Helper()
+	resp := c.waitFor(e2eTimeout, func(resp *pb.ResponseMessage) bool {
+		return resp.GetJoinedGroupsRsp() != nil
+	})
+	return resp.GetJoinedGroupsRsp()
+}
+
 func (c *wsTestClient) expectGroupPost(groupID, fromUserID int64, msg string) *pb.Post {
 	c.t.Helper()
 	resp := c.waitFor(e2eTimeout, func(resp *pb.ResponseMessage) bool {
@@ -448,6 +489,8 @@ func authenticatedRequest(jwt string, payload isAuthenticatedPayload) *pb.Reques
 		req.Payload = p
 	case *pb.RequestMessage_QueryGroupMembers:
 		req.Payload = p
+	case *pb.RequestMessage_QueryJoinedGroups:
+		req.Payload = p
 	case *pb.RequestMessage_UpdateAvatar:
 		req.Payload = p
 	case *pb.RequestMessage_Post:
@@ -475,6 +518,15 @@ func findGroupMember(members []*pb.GroupMemberInfo, userID int64) *pb.GroupMembe
 	for _, member := range members {
 		if member.GetUserId() == userID {
 			return member
+		}
+	}
+	return nil
+}
+
+func findJoinedGroup(groups []*pb.JoinedGroupInfo, groupID int64) *pb.JoinedGroupInfo {
+	for _, group := range groups {
+		if group.GetGroupId() == groupID {
+			return group
 		}
 	}
 	return nil

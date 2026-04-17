@@ -200,6 +200,8 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "操作成功")
 		case *friend.ResponseMessage_GroupMemberListRsp:
 			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
+		case *friend.ResponseMessage_JoinedGroupListRsp:
+			dfResp = buildJoinedGroupsResponse(payload.JoinedGroupListRsp)
 		default:
 			dfResp = &pb.ResponseMessage{
 				Payload: &pb.ResponseMessage_Server{
@@ -290,6 +292,10 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
 			break
 		}
+		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_JoinedGroupListRsp); ok {
+			dfResp = buildJoinedGroupsResponse(payload.JoinedGroupListRsp)
+			break
+		}
 		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_GroupOperationRsp); ok {
 			dfResp = buildGroupOperationResponse(payload.GroupOperationRsp, "群组服务处理失败")
 			break
@@ -346,6 +352,27 @@ func buildGroupMembersResponse(groupMembers *friend.GroupMemberListRsp) *pb.Resp
 			GroupMembersRsp: &pb.GroupMembersRsp{
 				GroupId: groupMembers.GetGroupId(),
 				Members: members,
+			},
+		},
+	}
+}
+
+func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.ResponseMessage {
+	var groups []*pb.JoinedGroupInfo
+	for _, group := range groupList.GetGroups() {
+		groups = append(groups, &pb.JoinedGroupInfo{
+			GroupId:     group.GetGroupId(),
+			GroupName:   group.GetGroupName(),
+			Avatar:      group.GetAvatar(),
+			OwnerUserId: group.GetOwnerUserId(),
+			UpdateTime:  group.GetUpdateTime(),
+		})
+	}
+
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_JoinedGroupsRsp{
+			JoinedGroupsRsp: &pb.JoinedGroupsRsp{
+				Groups: groups,
 			},
 		},
 	}

@@ -54,6 +54,8 @@ func (h *FriendHandler) HandleMessage(_ context.Context, message []byte) error {
 		resp, err = h.handleQueryGroupMembers(req, payload.QueryGroupMembers)
 	case *friend.RequestMessage_RemoveGroupMember:
 		resp, err = h.handleRemoveGroupMember(req, payload.RemoveGroupMember)
+	case *friend.RequestMessage_QueryJoinedGroups:
+		resp, err = h.handleQueryJoinedGroups(req, payload.QueryJoinedGroups)
 	default:
 		err = fmt.Errorf("未知的friend请求类型")
 	}
@@ -521,6 +523,41 @@ func (h *FriendHandler) handleQueryGroupMembers(req *friend.RequestMessage, payl
 			GroupMemberListRsp: &friend.GroupMemberListRsp{
 				GroupId: payload.GetGroupId(),
 				Members: friendMembers,
+			},
+		},
+	}, nil
+}
+
+func (h *FriendHandler) handleQueryJoinedGroups(req *friend.RequestMessage, payload *friend.QueryJoinedGroups) (*friend.ResponseMessage, error) {
+	if payload.GetUserId() <= 0 {
+		return &friend.ResponseMessage{
+			Result:       friend.FriendResult_INVALID_ARGUMENT,
+			TargetUserId: req.TargetUserId,
+		}, nil
+	}
+
+	groups, err := db.GetJoinedGroups(payload.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+
+	var joinedGroups []*friend.JoinedGroupContact
+	for _, group := range groups {
+		joinedGroups = append(joinedGroups, &friend.JoinedGroupContact{
+			GroupId:     group.GroupID,
+			GroupName:   group.GroupName,
+			Avatar:      group.Avatar,
+			OwnerUserId: group.OwnerUserID,
+			UpdateTime:  group.UpdateTime,
+		})
+	}
+
+	return &friend.ResponseMessage{
+		Result:       friend.FriendResult_FRIEND_OK,
+		TargetUserId: req.TargetUserId,
+		Payload: &friend.ResponseMessage_JoinedGroupListRsp{
+			JoinedGroupListRsp: &friend.JoinedGroupListRsp{
+				Groups: joinedGroups,
 			},
 		},
 	}, nil

@@ -98,3 +98,46 @@ func TestHandleQueryGroup_AllowsNonMemberLookup(t *testing.T) {
 		t.Fatal("期望 client_need_save 被透传为 true")
 	}
 }
+
+func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
+	mock := useMockDB(t)
+
+	handler := &FriendHandler{}
+	req := &friend.RequestMessage{
+		TargetUserId: 2001,
+		Payload: &friend.RequestMessage_QueryJoinedGroups{
+			QueryJoinedGroups: &friend.QueryJoinedGroups{
+				UserId: 2001,
+			},
+		},
+	}
+
+	mock.ExpectQuery(`SELECT groups\.group_id, groups\.name AS group_name, groups\.avatar, groups\.owner_user_id, groups\.update_time FROM "group_members" JOIN groups ON groups\.group_id = group_members\.group_id WHERE group_members\.user_id = \$1 AND groups\.is_delete = \$2 ORDER BY groups\.group_id ASC`).
+		WithArgs(int64(2001), false).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"group_id", "group_name", "avatar", "owner_user_id", "update_time",
+		}).AddRow(3001, "team-a", "avatar-a", 1001, "2026-04-17 10:00:00").
+			AddRow(3002, "team-b", "avatar-b", 1002, "2026-04-17 11:00:00"))
+
+	resp, err := handler.handleQueryJoinedGroups(req, req.GetQueryJoinedGroups())
+	if err != nil {
+		t.Fatalf("handleQueryJoinedGroups 返回错误: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("handleQueryJoinedGroups 返回了空响应")
+	}
+	if resp.Result != friend.FriendResult_FRIEND_OK {
+		t.Fatalf("期望返回 FRIEND_OK，实际为 %v", resp.Result)
+	}
+
+	groupList := resp.GetJoinedGroupListRsp()
+	if groupList == nil {
+		t.Fatal("期望返回已加入群列表，但实际为空")
+	}
+	if len(groupList.GetGroups()) != 2 {
+		t.Fatalf("期望返回 2 个群，实际为 %d", len(groupList.GetGroups()))
+	}
+	if groupList.GetGroups()[0].GetGroupId() != 3001 || groupList.GetGroups()[1].GetGroupId() != 3002 {
+		t.Fatalf("返回的群列表顺序或内容不符合预期: %+v", groupList.GetGroups())
+	}
+}

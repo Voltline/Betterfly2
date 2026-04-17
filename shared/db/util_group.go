@@ -16,6 +16,14 @@ type GroupMemberContact struct {
 	UpdateTime string `gorm:"column:update_time"`
 }
 
+type JoinedGroupContact struct {
+	GroupID     int64  `gorm:"column:group_id"`
+	GroupName   string `gorm:"column:group_name"`
+	Avatar      string `gorm:"column:avatar"`
+	OwnerUserID int64  `gorm:"column:owner_user_id"`
+	UpdateTime  string `gorm:"column:update_time"`
+}
+
 func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, string, error) {
 	now := utils.NowTime()
 	alreadyExists := false
@@ -155,6 +163,18 @@ func GetGroupMembers(groupID int64) ([]GroupMemberContact, error) {
 		Order("group_members.user_id ASC").
 		Scan(&members).Error
 	return members, err
+}
+
+func GetJoinedGroups(userID int64) ([]JoinedGroupContact, error) {
+	var groups []JoinedGroupContact
+	err := DB().
+		Table("group_members").
+		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time").
+		Joins("JOIN groups ON groups.group_id = group_members.group_id").
+		Where("group_members.user_id = ? AND groups.is_delete = ?", userID, false).
+		Order("groups.group_id ASC").
+		Scan(&groups).Error
+	return groups, err
 }
 
 func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {

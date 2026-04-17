@@ -31,6 +31,7 @@ message RequestMessage {
     UpdateContactNotify update_contact_notify = 20;
     QueryGroupMembers query_group_members = 21;
     DeleteGroupUser delete_group_user = 22;
+    QueryJoinedGroups query_joined_groups = 23;
   }
 }
 
@@ -50,5 +51,6 @@ message ResponseMessage {
     SyncMessagesRsp sync_msgs_rsp = 11;
     ContactListRsp contact_list_rsp = 12;
     GroupMembersRsp group_members_rsp = 13;
+    JoinedGroupsRsp joined_groups_rsp = 14;
   }
 }

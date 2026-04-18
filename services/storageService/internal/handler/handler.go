@@ -219,11 +219,6 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 		return nil, err
 	}
 
-	// 限制每次同步数量
-	if len(messages) > 100 {
-		messages = messages[:100]
-	}
-
 	sugar.Debugf("查询到 %d 条同步消息", len(messages))
 
 	// 转换为Protobuf格式

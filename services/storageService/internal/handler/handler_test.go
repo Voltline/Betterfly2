@@ -3,6 +3,7 @@ package handler
 import (
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
+	"fmt"
 	"testing"
 	"time"
 
@@ -352,6 +353,56 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 		assert.Equal(t, int64(3003), syncRsp.GetMsgs()[2].GetFromUserId())
 		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[2].GetToUserId())
 		assert.True(t, syncRsp.GetMsgs()[2].GetIsGroup())
+	}
+}
+
+func TestHandleQuerySyncMessages_DoesNotTruncateResults(t *testing.T) {
+	mock := useMockDB(t)
+
+	handler := &StorageHandler{
+		l1Cache: newMockCache(),
+		l2Cache: nil,
+	}
+
+	req := &storage.RequestMessage{
+		FromKafkaTopic: "test-topic",
+		TargetUserId:   1001,
+		Payload: &storage.RequestMessage_QuerySyncMessages{
+			QuerySyncMessages: &storage.QuerySyncMessages{
+				ToUserId:  1001,
+				Timestamp: "2026-04-17T10:00:00Z",
+			},
+		},
+	}
+
+	rows := sqlmock.NewRows([]string{
+		"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
+	})
+	for i := 0; i < 101; i++ {
+		rows.AddRow(
+			int64(30000+i),
+			int64(2000+i),
+			int64(1001),
+			fmt.Sprintf("msg-%d", i),
+			fmt.Sprintf("2026-04-17T10:%02d:00Z", i%60),
+			"text",
+			"",
+			false,
+		)
+	}
+
+	mock.ExpectQuery(`SELECT\s+m\.message_id,\s+m\.from_user_id,\s+m\.to_user_id,\s+m\.content,\s+m\.timestamp,\s+m\.message_type,\s+m\.real_file_name,\s+m\.is_group\s+FROM messages AS m\s+WHERE\s+\(m\.is_group = FALSE AND m\.to_user_id = \$1 AND m\.timestamp > \$2\)\s+OR\s+\(\s*m\.is_group = TRUE\s+AND EXISTS \(\s*SELECT 1\s+FROM group_members AS gm\s+WHERE gm\.group_id = m\.to_user_id\s+AND gm\.user_id = \$3\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$4\s*\)\s*\)\s+ORDER BY m\.timestamp ASC`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", int64(1001), "2026-04-17T10:00:00Z").
+		WillReturnRows(rows)
+
+	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	syncRsp := resp.GetSyncMsgsRsp()
+	assert.NotNil(t, syncRsp)
+	if syncRsp != nil {
+		assert.Len(t, syncRsp.GetMsgs(), 101)
 	}
 }
 

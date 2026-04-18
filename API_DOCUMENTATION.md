@@ -316,7 +316,7 @@ message StoreNewMessage {
   int64 from_user_id = 1;
   int64 to_user_id = 2;
   string content = 3;
-  string message_type = 4; // text, image, gif, file
+  string message_type = 4; // text, image, gif, file, audio, video, link
   bool is_group = 5;
   string real_file_name = 6; // 文件消息对应的原始文件名，非文件消息为空
 }
@@ -350,7 +350,7 @@ message MessageRsp {
   int64 to_user_id = 2;
   string content = 3;
   string timestamp = 4;
-  string msg_type = 5;
+  string msg_type = 5; // text, image, gif, file, audio, video, link
   bool is_group = 6;
   string real_file_name = 7;
 }

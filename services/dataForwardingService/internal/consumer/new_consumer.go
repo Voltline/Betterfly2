@@ -616,6 +616,7 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_MessageRsp{
 				MessageRsp: &pb.MessageRsp{
+					MessageId:    msg.GetMessageId(),
 					FromUserId:   msg.GetFromUserId(),
 					ToUserId:     msg.GetToUserId(),
 					Content:      msg.GetContent(),
@@ -636,6 +637,7 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		var dfMsgs []*pb.MessageRsp
 		for _, msg := range syncMsgs.GetMsgs() {
 			dfMsgs = append(dfMsgs, &pb.MessageRsp{
+				MessageId:    msg.GetMessageId(),
 				FromUserId:   msg.GetFromUserId(),
 				ToUserId:     msg.GetToUserId(),
 				Content:      msg.GetContent(),

@@ -353,6 +353,7 @@ message MessageRsp {
   string msg_type = 5; // text, image, gif, file, audio, video, link
   bool is_group = 6;
   string real_file_name = 7;
+  int64 message_id = 8;
 }
 ```
 

@@ -225,6 +225,7 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 	var msgResponses []*storage.MessageRsp
 	for _, msg := range messages {
 		msgResponses = append(msgResponses, &storage.MessageRsp{
+			MessageId:    msg.MessageID,
 			FromUserId:   msg.FromUserID,
 			ToUserId:     msg.ToUserID,
 			Content:      msg.Content,
@@ -344,6 +345,7 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_MsgRsp{
 			MsgRsp: &storage.MessageRsp{
+				MessageId:    msg.MessageID,
 				FromUserId:   msg.FromUserID,
 				ToUserId:     msg.ToUserID,
 				Content:      msg.Content,

@@ -181,6 +181,7 @@ func TestHandleQueryMessage(t *testing.T) {
 
 	msgRsp := resp.GetMsgRsp()
 	assert.NotNil(t, msgRsp)
+	assert.Equal(t, int64(12345), msgRsp.MessageId)
 	assert.Equal(t, int64(1000), msgRsp.FromUserId)
 	assert.Equal(t, int64(1001), msgRsp.ToUserId)
 	assert.Equal(t, "Hello, World!", msgRsp.Content)
@@ -345,11 +346,14 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 	syncRsp := resp.GetSyncMsgsRsp()
 	assert.NotNil(t, syncRsp)
 	if syncRsp != nil && assert.Len(t, syncRsp.GetMsgs(), 3) {
+		assert.Equal(t, int64(20001), syncRsp.GetMsgs()[0].GetMessageId())
 		assert.Equal(t, int64(1001), syncRsp.GetMsgs()[0].GetToUserId())
 		assert.False(t, syncRsp.GetMsgs()[0].GetIsGroup())
+		assert.Equal(t, int64(20002), syncRsp.GetMsgs()[1].GetMessageId())
 		assert.Equal(t, int64(1001), syncRsp.GetMsgs()[1].GetFromUserId())
 		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[1].GetToUserId())
 		assert.True(t, syncRsp.GetMsgs()[1].GetIsGroup())
+		assert.Equal(t, int64(20003), syncRsp.GetMsgs()[2].GetMessageId())
 		assert.Equal(t, int64(3003), syncRsp.GetMsgs()[2].GetFromUserId())
 		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[2].GetToUserId())
 		assert.True(t, syncRsp.GetMsgs()[2].GetIsGroup())
@@ -437,6 +441,7 @@ func TestBuildMessageResponse(t *testing.T) {
 
 	msgRsp := resp.GetMsgRsp()
 	assert.NotNil(t, msgRsp)
+	assert.Equal(t, int64(12345), msgRsp.MessageId)
 	assert.Equal(t, int64(1000), msgRsp.FromUserId)
 	assert.Equal(t, int64(1001), msgRsp.ToUserId)
 	assert.Equal(t, "Test message", msgRsp.Content)
@@ -466,6 +471,7 @@ func TestBuildMessageResponse_PreservesRealFileName(t *testing.T) {
 
 	msgRsp := resp.GetMsgRsp()
 	assert.NotNil(t, msgRsp)
+	assert.Equal(t, int64(12346), msgRsp.GetMessageId())
 	assert.Equal(t, "file", msgRsp.GetMsgType())
 	assert.Equal(t, "report.pdf", msgRsp.GetRealFileName())
 }

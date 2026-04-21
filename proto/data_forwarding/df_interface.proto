@@ -52,5 +52,6 @@ message ResponseMessage {
     ContactListRsp contact_list_rsp = 12;
     GroupMembersRsp group_members_rsp = 13;
     JoinedGroupsRsp joined_groups_rsp = 14;
+    PostAckRsp post_ack_rsp = 15;
   }
 }

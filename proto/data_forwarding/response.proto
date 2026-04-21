@@ -40,6 +40,10 @@ message Warn {
   string warning_message = 1;
 }
 
+message PostAckRsp {
+  int64 message_id = 1;
+}
+
 message UserInfo {
   int64 send_to_user_id = 1;
   string query_user_name = 2;

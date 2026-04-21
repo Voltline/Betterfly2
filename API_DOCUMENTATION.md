@@ -330,6 +330,14 @@ message StoreMsgRsp {
 }
 ```
 
+数据转发服务收到 `StoreMsgRsp` 后，会向发送方客户端返回 `PostAckRsp`：
+
+```protobuf
+message PostAckRsp {
+  int64 message_id = 1;
+}
+```
+
 ---
 
 ### 3. 查询消息

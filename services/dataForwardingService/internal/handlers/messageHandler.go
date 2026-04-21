@@ -205,20 +205,7 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 // sendMessageToStorage 发送消息到storageService进行存储
 func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 	// 构建storage请求消息
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   payload.GetToId(),
-		Payload: &storage.RequestMessage_StoreNewMessage{
-			StoreNewMessage: &storage.StoreNewMessage{
-				FromUserId:   payload.GetFromId(),
-				ToUserId:     payload.GetToId(),
-				Content:      payload.GetMsg(),
-				MessageType:  payload.GetMsgType(),
-				IsGroup:      payload.GetIsGroup(),
-				RealFileName: payload.GetRealFileName(),
-			},
-		},
-	}
+	storeReq := buildStoreNewMessageStorageRequest(payload, currentContainerID)
 
 	// 序列化存储请求
 	storeReqBytes, err := proto.Marshal(storeReq)
@@ -247,6 +234,23 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 
 	logger.Sugar().Debugf("消息已保存到storageService: from=%d to=%d", payload.GetFromId(), payload.GetToId())
 	return nil
+}
+
+func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID string) *storage.RequestMessage {
+	return &storage.RequestMessage{
+		FromKafkaTopic: currentContainerID,
+		TargetUserId:   payload.GetFromId(),
+		Payload: &storage.RequestMessage_StoreNewMessage{
+			StoreNewMessage: &storage.StoreNewMessage{
+				FromUserId:   payload.GetFromId(),
+				ToUserId:     payload.GetToId(),
+				Content:      payload.GetMsg(),
+				MessageType:  payload.GetMsgType(),
+				IsGroup:      payload.GetIsGroup(),
+				RealFileName: payload.GetRealFileName(),
+			},
+		},
+	}
 }
 
 func handlePostMessage(fromID int64, message *pb.RequestMessage) error {

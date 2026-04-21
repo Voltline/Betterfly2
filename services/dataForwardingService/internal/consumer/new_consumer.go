@@ -603,10 +603,8 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 
 	switch payload := storageResp.Payload.(type) {
 	case *storage.ResponseMessage_StoreMsgRsp:
-		// 存储消息响应 - 目前客户端可能不需要，但可以发送确认
 		sugar.Debugf("收到消息存储响应: message_id=%d", payload.StoreMsgRsp.GetMessageId())
-		// 可以发送简单的确认消息，这里暂时不发送具体响应
-		return nil
+		dfResp = buildPostAckResponse(payload.StoreMsgRsp)
 
 	case *storage.ResponseMessage_MsgRsp:
 		// 单条消息查询响应
@@ -696,4 +694,14 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 
 	sugar.Debugf("storage响应已转发给用户: target_user=%d", storageResp.TargetUserId)
 	return nil
+}
+
+func buildPostAckResponse(storeMsgRsp *storage.StoreMsgRsp) *pb.ResponseMessage {
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_PostAckRsp{
+			PostAckRsp: &pb.PostAckRsp{
+				MessageId: storeMsgRsp.GetMessageId(),
+			},
+		},
+	}
 }

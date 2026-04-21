@@ -34,6 +34,34 @@ func TestBuildSyncMessagesStorageRequestRoutesResponseToRequester(t *testing.T) 
 	}
 }
 
+func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
+	post := &pb.Post{
+		FromId:       1001,
+		ToId:         2002,
+		Msg:          "hello",
+		MsgType:      "text",
+		IsGroup:      false,
+		RealFileName: "",
+	}
+
+	storeReq := buildStoreNewMessageStorageRequest(post, "df-pod-1")
+
+	if storeReq.FromKafkaTopic != "df-pod-1" {
+		t.Fatalf("expected FromKafkaTopic to be df-pod-1, got %q", storeReq.FromKafkaTopic)
+	}
+	if storeReq.TargetUserId != 1001 {
+		t.Fatalf("expected StoreMsgRsp target to be sender 1001, got %d", storeReq.TargetUserId)
+	}
+
+	storePayload, ok := storeReq.Payload.(*storage.RequestMessage_StoreNewMessage)
+	if !ok {
+		t.Fatalf("expected StoreNewMessage payload, got %T", storeReq.Payload)
+	}
+	if storePayload.StoreNewMessage.GetToUserId() != 2002 {
+		t.Fatalf("expected stored message target 2002, got %d", storePayload.StoreNewMessage.GetToUserId())
+	}
+}
+
 func TestValidatePostPayloadForFileMessages(t *testing.T) {
 	tests := []struct {
 		name    string

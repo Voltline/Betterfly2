@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: friend-service
+  namespace: betterfly2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: friend-service
+  template:
+    metadata:
+      labels:
+        app: friend-service
+    spec:
+      containers:
+        - name: friend-service
+          image: betterfly2/friend-service:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: PORT
+              value: "54401"
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+          ports:
+            - name: internal
+              containerPort: 54401
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: friend-service
+  namespace: betterfly2
+spec:
+  selector:
+    app: friend-service
+  ports:
+    - name: internal
+      port: 54401
+      targetPort: internal

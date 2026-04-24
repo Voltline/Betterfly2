@@ -1,0 +1,41 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: betterfly2-websocket
+  namespace: betterfly2
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: betterfly2.local
+      http:
+        paths:
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: data-forwarding
+                port:
+                  name: websocket
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: betterfly2-storage
+  namespace: betterfly2
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: betterfly2.local
+      http:
+        paths:
+          - path: /storage_service
+            pathType: Prefix
+            backend:
+              service:
+                name: storage-service
+                port:
+                  name: http

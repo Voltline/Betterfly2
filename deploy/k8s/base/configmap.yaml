@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: betterfly2-config
+  namespace: betterfly2
+data:
+  LOG_LEVEL: debug
+  REDIS_ADDR: redis:6379
+  KAFKA_BROKER: kafka:9092
+  KAFKA_STORAGE_TOPIC: storage-service
+  KAFKA_CONSUMER_GROUP: storage-service-group
+  AUTH_RPC_ADDR: auth-service:50051
+  HTTP_PORT: "8081"
+  RUSTFS_REGION: cn-east-1
+  RUSTFS_ENDPOINT_URL: http://rustfs:9000
+  RUSTFS_EXTERNAL_ENDPOINT_URL: ""
+  RUSTFS_EXTERNAL_PORT: "9000"
+  RUSTFS_BUCKET: betterfly-files
+  REGION_ID: local

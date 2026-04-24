@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-forwarding
+  namespace: betterfly2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: data-forwarding
+  template:
+    metadata:
+      labels:
+        app: data-forwarding
+    spec:
+      containers:
+        - name: data-forwarding
+          image: betterfly2/data-forwarding-service:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: PORT
+              value: "54342"
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+          ports:
+            - name: websocket
+              containerPort: 54342
+          readinessProbe:
+            tcpSocket:
+              port: websocket
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-forwarding
+  namespace: betterfly2
+spec:
+  selector:
+    app: data-forwarding
+  ports:
+    - name: websocket
+      port: 54342
+      targetPort: websocket

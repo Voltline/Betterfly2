@@ -2,9 +2,12 @@ package handlers
 
 import (
 	pb "Betterfly2/proto/data_forwarding"
+	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func TestBuildSyncMessagesStorageRequestRoutesResponseToRequester(t *testing.T) {
@@ -59,6 +62,44 @@ func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
 	}
 	if storePayload.StoreNewMessage.GetToUserId() != 2002 {
 		t.Fatalf("expected stored message target 2002, got %d", storePayload.StoreNewMessage.GetToUserId())
+	}
+}
+
+func TestBuildGroupPostBatchDeliveryEnvelope(t *testing.T) {
+	post := &pb.Post{
+		FromId:  1001,
+		ToId:    9001,
+		Msg:     "hello group",
+		MsgType: "text",
+		IsGroup: true,
+	}
+
+	envBytes, err := buildGroupPostDeliveryEnvelopeBytes([]int64{2002, 2003}, post)
+	if err != nil {
+		t.Fatalf("buildGroupPostDeliveryEnvelopeBytes failed: %v", err)
+	}
+
+	env := &envelope.Envelope{}
+	if err := proto.Unmarshal(envBytes, env); err != nil {
+		t.Fatalf("failed to unmarshal envelope: %v", err)
+	}
+	if env.GetType() != envelope.MessageType_DF_RESPONSE {
+		t.Fatalf("expected DF_RESPONSE, got %v", env.GetType())
+	}
+
+	internalDelivery := &pb.DFInternalDelivery{}
+	if err := proto.Unmarshal(env.GetPayload(), internalDelivery); err != nil {
+		t.Fatalf("failed to unmarshal internal delivery: %v", err)
+	}
+	batch := internalDelivery.GetGroupPostBatchDelivery()
+	if batch == nil {
+		t.Fatalf("expected GroupPostBatchDelivery, got %T", internalDelivery.Payload)
+	}
+	if len(batch.GetTargetUserIds()) != 2 {
+		t.Fatalf("expected 2 target users, got %d", len(batch.GetTargetUserIds()))
+	}
+	if batch.GetPost().GetMsg() != "hello group" {
+		t.Fatalf("unexpected post msg: %s", batch.GetPost().GetMsg())
 	}
 }
 

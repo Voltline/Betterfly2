@@ -4,14 +4,13 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
+	"Betterfly2/shared/mq"
 	"data_forwarding_service/internal/connection"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"fmt"
 	"os"
 	"time"
-
-	"google.golang.org/protobuf/proto"
 )
 
 // Router 负责消息路由
@@ -99,12 +98,7 @@ func (r *Router) routeCrossContainer(toUserID string, targetContainerID string, 
 		return fmt.Errorf("本地路由失败且Redis映射异常")
 	}
 
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_DF_REQUEST,
-		Payload: message,
-	}
-	envBytes, err := proto.Marshal(env)
+	envBytes, err := mq.MarshalEnvelopeBytes(envelope.MessageType_DF_REQUEST, message)
 	if err != nil {
 		sugar.Errorf("序列化Envelope失败: %v", err)
 		return err
@@ -133,12 +127,7 @@ func (r *Router) handleOfflineMessage(toUserID string, message []byte) error {
 
 	// 临时方案：通过Kafka发布到存储服务
 	// 后续应该实现完整的离线消息存储
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_DF_REQUEST,
-		Payload: message,
-	}
-	envBytes, err := proto.Marshal(env)
+	envBytes, err := mq.MarshalEnvelopeBytes(envelope.MessageType_DF_REQUEST, message)
 	if err != nil {
 		sugar.Errorf("序列化Envelope失败: %v", err)
 		return err

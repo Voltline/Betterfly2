@@ -1,8 +1,9 @@
 module Betterfly2/shared
 
-go 1.21
+go 1.22
 
 require (
+	Betterfly2/proto v0.0.0
 	github.com/prometheus/client_golang v1.21.0
 	go.uber.org/zap v1.27.0
 	gorm.io/driver/postgres v1.5.11
@@ -27,5 +28,7 @@ require (
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	google.golang.org/protobuf v1.36.1 // indirect
+	google.golang.org/protobuf v1.36.6 // indirect
 )
+
+replace Betterfly2/proto => ../proto

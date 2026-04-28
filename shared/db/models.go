@@ -13,12 +13,12 @@ type User struct {
 }
 
 type Friend struct {
-	UserID     int64  `gorm:"primaryKey;comment:当前用户ID"`
+	UserID     int64  `gorm:"primaryKey;index:idx_friends_user_active_update,priority:1;comment:当前用户ID"`
 	FriendID   int64  `gorm:"primaryKey;comment:对方用户ID"`
 	IsNotify   bool   `gorm:"comment:是否开启好友消息通知"`
 	Alias      string `gorm:"type:varchar(50);comment:对好友的备注名"`
-	IsDelete   bool   `gorm:"comment:是否为已删除好友"`
-	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间，用于同步"`
+	IsDelete   bool   `gorm:"index:idx_friends_user_active_update,priority:2;comment:是否为已删除好友"`
+	UpdateTime string `gorm:"type:varchar(25);index:idx_friends_user_active_update,priority:3;comment:上次更新时间，用于同步"`
 }
 
 type Group struct {
@@ -31,8 +31,8 @@ type Group struct {
 }
 
 type GroupMember struct {
-	GroupID    int64  `gorm:"primaryKey;comment:群组ID"`
-	UserID     int64  `gorm:"primaryKey;comment:成员用户ID"`
+	GroupID    int64  `gorm:"primaryKey;index:idx_group_members_user_group,priority:2;comment:群组ID"`
+	UserID     int64  `gorm:"primaryKey;index:idx_group_members_user_group,priority:1;comment:成员用户ID"`
 	Role       string `gorm:"type:varchar(20);comment:成员角色，例如owner/member"`
 	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间"`
 }
@@ -40,12 +40,12 @@ type GroupMember struct {
 type Message struct {
 	MessageID    int64  `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
 	FromUserID   int64  `gorm:"type:int8;comment:消息来源用户ID"`
-	ToUserID     int64  `gorm:"type:int8;comment:消息去向用户ID"`
+	ToUserID     int64  `gorm:"type:int8;index:idx_messages_sync_target_time,priority:2;comment:消息去向用户ID"`
 	Content      string `gorm:"type:varchar(700);comment:消息内容"`
-	Timestamp    string `gorm:"type:varchar(25);comment:消息产生时间"`
+	Timestamp    string `gorm:"type:varchar(25);index:idx_messages_sync_target_time,priority:3;comment:消息产生时间"`
 	MessageType  string `gorm:"type:varchar(10);comment:消息类型"`
 	RealFileName string `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
-	IsGroup      bool   `gorm:"type:bool;comment:消息是否来自于群聊"`
+	IsGroup      bool   `gorm:"type:bool;index:idx_messages_sync_target_time,priority:1;comment:消息是否来自于群聊"`
 }
 
 type FileMetadata struct {

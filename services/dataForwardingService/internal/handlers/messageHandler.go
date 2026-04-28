@@ -7,20 +7,120 @@ import (
 	auth "Betterfly2/proto/server_rpc/auth"
 	storage "Betterfly2/proto/storage"
 	sharedDB "Betterfly2/shared/db"
+	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/mq"
 	"context"
 	"data_forwarding_service/internal/grpcClient"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
-	"data_forwarding_service/internal/utils"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
 )
+
+type dfRequestContext struct {
+	fromID  int64
+	message *pb.RequestMessage
+}
+
+type dfRequestResult struct {
+	code int
+}
+
+var dfRequestRouter = newDFRequestRouter()
+
+func newDFRequestRouter() *dispatch.OneofRouter[dfRequestContext, dfRequestResult] {
+	router := dispatch.NewOneofRouter[dfRequestContext, dfRequestResult]()
+	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_Post) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
+		return dfRequestResult{}, handlePostMessage(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryUser) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryUser 消息")
+		return dfRequestResult{}, handleQueryUser(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_InsertContact) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 InsertContact 消息")
+		return dfRequestResult{}, handleInsertContact(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryContacts) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryContacts 消息")
+		return dfRequestResult{}, handleQueryContacts(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_DeleteContact) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 DeleteContact 消息")
+		return dfRequestResult{}, handleDeleteContact(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateContactAlias) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 UpdateContactAlias 消息")
+		return dfRequestResult{}, handleUpdateContactAlias(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateContactNotify) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 UpdateContactNotify 消息")
+		return dfRequestResult{}, handleUpdateContactNotify(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryGroup) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryGroup 消息")
+		return dfRequestResult{}, handleQueryGroup(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_InsertGroup) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 InsertGroup 消息")
+		return dfRequestResult{}, handleInsertGroup(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_InsertGroupUser) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 InsertGroupUser 消息")
+		return dfRequestResult{}, handleInsertGroupUser(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryGroupMembers) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryGroupMembers 消息")
+		return dfRequestResult{}, handleQueryGroupMembers(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryJoinedGroups) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryJoinedGroups 消息")
+		return dfRequestResult{}, handleQueryJoinedGroups(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_DeleteGroupUser) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 DeleteGroupUser 消息")
+		return dfRequestResult{}, handleDeleteGroupUser(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateAvatar) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 UpdateAvatar 消息")
+		return dfRequestResult{}, handleUpdateAvatar(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateUserName) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 UpdateUserName 消息")
+		return dfRequestResult{}, handleUpdateUserName(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateUserAvatar) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 UpdateUserAvatar 消息")
+		return dfRequestResult{}, handleUpdateUserAvatar(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_QueryMessage) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QueryMessage 消息: message_id=%d", payload.QueryMessage.GetMessageId())
+		return dfRequestResult{}, handleQueryMessage(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_QuerySyncMessages) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 QuerySyncMessages 消息: to_user_id=%d", payload.QuerySyncMessages.GetToUserId())
+		return dfRequestResult{}, handleQuerySyncMessages(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(_ dfRequestContext, _ *pb.RequestMessage_Logout) (dfRequestResult, error) {
+		logger.Sugar().Infof("用户登出")
+		return dfRequestResult{code: 1}, nil
+	})
+	dispatch.Register(router, func(_ dfRequestContext, payload *pb.RequestMessage_Login) (dfRequestResult, error) {
+		logger.Sugar().Warnf("收到认证服务请求，不处理：%+v", payload)
+		return dfRequestResult{}, nil
+	})
+	dispatch.Register(router, func(_ dfRequestContext, payload *pb.RequestMessage_Signup) (dfRequestResult, error) {
+		logger.Sugar().Warnf("收到认证服务请求，不处理：%+v", payload)
+		return dfRequestResult{}, nil
+	})
+	return router
+}
 
 func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
 	req := &pb.RequestMessage{}
@@ -35,73 +135,18 @@ func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
 }
 
 func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error) {
-	sugar := logger.Sugar()
-	var err error
-	res := 0
-	switch payload := message.Payload.(type) {
-	case *pb.RequestMessage_Post:
-		sugar.Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
-		err = handlePostMessage(fromID, message)
-	case *pb.RequestMessage_QueryUser:
-		sugar.Debugf("收到 QueryUser 消息")
-		err = handleQueryUser(fromID, message)
-	case *pb.RequestMessage_InsertContact:
-		sugar.Debugf("收到 InsertContact 消息")
-		err = handleInsertContact(fromID, message)
-	case *pb.RequestMessage_QueryContacts:
-		sugar.Debugf("收到 QueryContacts 消息")
-		err = handleQueryContacts(fromID, message)
-	case *pb.RequestMessage_DeleteContact:
-		sugar.Debugf("收到 DeleteContact 消息")
-		err = handleDeleteContact(fromID, message)
-	case *pb.RequestMessage_UpdateContactAlias:
-		sugar.Debugf("收到 UpdateContactAlias 消息")
-		err = handleUpdateContactAlias(fromID, message)
-	case *pb.RequestMessage_UpdateContactNotify:
-		sugar.Debugf("收到 UpdateContactNotify 消息")
-		err = handleUpdateContactNotify(fromID, message)
-	case *pb.RequestMessage_QueryGroup:
-		sugar.Debugf("收到 QueryGroup 消息")
-		err = handleQueryGroup(fromID, message)
-	case *pb.RequestMessage_InsertGroup:
-		sugar.Debugf("收到 InsertGroup 消息")
-		err = handleInsertGroup(fromID, message)
-	case *pb.RequestMessage_InsertGroupUser:
-		sugar.Debugf("收到 InsertGroupUser 消息")
-		err = handleInsertGroupUser(fromID, message)
-	case *pb.RequestMessage_QueryGroupMembers:
-		sugar.Debugf("收到 QueryGroupMembers 消息")
-		err = handleQueryGroupMembers(fromID, message)
-	case *pb.RequestMessage_QueryJoinedGroups:
-		sugar.Debugf("收到 QueryJoinedGroups 消息")
-		err = handleQueryJoinedGroups(fromID, message)
-	case *pb.RequestMessage_DeleteGroupUser:
-		sugar.Debugf("收到 DeleteGroupUser 消息")
-		err = handleDeleteGroupUser(fromID, message)
-	case *pb.RequestMessage_UpdateAvatar:
-		sugar.Debugf("收到 UpdateAvatar 消息")
-		err = handleUpdateAvatar(fromID, message)
-	case *pb.RequestMessage_UpdateUserName:
-		sugar.Debugf("收到 UpdateUserName 消息")
-		err = handleUpdateUserName(fromID, message)
-	case *pb.RequestMessage_UpdateUserAvatar:
-		sugar.Debugf("收到 UpdateUserAvatar 消息")
-		err = handleUpdateUserAvatar(fromID, message)
-	case *pb.RequestMessage_QueryMessage:
-		sugar.Debugf("收到 QueryMessage 消息: message_id=%d", payload.QueryMessage.GetMessageId())
-		err = handleQueryMessage(fromID, message)
-	case *pb.RequestMessage_QuerySyncMessages:
-		sugar.Debugf("收到 QuerySyncMessages 消息: to_user_id=%d", payload.QuerySyncMessages.GetToUserId())
-		err = handleQuerySyncMessages(fromID, message)
-	case *pb.RequestMessage_Logout:
-		res = 1
-		sugar.Infof("用户登出")
-	case *pb.RequestMessage_Login, *pb.RequestMessage_Signup:
-		sugar.Warnf("收到认证服务请求，不处理：%+v", payload)
-	default:
-		sugar.Warnf("收到不可处理Payload: %+v", payload)
+	result, err := dfRequestRouter.Dispatch(dfRequestContext{
+		fromID:  fromID,
+		message: message,
+	}, message.Payload)
+	if err != nil {
+		if errors.Is(err, dispatch.ErrNilPayload) || errors.Is(err, dispatch.ErrUnregisteredPayload) {
+			logger.Sugar().Warnf("收到不可处理Payload: %+v", message.Payload)
+			return 0, nil
+		}
+		return 0, err
 	}
-	return res, err
+	return result.code, nil
 }
 
 func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64, error) {
@@ -204,30 +249,8 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 
 // sendMessageToStorage 发送消息到storageService进行存储
 func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
-	// 构建storage请求消息
 	storeReq := buildStoreNewMessageStorageRequest(payload, currentContainerID)
-
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布消息到storage-service失败: %v", err)
 		return err
 	}
@@ -237,35 +260,24 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 }
 
 func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID string) *storage.RequestMessage {
-	return &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   payload.GetFromId(),
-		Payload: &storage.RequestMessage_StoreNewMessage{
-			StoreNewMessage: &storage.StoreNewMessage{
-				FromUserId:   payload.GetFromId(),
-				ToUserId:     payload.GetToId(),
-				Content:      payload.GetMsg(),
-				MessageType:  payload.GetMsgType(),
-				IsGroup:      payload.GetIsGroup(),
-				RealFileName: payload.GetRealFileName(),
-			},
+	req := newStorageRequest(currentContainerID, payload.GetFromId())
+	req.Payload = &storage.RequestMessage_StoreNewMessage{
+		StoreNewMessage: &storage.StoreNewMessage{
+			FromUserId:   payload.GetFromId(),
+			ToUserId:     payload.GetToId(),
+			Content:      payload.GetMsg(),
+			MessageType:  payload.GetMsgType(),
+			IsGroup:      payload.GetIsGroup(),
+			RealFileName: payload.GetRealFileName(),
 		},
 	}
+	return req
 }
 
 func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法转发消息")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "转发消息", "post", (*pb.RequestMessage).GetPost)
 	if err != nil {
 		return err
-	}
-	payload := message.GetPost()
-	if payload == nil {
-		return errors.New("post消息为空")
 	}
 	payload.FromId = fromID
 	if err := validatePostPayload(payload); err != nil {
@@ -275,11 +287,7 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 	targetTopic := redisClient.GetContainerByConnection(targetUserID)
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	// 无论用户是否在线，都将消息保存到storageService
 	storageErr := sendMessageToStorage(payload, currentContainerID)
@@ -369,58 +377,21 @@ func validatePostPayload(payload *pb.Post) error {
 
 // handleQueryMessage 处理查询单条消息请求
 func handleQueryMessage(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询消息")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "查询消息", "query_message", (*pb.RequestMessage).GetQueryMessage)
 	if err != nil {
 		return err
 	}
-	payload := message.GetQueryMessage()
-	if payload == nil {
-		return errors.New("query_message消息为空")
-	}
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
-	// 构建storage查询请求
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID, // 查询结果返回给请求者
-		Payload: &storage.RequestMessage_QueryMessage{
-			QueryMessage: &storage.QueryMessage{
-				MessageId: payload.GetMessageId(),
-			},
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_QueryMessage{
+		QueryMessage: &storage.QueryMessage{
+			MessageId: payload.GetMessageId(),
 		},
 	}
 
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage查询请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布查询请求到storage-service失败: %v", err)
 		return err
 	}
@@ -431,49 +402,15 @@ func handleQueryMessage(fromID int64, message *pb.RequestMessage) error {
 
 // handleQuerySyncMessages 处理同步消息请求
 func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询同步消息")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "查询同步消息", "query_sync_messages", (*pb.RequestMessage).GetQuerySyncMessages)
 	if err != nil {
 		return err
 	}
-	payload := message.GetQuerySyncMessages()
-	if payload == nil {
-		return errors.New("query_sync_messages消息为空")
-	}
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	storeReq := buildSyncMessagesStorageRequest(fromID, payload, currentContainerID)
-
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage同步查询请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布同步查询请求到storage-service失败: %v", err)
 		return err
 	}
@@ -487,73 +424,33 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildSyncMessagesStorageRequest(fromID int64, payload *pb.QuerySyncMessages, currentContainerID string) *storage.RequestMessage {
-	return &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		// storage 响应需要回到发起同步请求的登录用户，而不是查询目标实体。
-		TargetUserId: fromID,
-		Payload: &storage.RequestMessage_QuerySyncMessages{
-			QuerySyncMessages: &storage.QuerySyncMessages{
-				ToUserId:  payload.GetToUserId(),
-				Timestamp: payload.GetTimestamp(),
-			},
+	req := newStorageRequest(currentContainerID, fromID)
+	req.Payload = &storage.RequestMessage_QuerySyncMessages{
+		QuerySyncMessages: &storage.QuerySyncMessages{
+			ToUserId:  payload.GetToUserId(),
+			Timestamp: payload.GetTimestamp(),
 		},
 	}
+	return req
 }
 
 // handleQueryUser 处理查询用户信息请求
 func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询用户信息")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "查询用户信息", "query_user", (*pb.RequestMessage).GetQueryUser)
 	if err != nil {
 		return err
 	}
-	payload := message.GetQueryUser()
-	if payload == nil {
-		return errors.New("query_user消息为空")
-	}
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
-	// 构建storage查询请求
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID, // 查询结果返回给请求者
-		Payload: &storage.RequestMessage_QueryUser{
-			QueryUser: &storage.QueryUser{
-				UserId: payload.GetToQueryUserId(), // 要查询的用户ID
-			},
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_QueryUser{
+		QueryUser: &storage.QueryUser{
+			UserId: payload.GetToQueryUserId(),
 		},
 	}
 
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage用户查询请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布用户查询请求到storage-service失败: %v", err)
 		return err
 	}
@@ -563,30 +460,18 @@ func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
 }
 
 func handleInsertContact(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法添加好友")
-	}
-
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	payload, err := authenticatedPayload(fromID, message, "添加好友", "insert_contact", (*pb.RequestMessage).GetInsertContact)
+	if err != nil {
 		return err
 	}
-
-	payload := message.GetInsertContact()
-	if payload == nil {
-		return errors.New("insert_contact消息为空")
-	}
-	if payload.GetToInsertUserId() <= 0 {
-		return errors.New("to_insert_user_id非法")
+	if err := requirePositiveID("to_insert_user_id", payload.GetToInsertUserId()); err != nil {
+		return err
 	}
 	if payload.GetToInsertUserId() == fromID {
 		return errors.New("不能添加自己为好友")
 	}
 
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildInsertContactFriendRequest(fromID, payload.GetToInsertUserId(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布InsertContact请求到friend-service失败: %v", err)
@@ -598,24 +483,11 @@ func handleInsertContact(fromID int64, message *pb.RequestMessage) error {
 }
 
 func handleQueryContacts(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询好友列表")
-	}
-
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if _, err := authenticatedPayload(fromID, message, "查询好友列表", "query_contacts", (*pb.RequestMessage).GetQueryContacts); err != nil {
 		return err
 	}
 
-	payload := message.GetQueryContacts()
-	if payload == nil {
-		return errors.New("query_contacts消息为空")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	friendReq := buildQueryContactsFriendRequest(fromID, currentContainerID)
 
@@ -629,38 +501,25 @@ func handleQueryContacts(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildQueryContactsFriendRequest(fromID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_QueryFriendList{
-			QueryFriendList: &friend.QueryFriendList{
-				UserId: fromID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_QueryFriendList{
+		QueryFriendList: &friend.QueryFriendList{
+			UserId: fromID,
 		},
 	}
+	return req
 }
 
 func handleQueryGroup(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询群信息")
+	payload, err := authenticatedPayload(fromID, message, "查询群信息", "query_group", (*pb.RequestMessage).GetQueryGroup)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("to_query_group_id", payload.GetToQueryGroupId()); err != nil {
 		return err
 	}
 
-	payload := message.GetQueryGroup()
-	if payload == nil {
-		return errors.New("query_group消息为空")
-	}
-	if payload.GetToQueryGroupId() <= 0 {
-		return errors.New("to_query_group_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildQueryGroupFriendRequest(fromID, payload.GetToQueryGroupId(), payload.GetClientNeedSave(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布QueryGroup请求到friend-service失败: %v", err)
@@ -672,40 +531,27 @@ func handleQueryGroup(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildQueryGroupFriendRequest(fromID, groupID int64, clientNeedSave bool, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_QueryGroup{
-			QueryGroup: &friend.QueryGroup{
-				RequestUserId:  fromID,
-				GroupId:        groupID,
-				ClientNeedSave: clientNeedSave,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_QueryGroup{
+		QueryGroup: &friend.QueryGroup{
+			RequestUserId:  fromID,
+			GroupId:        groupID,
+			ClientNeedSave: clientNeedSave,
 		},
 	}
+	return req
 }
 
 func handleInsertGroup(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法创建群组")
-	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	payload, err := authenticatedPayload(fromID, message, "创建群组", "insert_group", (*pb.RequestMessage).GetInsertGroup)
+	if err != nil {
 		return err
-	}
-
-	payload := message.GetInsertGroup()
-	if payload == nil {
-		return errors.New("insert_group消息为空")
 	}
 	if payload.GetToBeCreatedGroupId() <= 0 || strings.TrimSpace(payload.GetToBeCreatedGroupName()) == "" {
 		return errors.New("群组信息非法")
 	}
 
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildInsertGroupFriendRequest(fromID, payload.GetToBeCreatedGroupId(), payload.GetToBeCreatedGroupName(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布InsertGroup请求到friend-service失败: %v", err)
@@ -717,40 +563,27 @@ func handleInsertGroup(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildInsertGroupFriendRequest(fromID, groupID int64, groupName, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_CreateGroup{
-			CreateGroup: &friend.CreateGroup{
-				OwnerUserId: fromID,
-				GroupId:     groupID,
-				GroupName:   groupName,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_CreateGroup{
+		CreateGroup: &friend.CreateGroup{
+			OwnerUserId: fromID,
+			GroupId:     groupID,
+			GroupName:   groupName,
 		},
 	}
+	return req
 }
 
 func handleInsertGroupUser(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法加入群组")
+	payload, err := authenticatedPayload(fromID, message, "加入群组", "insert_group_user", (*pb.RequestMessage).GetInsertGroupUser)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("target_group_id", payload.GetTargetGroupId()); err != nil {
 		return err
 	}
 
-	payload := message.GetInsertGroupUser()
-	if payload == nil {
-		return errors.New("insert_group_user消息为空")
-	}
-	if payload.GetTargetGroupId() <= 0 {
-		return errors.New("target_group_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildInsertGroupUserFriendRequest(fromID, payload.GetTargetGroupId(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布InsertGroupUser请求到friend-service失败: %v", err)
@@ -762,39 +595,26 @@ func handleInsertGroupUser(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildInsertGroupUserFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_AddGroupMember{
-			AddGroupMember: &friend.AddGroupMember{
-				UserId:  fromID,
-				GroupId: groupID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_AddGroupMember{
+		AddGroupMember: &friend.AddGroupMember{
+			UserId:  fromID,
+			GroupId: groupID,
 		},
 	}
+	return req
 }
 
 func handleQueryGroupMembers(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询群成员")
+	payload, err := authenticatedPayload(fromID, message, "查询群成员", "query_group_members", (*pb.RequestMessage).GetQueryGroupMembers)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("target_group_id", payload.GetTargetGroupId()); err != nil {
 		return err
 	}
 
-	payload := message.GetQueryGroupMembers()
-	if payload == nil {
-		return errors.New("query_group_members消息为空")
-	}
-	if payload.GetTargetGroupId() <= 0 {
-		return errors.New("target_group_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildQueryGroupMembersFriendRequest(fromID, payload.GetTargetGroupId(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布QueryGroupMembers请求到friend-service失败: %v", err)
@@ -806,23 +626,11 @@ func handleQueryGroupMembers(fromID int64, message *pb.RequestMessage) error {
 }
 
 func handleQueryJoinedGroups(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法查询已加入群列表")
-	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if _, err := authenticatedPayload(fromID, message, "查询已加入群列表", "query_joined_groups", (*pb.RequestMessage).GetQueryJoinedGroups); err != nil {
 		return err
 	}
 
-	payload := message.GetQueryJoinedGroups()
-	if payload == nil {
-		return errors.New("query_joined_groups消息为空")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildQueryJoinedGroupsFriendRequest(fromID, currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布QueryJoinedGroups请求到friend-service失败: %v", err)
@@ -834,51 +642,36 @@ func handleQueryJoinedGroups(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildQueryJoinedGroupsFriendRequest(fromID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_QueryJoinedGroups{
-			QueryJoinedGroups: &friend.QueryJoinedGroups{
-				UserId: fromID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_QueryJoinedGroups{
+		QueryJoinedGroups: &friend.QueryJoinedGroups{
+			UserId: fromID,
 		},
 	}
+	return req
 }
 
 func buildQueryGroupMembersFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_QueryGroupMembers{
-			QueryGroupMembers: &friend.QueryGroupMembers{
-				RequestUserId: fromID,
-				GroupId:       groupID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_QueryGroupMembers{
+		QueryGroupMembers: &friend.QueryGroupMembers{
+			RequestUserId: fromID,
+			GroupId:       groupID,
 		},
 	}
+	return req
 }
 
 func handleDeleteGroupUser(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法退出群组")
+	payload, err := authenticatedPayload(fromID, message, "退出群组", "delete_group_user", (*pb.RequestMessage).GetDeleteGroupUser)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("target_group_id", payload.GetTargetGroupId()); err != nil {
 		return err
 	}
 
-	payload := message.GetDeleteGroupUser()
-	if payload == nil {
-		return errors.New("delete_group_user消息为空")
-	}
-	if payload.GetTargetGroupId() <= 0 {
-		return errors.New("target_group_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildDeleteGroupUserFriendRequest(fromID, payload.GetTargetGroupId(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布DeleteGroupUser请求到friend-service失败: %v", err)
@@ -890,43 +683,33 @@ func handleDeleteGroupUser(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildDeleteGroupUserFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_RemoveGroupMember{
-			RemoveGroupMember: &friend.RemoveGroupMember{
-				RequestUserId: fromID,
-				GroupId:       groupID,
-				UserId:        fromID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_RemoveGroupMember{
+		RemoveGroupMember: &friend.RemoveGroupMember{
+			RequestUserId: fromID,
+			GroupId:       groupID,
+			UserId:        fromID,
 		},
 	}
+	return req
 }
 
 func handleUpdateAvatar(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法更新头像")
-	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	payload, err := authenticatedPayload(fromID, message, "更新头像", "update_avatar", (*pb.RequestMessage).GetUpdateAvatar)
+	if err != nil {
 		return err
-	}
-
-	payload := message.GetUpdateAvatar()
-	if payload == nil {
-		return errors.New("update_avatar消息为空")
 	}
 	if !payload.GetIsGroup() {
 		return errors.New("当前仅支持通过UpdateAvatar更新群头像")
 	}
-	if payload.GetTargetId() <= 0 || strings.TrimSpace(payload.GetAvatarHash()) == "" {
+	if err := requirePositiveID("target_id", payload.GetTargetId()); err != nil {
+		return errors.New("群头像更新请求非法")
+	}
+	if strings.TrimSpace(payload.GetAvatarHash()) == "" {
 		return errors.New("群头像更新请求非法")
 	}
 
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildUpdateGroupAvatarFriendRequest(fromID, payload.GetTargetId(), payload.GetAvatarHash(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布UpdateAvatar请求到friend-service失败: %v", err)
@@ -938,53 +721,38 @@ func handleUpdateAvatar(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildUpdateGroupAvatarFriendRequest(fromID, groupID int64, avatarHash, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_UpdateGroupAvatar{
-			UpdateGroupAvatar: &friend.UpdateGroupAvatar{
-				RequestUserId: fromID,
-				GroupId:       groupID,
-				AvatarHash:    avatarHash,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_UpdateGroupAvatar{
+		UpdateGroupAvatar: &friend.UpdateGroupAvatar{
+			RequestUserId: fromID,
+			GroupId:       groupID,
+			AvatarHash:    avatarHash,
 		},
 	}
+	return req
 }
 
 func buildInsertContactFriendRequest(fromID, targetUserID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_AddDirectFriend{
-			AddDirectFriend: &friend.AddDirectFriend{
-				UserId:   fromID,
-				FriendId: targetUserID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_AddDirectFriend{
+		AddDirectFriend: &friend.AddDirectFriend{
+			UserId:   fromID,
+			FriendId: targetUserID,
 		},
 	}
+	return req
 }
 
 func handleDeleteContact(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法删除好友")
+	payload, err := authenticatedPayload(fromID, message, "删除好友", "delete_contact", (*pb.RequestMessage).GetDeleteContact)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requireNonSelfID("to_delete_user_id", payload.GetToDeleteUserId(), fromID); err != nil {
 		return err
 	}
 
-	payload := message.GetDeleteContact()
-	if payload == nil {
-		return errors.New("delete_contact消息为空")
-	}
-	if payload.GetToDeleteUserId() <= 0 || payload.GetToDeleteUserId() == fromID {
-		return errors.New("to_delete_user_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildDeleteContactFriendRequest(fromID, payload.GetToDeleteUserId(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布DeleteContact请求到friend-service失败: %v", err)
@@ -996,39 +764,26 @@ func handleDeleteContact(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildDeleteContactFriendRequest(fromID, targetUserID int64, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_RemoveDirectFriend{
-			RemoveDirectFriend: &friend.RemoveDirectFriend{
-				UserId:   fromID,
-				FriendId: targetUserID,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_RemoveDirectFriend{
+		RemoveDirectFriend: &friend.RemoveDirectFriend{
+			UserId:   fromID,
+			FriendId: targetUserID,
 		},
 	}
+	return req
 }
 
 func handleUpdateContactAlias(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法更新好友备注")
+	payload, err := authenticatedPayload(fromID, message, "更新好友备注", "update_contact_alias", (*pb.RequestMessage).GetUpdateContactAlias)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("target_user_id", payload.GetTargetUserId()); err != nil {
 		return err
 	}
 
-	payload := message.GetUpdateContactAlias()
-	if payload == nil {
-		return errors.New("update_contact_alias消息为空")
-	}
-	if payload.GetTargetUserId() <= 0 {
-		return errors.New("target_user_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildUpdateContactAliasFriendRequest(fromID, payload.GetTargetUserId(), payload.GetNewAlias(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布UpdateContactAlias请求到friend-service失败: %v", err)
@@ -1040,40 +795,27 @@ func handleUpdateContactAlias(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildUpdateContactAliasFriendRequest(fromID, targetUserID int64, alias, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_UpdateFriendAlias{
-			UpdateFriendAlias: &friend.UpdateFriendAlias{
-				UserId:   fromID,
-				FriendId: targetUserID,
-				Alias:    alias,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_UpdateFriendAlias{
+		UpdateFriendAlias: &friend.UpdateFriendAlias{
+			UserId:   fromID,
+			FriendId: targetUserID,
+			Alias:    alias,
 		},
 	}
+	return req
 }
 
 func handleUpdateContactNotify(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法更新好友通知设置")
+	payload, err := authenticatedPayload(fromID, message, "更新好友通知设置", "update_contact_notify", (*pb.RequestMessage).GetUpdateContactNotify)
+	if err != nil {
+		return err
 	}
-	if err := utils.ValidateAndParseJWT(fromID, jwt); err != nil {
+	if err := requirePositiveID("target_user_id", payload.GetTargetUserId()); err != nil {
 		return err
 	}
 
-	payload := message.GetUpdateContactNotify()
-	if payload == nil {
-		return errors.New("update_contact_notify消息为空")
-	}
-	if payload.GetTargetUserId() <= 0 {
-		return errors.New("target_user_id非法")
-	}
-
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
 	if err := publishFriendRequest(buildUpdateContactNotifyFriendRequest(fromID, payload.GetTargetUserId(), payload.GetIsNotify(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布UpdateContactNotify请求到friend-service失败: %v", err)
@@ -1085,36 +827,15 @@ func handleUpdateContactNotify(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildUpdateContactNotifyFriendRequest(fromID, targetUserID int64, isNotify bool, currentContainerID string) *friend.RequestMessage {
-	return &friend.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID,
-		Payload: &friend.RequestMessage_UpdateFriendNotify{
-			UpdateFriendNotify: &friend.UpdateFriendNotify{
-				UserId:   fromID,
-				FriendId: targetUserID,
-				IsNotify: isNotify,
-			},
+	req := newFriendRequest(currentContainerID, fromID)
+	req.Payload = &friend.RequestMessage_UpdateFriendNotify{
+		UpdateFriendNotify: &friend.UpdateFriendNotify{
+			UserId:   fromID,
+			FriendId: targetUserID,
+			IsNotify: isNotify,
 		},
 	}
-}
-
-func publishFriendRequest(friendReq *friend.RequestMessage) error {
-	friendReqBytes, err := proto.Marshal(friendReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化friend请求失败: %v", err)
-		return err
-	}
-
-	envBytes, err := proto.Marshal(&envelope.Envelope{
-		Type:    envelope.MessageType_FRIEND_REQUEST,
-		Payload: friendReqBytes,
-	})
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	return publisher.PublishMessage(string(envBytes), "friend-service")
+	return req
 }
 
 func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
@@ -1131,14 +852,22 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 		return err
 	}
 
-	delivered := 0
+	targetUserIDs := make([]string, 0, len(memberIDs))
+	memberIDByUserID := make(map[string]int64, len(memberIDs))
 	for _, memberID := range memberIDs {
 		if memberID == fromID {
 			continue
 		}
-
 		targetUserID := strconv.FormatInt(memberID, 10)
-		targetTopic := redisClient.GetContainerByConnection(targetUserID)
+		targetUserIDs = append(targetUserIDs, targetUserID)
+		memberIDByUserID[targetUserID] = memberID
+	}
+	containerByUserID := redisClient.GetContainersByConnections(targetUserIDs)
+
+	delivered := 0
+	crossContainerTargets := make(map[string][]int64)
+	for _, targetUserID := range targetUserIDs {
+		targetTopic := containerByUserID[targetUserID]
 		if targetTopic == "" {
 			continue
 		}
@@ -1152,11 +881,16 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 			continue
 		}
 
-		if err := routeGroupPostCrossContainer(targetTopic, memberID, payload); err != nil {
-			logger.Sugar().Errorf("群消息转发失败: group_id=%d, target_user=%s, err=%v", payload.GetToId(), targetUserID, err)
+		memberID := memberIDByUserID[targetUserID]
+		crossContainerTargets[targetTopic] = append(crossContainerTargets[targetTopic], memberID)
+	}
+
+	for targetTopic, targetUserIDs := range crossContainerTargets {
+		if err := routeGroupPostBatchCrossContainer(targetTopic, targetUserIDs, payload); err != nil {
+			logger.Sugar().Errorf("群消息批量转发失败: group_id=%d, target_container=%s, targets=%d, err=%v", payload.GetToId(), targetTopic, len(targetUserIDs), err)
 			continue
 		}
-		delivered++
+		delivered += len(targetUserIDs)
 	}
 
 	logger.Sugar().Debugf("群消息处理完成: group_id=%d, delivered=%d", payload.GetToId(), delivered)
@@ -1164,22 +898,16 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 }
 
 func routeGroupPostCrossContainer(targetContainerID string, targetUserID int64, payload *pb.Post) error {
-	delivery := &pb.GroupPostDelivery{
-		TargetUserId: targetUserID,
-		Post:         payload,
-	}
-	deliveryBytes, err := proto.Marshal(delivery)
-	if err != nil {
-		logger.Sugar().Errorf("序列化GroupPostDelivery失败: %v", err)
-		return err
+	return routeGroupPostBatchCrossContainer(targetContainerID, []int64{targetUserID}, payload)
+}
+
+func routeGroupPostBatchCrossContainer(targetContainerID string, targetUserIDs []int64, payload *pb.Post) error {
+	if len(targetUserIDs) == 0 {
+		return nil
 	}
 
-	envBytes, err := proto.Marshal(&envelope.Envelope{
-		Type:    envelope.MessageType_DF_RESPONSE,
-		Payload: deliveryBytes,
-	})
+	envBytes, err := buildGroupPostDeliveryEnvelopeBytes(targetUserIDs, payload)
 	if err != nil {
-		logger.Sugar().Errorf("序列化群消息DF_RESPONSE失败: %v", err)
 		return err
 	}
 
@@ -1189,6 +917,41 @@ func routeGroupPostCrossContainer(targetContainerID string, targetUserID int64, 
 	}
 
 	return nil
+}
+
+func buildGroupPostDeliveryEnvelopeBytes(targetUserIDs []int64, payload *pb.Post) ([]byte, error) {
+	if len(targetUserIDs) == 0 {
+		return nil, nil
+	}
+
+	var deliveryPayload *pb.DFInternalDelivery
+	if len(targetUserIDs) > 1 {
+		deliveryPayload = &pb.DFInternalDelivery{
+			Payload: &pb.DFInternalDelivery_GroupPostBatchDelivery{
+				GroupPostBatchDelivery: &pb.GroupPostBatchDelivery{
+					TargetUserIds: targetUserIDs,
+					Post:          payload,
+				},
+			},
+		}
+	} else {
+		deliveryPayload = &pb.DFInternalDelivery{
+			Payload: &pb.DFInternalDelivery_GroupPostDelivery{
+				GroupPostDelivery: &pb.GroupPostDelivery{
+					TargetUserId: targetUserIDs[0],
+					Post:         payload,
+				},
+			},
+		}
+	}
+
+	envBytes, err := mq.MarshalEnvelope(envelope.MessageType_DF_RESPONSE, deliveryPayload)
+	if err != nil {
+		logger.Sugar().Errorf("序列化群消息DF_RESPONSE失败: %v", err)
+		return nil, err
+	}
+
+	return envBytes, nil
 }
 
 func routePostToTarget(targetUserID, targetTopic, currentContainerID string, payload *pb.Post, message *pb.RequestMessage) error {
@@ -1242,59 +1005,22 @@ func buildPostDeliveryMessageBytes(targetTopic, currentContainerID string, paylo
 
 // handleUpdateUserName 处理更新用户名请求
 func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法更新用户名")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "更新用户名", "update_user_name", (*pb.RequestMessage).GetUpdateUserName)
 	if err != nil {
 		return err
 	}
-	payload := message.GetUpdateUserName()
-	if payload == nil {
-		return errors.New("update_user_name消息为空")
-	}
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
-	// 构建storage更新请求
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID, // 结果返回给请求者
-		Payload: &storage.RequestMessage_UpdateUserName{
-			UpdateUserName: &storage.UpdateUserName{
-				UserId:      payload.GetUserId(),
-				NewUserName: payload.GetNewUserName(),
-			},
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_UpdateUserName{
+		UpdateUserName: &storage.UpdateUserName{
+			UserId:      payload.GetUserId(),
+			NewUserName: payload.GetNewUserName(),
 		},
 	}
 
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage用户名更新请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布用户名更新请求到storage-service失败: %v", err)
 		return err
 	}
@@ -1305,59 +1031,22 @@ func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
 
 // handleUpdateUserAvatar 处理更新用户头像请求
 func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
-	jwt := message.GetJwt()
-	if jwt == "" {
-		return errors.New("用户未携带有效JWT，无法更新用户头像")
-	}
-
-	err := utils.ValidateAndParseJWT(fromID, jwt)
+	payload, err := authenticatedPayload(fromID, message, "更新用户头像", "update_user_avatar", (*pb.RequestMessage).GetUpdateUserAvatar)
 	if err != nil {
 		return err
 	}
-	payload := message.GetUpdateUserAvatar()
-	if payload == nil {
-		return errors.New("update_user_avatar消息为空")
-	}
 
-	// 获取当前容器ID
-	currentContainerID := os.Getenv("HOSTNAME")
-	if currentContainerID == "" {
-		currentContainerID = "local"
-	}
+	currentContainerID := currentContainerTopic()
 
-	// 构建storage更新请求
-	storeReq := &storage.RequestMessage{
-		FromKafkaTopic: currentContainerID,
-		TargetUserId:   fromID, // 结果返回给请求者
-		Payload: &storage.RequestMessage_UpdateUserAvatar{
-			UpdateUserAvatar: &storage.UpdateUserAvatar{
-				UserId:       payload.GetUserId(),
-				NewAvatarUrl: payload.GetNewAvatarUrl(),
-			},
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_UpdateUserAvatar{
+		UpdateUserAvatar: &storage.UpdateUserAvatar{
+			UserId:       payload.GetUserId(),
+			NewAvatarUrl: payload.GetNewAvatarUrl(),
 		},
 	}
 
-	// 序列化存储请求
-	storeReqBytes, err := proto.Marshal(storeReq)
-	if err != nil {
-		logger.Sugar().Errorf("序列化storage用户头像更新请求失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_REQUEST,
-		Payload: storeReqBytes,
-	}
-	envBytes, err := proto.Marshal(env)
-	if err != nil {
-		logger.Sugar().Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发布到storage-service主题
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
+	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布用户头像更新请求到storage-service失败: %v", err)
 		return err
 	}

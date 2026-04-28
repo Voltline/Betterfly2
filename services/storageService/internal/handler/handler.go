@@ -4,8 +4,10 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
+	"Betterfly2/shared/mq"
 	"context"
 	"fmt"
 	"storageService/internal/cache"
@@ -23,6 +25,39 @@ var timeFormats = []string{
 	"2006-01-02T15:04:05Z0700",
 	"2006-01-02 15:04:05-07",
 	"2006-01-02 15:04:05",
+}
+
+type storageRequestContext struct {
+	handler *StorageHandler
+	request *storage.RequestMessage
+}
+
+var storageRequestRouter = newStorageRequestRouter()
+
+func newStorageRequestRouter() *dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage] {
+	router := dispatch.NewOneofRouter[storageRequestContext, *storage.ResponseMessage]()
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_StoreNewMessage) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleStoreNewMessage(ctx.request, payload.StoreNewMessage)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryMessage) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleQueryMessage(ctx.request, payload.QueryMessage)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QuerySyncMessages) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleQuerySyncMessages(ctx.request, payload.QuerySyncMessages)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_UpdateUserName) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleUpdateUserName(ctx.request, payload.UpdateUserName)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_UpdateUserAvatar) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleUpdateUserAvatar(ctx.request, payload.UpdateUserAvatar)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryUser) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleQueryUser(ctx.request, payload.QueryUser)
+	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryFileExists) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleQueryFileExists(ctx.request, payload.QueryFileExists)
+	})
+	return router
 }
 
 // StorageHandler 存储服务处理器
@@ -76,28 +111,12 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 	sugar.Debugf("收到存储请求: from_topic=%s, target_user_id=%d",
 		req.FromKafkaTopic, req.TargetUserId)
 
-	// 根据请求类型处理
 	var resp *storage.ResponseMessage
 	var err error
-
-	switch payload := req.Payload.(type) {
-	case *storage.RequestMessage_StoreNewMessage:
-		resp, err = h.handleStoreNewMessage(req, payload.StoreNewMessage)
-	case *storage.RequestMessage_QueryMessage:
-		resp, err = h.handleQueryMessage(req, payload.QueryMessage)
-	case *storage.RequestMessage_QuerySyncMessages:
-		resp, err = h.handleQuerySyncMessages(req, payload.QuerySyncMessages)
-	case *storage.RequestMessage_UpdateUserName:
-		resp, err = h.handleUpdateUserName(req, payload.UpdateUserName)
-	case *storage.RequestMessage_UpdateUserAvatar:
-		resp, err = h.handleUpdateUserAvatar(req, payload.UpdateUserAvatar)
-	case *storage.RequestMessage_QueryUser:
-		resp, err = h.handleQueryUser(req, payload.QueryUser)
-	case *storage.RequestMessage_QueryFileExists:
-		resp, err = h.handleQueryFileExists(req, payload.QueryFileExists)
-	default:
-		err = fmt.Errorf("未知的请求类型")
-	}
+	resp, err = storageRequestRouter.Dispatch(storageRequestContext{
+		handler: h,
+		request: req,
+	}, req.Payload)
 
 	if err != nil {
 		sugar.Errorf("处理请求失败: %v", err)
@@ -546,28 +565,9 @@ func (h *StorageHandler) buildFileExistsResponse(req *storage.RequestMessage, ex
 func (h *StorageHandler) sendResponse(topic string, resp *storage.ResponseMessage) error {
 	sugar := logger.Sugar()
 
-	// 序列化响应
-	respData, err := proto.Marshal(resp)
+	envData, err := mq.PublishEnvelope(publisher.PublishMessage, topic, envelope.MessageType_STORAGE_RESPONSE, resp)
 	if err != nil {
-		sugar.Errorf("序列化响应失败: %v", err)
-		return err
-	}
-
-	// 创建Envelope封装
-	env := &envelope.Envelope{
-		Type:    envelope.MessageType_STORAGE_RESPONSE,
-		Payload: respData,
-	}
-	envData, err := proto.Marshal(env)
-	if err != nil {
-		sugar.Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-
-	// 发送响应到Kafka
-	err = publisher.PublishMessage(string(envData), topic)
-	if err != nil {
-		sugar.Errorf("发送响应到Kafka失败: %v", err)
+		sugar.Errorf("发送Envelope响应到Kafka失败: %v", err)
 		metrics.RecordKafkaProcessingError()
 		return err
 	}

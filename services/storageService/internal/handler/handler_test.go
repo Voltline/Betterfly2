@@ -328,8 +328,8 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery(`SELECT\s+m\.message_id,\s+m\.from_user_id,\s+m\.to_user_id,\s+m\.content,\s+m\.timestamp,\s+m\.message_type,\s+m\.real_file_name,\s+m\.is_group\s+FROM messages AS m\s+WHERE\s+\(m\.is_group = FALSE AND m\.to_user_id = \$1 AND m\.timestamp > \$2\)\s+OR\s+\(\s*m\.is_group = TRUE\s+AND EXISTS \(\s*SELECT 1\s+FROM group_members AS gm\s+WHERE gm\.group_id = m\.to_user_id\s+AND gm\.user_id = \$3\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$4\s*\)\s*\)\s+ORDER BY m\.timestamp ASC`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", int64(1001), "2026-04-17T10:00:00Z").
+	mock.ExpectQuery(`(?s)SELECT \*\s+FROM \(\s+SELECT\s+m\.message_id,.*FROM messages AS m\s+WHERE m\.is_group = FALSE\s+AND m\.to_user_id = \$1\s+AND m\.timestamp > \$2\s+UNION ALL\s+SELECT\s+m\.message_id,.*FROM group_members AS gm\s+JOIN messages AS m\s+ON m\.to_user_id = gm\.group_id\s+AND m\.is_group = TRUE\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$3\s+WHERE gm\.user_id = \$4\s+\) AS sync_messages\s+ORDER BY timestamp ASC`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(1001)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
 		}).
@@ -395,8 +395,8 @@ func TestHandleQuerySyncMessages_DoesNotTruncateResults(t *testing.T) {
 		)
 	}
 
-	mock.ExpectQuery(`SELECT\s+m\.message_id,\s+m\.from_user_id,\s+m\.to_user_id,\s+m\.content,\s+m\.timestamp,\s+m\.message_type,\s+m\.real_file_name,\s+m\.is_group\s+FROM messages AS m\s+WHERE\s+\(m\.is_group = FALSE AND m\.to_user_id = \$1 AND m\.timestamp > \$2\)\s+OR\s+\(\s*m\.is_group = TRUE\s+AND EXISTS \(\s*SELECT 1\s+FROM group_members AS gm\s+WHERE gm\.group_id = m\.to_user_id\s+AND gm\.user_id = \$3\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$4\s*\)\s*\)\s+ORDER BY m\.timestamp ASC`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", int64(1001), "2026-04-17T10:00:00Z").
+	mock.ExpectQuery(`(?s)SELECT \*\s+FROM \(\s+SELECT\s+m\.message_id,.*FROM messages AS m\s+WHERE m\.is_group = FALSE\s+AND m\.to_user_id = \$1\s+AND m\.timestamp > \$2\s+UNION ALL\s+SELECT\s+m\.message_id,.*FROM group_members AS gm\s+JOIN messages AS m\s+ON m\.to_user_id = gm\.group_id\s+AND m\.is_group = TRUE\s+AND m\.timestamp > gm\.update_time\s+AND m\.timestamp > \$3\s+WHERE gm\.user_id = \$4\s+\) AS sync_messages\s+ORDER BY timestamp ASC`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(1001)).
 		WillReturnRows(rows)
 
 	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())

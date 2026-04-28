@@ -16,3 +16,15 @@ message GroupPostDelivery {
   int64 target_user_id = 1;
   Post post = 2;
 }
+
+message GroupPostBatchDelivery {
+  repeated int64 target_user_ids = 1;
+  Post post = 2;
+}
+
+message DFInternalDelivery {
+  oneof payload {
+    GroupPostDelivery group_post_delivery = 1;
+    GroupPostBatchDelivery group_post_batch_delivery = 2;
+  }
+}

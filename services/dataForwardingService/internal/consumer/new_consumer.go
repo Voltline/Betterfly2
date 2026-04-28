@@ -515,6 +515,25 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 		return fmt.Errorf("WebSocket处理器未设置，无法转发DF响应")
 	}
 
+	internalDelivery := &pb.DFInternalDelivery{}
+	if err := proto.Unmarshal(payload, internalDelivery); err == nil {
+		switch delivery := internalDelivery.Payload.(type) {
+		case *pb.DFInternalDelivery_GroupPostBatchDelivery:
+			groupBatchDelivery := delivery.GroupPostBatchDelivery
+			if groupBatchDelivery.GetPost() == nil || len(groupBatchDelivery.GetTargetUserIds()) == 0 {
+				return fmt.Errorf("GroupPostBatchDelivery内容不完整")
+			}
+			return h.deliverGroupPostToUsers(groupBatchDelivery.GetPost(), groupBatchDelivery.GetTargetUserIds())
+		case *pb.DFInternalDelivery_GroupPostDelivery:
+			groupDelivery := delivery.GroupPostDelivery
+			if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
+				return fmt.Errorf("GroupPostDelivery内容不完整")
+			}
+			return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
+		}
+	}
+
+	// 兼容旧格式：历史版本直接把 GroupPostDelivery 作为 DF_RESPONSE payload。
 	groupDelivery := &pb.GroupPostDelivery{}
 	if err := proto.Unmarshal(payload, groupDelivery); err != nil {
 		return fmt.Errorf("解析GroupPostDelivery失败: %v", err)
@@ -523,9 +542,13 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 		return fmt.Errorf("GroupPostDelivery内容不完整")
 	}
 
+	return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
+}
+
+func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, targetUserIDs []int64) error {
 	resp := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Post{
-			Post: groupDelivery.GetPost(),
+			Post: post,
 		},
 	}
 	respBytes, err := proto.Marshal(resp)
@@ -533,9 +556,11 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 		return fmt.Errorf("序列化群消息响应失败: %v", err)
 	}
 
-	targetUserID := strconv.FormatInt(groupDelivery.GetTargetUserId(), 10)
-	if err := h.wsHandler.SendMessage(targetUserID, respBytes); err != nil {
-		return fmt.Errorf("转发群消息给用户 %s 失败: %v", targetUserID, err)
+	for _, targetUserID := range targetUserIDs {
+		targetUserIDStr := strconv.FormatInt(targetUserID, 10)
+		if err := h.wsHandler.SendMessage(targetUserIDStr, respBytes); err != nil {
+			return fmt.Errorf("转发群消息给用户 %s 失败: %v", targetUserIDStr, err)
+		}
 	}
 	return nil
 }

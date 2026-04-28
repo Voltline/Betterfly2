@@ -4,14 +4,63 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/mq"
 	"context"
-	"fmt"
 
 	"friendService/internal/publisher"
 
 	"google.golang.org/protobuf/proto"
 )
+
+type friendRequestContext struct {
+	handler *FriendHandler
+	request *friend.RequestMessage
+}
+
+var friendRequestRouter = newFriendRequestRouter()
+
+func newFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage] {
+	router := dispatch.NewOneofRouter[friendRequestContext, *friend.ResponseMessage]()
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_AddDirectFriend) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleAddDirectFriend(ctx.request, payload.AddDirectFriend)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryFriendList) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleQueryFriendList(ctx.request, payload.QueryFriendList)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_RemoveDirectFriend) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleRemoveDirectFriend(ctx.request, payload.RemoveDirectFriend)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendAlias) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleUpdateFriendAlias(ctx.request, payload.UpdateFriendAlias)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendNotify) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleUpdateFriendNotify(ctx.request, payload.UpdateFriendNotify)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_CreateGroup) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleCreateGroup(ctx.request, payload.CreateGroup)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryGroup) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleQueryGroup(ctx.request, payload.QueryGroup)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_AddGroupMember) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleAddGroupMember(ctx.request, payload.AddGroupMember)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateGroupAvatar) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleUpdateGroupAvatar(ctx.request, payload.UpdateGroupAvatar)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryGroupMembers) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleQueryGroupMembers(ctx.request, payload.QueryGroupMembers)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_RemoveGroupMember) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleRemoveGroupMember(ctx.request, payload.RemoveGroupMember)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryJoinedGroups) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleQueryJoinedGroups(ctx.request, payload.QueryJoinedGroups)
+	})
+	return router
+}
 
 type FriendHandler struct{}
 
@@ -31,34 +80,10 @@ func (h *FriendHandler) HandleMessage(_ context.Context, message []byte) error {
 		err  error
 	)
 
-	switch payload := req.Payload.(type) {
-	case *friend.RequestMessage_AddDirectFriend:
-		resp, err = h.handleAddDirectFriend(req, payload.AddDirectFriend)
-	case *friend.RequestMessage_QueryFriendList:
-		resp, err = h.handleQueryFriendList(req, payload.QueryFriendList)
-	case *friend.RequestMessage_RemoveDirectFriend:
-		resp, err = h.handleRemoveDirectFriend(req, payload.RemoveDirectFriend)
-	case *friend.RequestMessage_UpdateFriendAlias:
-		resp, err = h.handleUpdateFriendAlias(req, payload.UpdateFriendAlias)
-	case *friend.RequestMessage_UpdateFriendNotify:
-		resp, err = h.handleUpdateFriendNotify(req, payload.UpdateFriendNotify)
-	case *friend.RequestMessage_CreateGroup:
-		resp, err = h.handleCreateGroup(req, payload.CreateGroup)
-	case *friend.RequestMessage_QueryGroup:
-		resp, err = h.handleQueryGroup(req, payload.QueryGroup)
-	case *friend.RequestMessage_AddGroupMember:
-		resp, err = h.handleAddGroupMember(req, payload.AddGroupMember)
-	case *friend.RequestMessage_UpdateGroupAvatar:
-		resp, err = h.handleUpdateGroupAvatar(req, payload.UpdateGroupAvatar)
-	case *friend.RequestMessage_QueryGroupMembers:
-		resp, err = h.handleQueryGroupMembers(req, payload.QueryGroupMembers)
-	case *friend.RequestMessage_RemoveGroupMember:
-		resp, err = h.handleRemoveGroupMember(req, payload.RemoveGroupMember)
-	case *friend.RequestMessage_QueryJoinedGroups:
-		resp, err = h.handleQueryJoinedGroups(req, payload.QueryJoinedGroups)
-	default:
-		err = fmt.Errorf("未知的friend请求类型")
-	}
+	resp, err = friendRequestRouter.Dispatch(friendRequestContext{
+		handler: h,
+		request: req,
+	}, req.Payload)
 
 	if err != nil {
 		logger.Sugar().Errorf("处理friend请求失败: %v", err)
@@ -665,18 +690,6 @@ func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payl
 }
 
 func (h *FriendHandler) sendResponse(topic string, resp *friend.ResponseMessage) error {
-	respData, err := proto.Marshal(resp)
-	if err != nil {
-		return err
-	}
-
-	envData, err := proto.Marshal(&envelope.Envelope{
-		Type:    envelope.MessageType_FRIEND_RESPONSE,
-		Payload: respData,
-	})
-	if err != nil {
-		return err
-	}
-
-	return publisher.PublishMessage(string(envData), topic)
+	_, err := mq.PublishEnvelope(publisher.PublishMessage, topic, envelope.MessageType_FRIEND_RESPONSE, resp)
+	return err
 }

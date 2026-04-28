@@ -73,3 +73,25 @@ func GetContainerByConnection(id string) string {
 	}
 	return result
 }
+
+func GetContainersByConnections(ids []string) map[string]string {
+	result := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return result
+	}
+
+	values, err := Rdb.HMGet(ctx, "ws_connection_mapping", ids...).Result()
+	if err != nil {
+		logger.Sugar().Warnf("GetContainersByConnections 错误: %v", err)
+		return result
+	}
+
+	for i, value := range values {
+		containerID, ok := value.(string)
+		if !ok || containerID == "" {
+			continue
+		}
+		result[ids[i]] = containerID
+	}
+	return result
+}

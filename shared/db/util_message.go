@@ -46,31 +46,42 @@ func GetMessageByID(messageID int64) (*Message, error) {
 func GetSyncMessagesByTimestamp(toUserID int64, timestamp string) ([]Message, error) {
 	var messages []Message
 	err := DB().Raw(`
-SELECT
-  m.message_id,
-  m.from_user_id,
-  m.to_user_id,
-  m.content,
-  m.timestamp,
-  m.message_type,
-  m.real_file_name,
-  m.is_group
-FROM messages AS m
-WHERE
-  (m.is_group = FALSE AND m.to_user_id = ? AND m.timestamp > ?)
-  OR
-  (
-    m.is_group = TRUE
-    AND EXISTS (
-      SELECT 1
-      FROM group_members AS gm
-      WHERE gm.group_id = m.to_user_id
-        AND gm.user_id = ?
-        AND m.timestamp > gm.update_time
-        AND m.timestamp > ?
-    )
-  )
-ORDER BY m.timestamp ASC
-`, toUserID, timestamp, toUserID, timestamp).Scan(&messages).Error
+SELECT *
+FROM (
+  SELECT
+    m.message_id,
+    m.from_user_id,
+    m.to_user_id,
+    m.content,
+    m.timestamp,
+    m.message_type,
+    m.real_file_name,
+    m.is_group
+  FROM messages AS m
+  WHERE m.is_group = FALSE
+    AND m.to_user_id = ?
+    AND m.timestamp > ?
+
+  UNION ALL
+
+  SELECT
+    m.message_id,
+    m.from_user_id,
+    m.to_user_id,
+    m.content,
+    m.timestamp,
+    m.message_type,
+    m.real_file_name,
+    m.is_group
+  FROM group_members AS gm
+  JOIN messages AS m
+    ON m.to_user_id = gm.group_id
+   AND m.is_group = TRUE
+   AND m.timestamp > gm.update_time
+   AND m.timestamp > ?
+  WHERE gm.user_id = ?
+) AS sync_messages
+ORDER BY timestamp ASC
+`, toUserID, timestamp, timestamp, toUserID).Scan(&messages).Error
 	return messages, err
 }

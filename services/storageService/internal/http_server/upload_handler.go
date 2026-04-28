@@ -4,7 +4,6 @@ import (
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -28,6 +27,17 @@ type UploadHandler struct {
 	getPresignedUploadURL     func(context.Context, string, time.Duration) (string, error)
 	getPresignedUploadURLFor  func(context.Context, string, time.Duration, string) (string, error)
 	verifyFileHash            func(io.Reader, string) (bool, error)
+}
+
+type countingReader struct {
+	reader io.Reader
+	bytes  int64
+}
+
+func (r *countingReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.bytes += int64(n)
+	return n, err
 }
 
 // NewUploadHandler 创建新的上传处理器
@@ -198,15 +208,9 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 	defer fileReader.Close()
 
-	// 验证文件哈希
-	fileData, err := io.ReadAll(fileReader)
-	if err != nil {
-		sugar.Errorf("读取文件失败: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	valid, err := h.verifyFileHash(bytes.NewReader(fileData), fileHash)
+	// 验证时流式读取对象，避免大文件整体进入内存。
+	counter := &countingReader{reader: fileReader}
+	valid, err := h.verifyFileHash(counter, fileHash)
 	if err != nil {
 		sugar.Errorf("验证文件哈希失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -227,7 +231,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 保存文件元数据到数据库
-	fileSize := int64(len(fileData))
+	fileSize := counter.bytes
 	storagePath := rustfs.GetStoragePath(fileHash)
 	err = h.updateFileMetadata(fileHash, fileSize, storagePath)
 	if err != nil {

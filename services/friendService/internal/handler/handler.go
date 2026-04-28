@@ -8,6 +8,7 @@ import (
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
 	"context"
+	"sync"
 
 	"friendService/internal/publisher"
 
@@ -19,46 +20,30 @@ type friendRequestContext struct {
 	request *friend.RequestMessage
 }
 
-var friendRequestRouter = newFriendRequestRouter()
+type friendRequestModule func(*dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage])
+
+var (
+	friendRequestModules    []friendRequestModule
+	friendRequestRouter     *dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage]
+	friendRequestRouterOnce sync.Once
+)
+
+func registerFriendRequestModule(register friendRequestModule) {
+	friendRequestModules = append(friendRequestModules, register)
+}
+
+func getFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage] {
+	friendRequestRouterOnce.Do(func() {
+		friendRequestRouter = newFriendRequestRouter()
+	})
+	return friendRequestRouter
+}
 
 func newFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage] {
 	router := dispatch.NewOneofRouter[friendRequestContext, *friend.ResponseMessage]()
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_AddDirectFriend) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleAddDirectFriend(ctx.request, payload.AddDirectFriend)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryFriendList) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleQueryFriendList(ctx.request, payload.QueryFriendList)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_RemoveDirectFriend) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleRemoveDirectFriend(ctx.request, payload.RemoveDirectFriend)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendAlias) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleUpdateFriendAlias(ctx.request, payload.UpdateFriendAlias)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendNotify) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleUpdateFriendNotify(ctx.request, payload.UpdateFriendNotify)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_CreateGroup) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleCreateGroup(ctx.request, payload.CreateGroup)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryGroup) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleQueryGroup(ctx.request, payload.QueryGroup)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_AddGroupMember) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleAddGroupMember(ctx.request, payload.AddGroupMember)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateGroupAvatar) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleUpdateGroupAvatar(ctx.request, payload.UpdateGroupAvatar)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryGroupMembers) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleQueryGroupMembers(ctx.request, payload.QueryGroupMembers)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_RemoveGroupMember) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleRemoveGroupMember(ctx.request, payload.RemoveGroupMember)
-	})
-	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryJoinedGroups) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleQueryJoinedGroups(ctx.request, payload.QueryJoinedGroups)
-	})
+	for _, register := range friendRequestModules {
+		register(router)
+	}
 	return router
 }
 
@@ -80,7 +65,7 @@ func (h *FriendHandler) HandleMessage(_ context.Context, message []byte) error {
 		err  error
 	)
 
-	resp, err = friendRequestRouter.Dispatch(friendRequestContext{
+	resp, err = getFriendRequestRouter().Dispatch(friendRequestContext{
 		handler: h,
 		request: req,
 	}, req.Payload)

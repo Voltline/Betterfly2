@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"storageService/internal/cache"
+	"sync"
 	"time"
 
 	"storageService/internal/publisher"
@@ -32,31 +33,30 @@ type storageRequestContext struct {
 	request *storage.RequestMessage
 }
 
-var storageRequestRouter = newStorageRequestRouter()
+type storageRequestModule func(*dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage])
+
+var (
+	storageRequestModules    []storageRequestModule
+	storageRequestRouter     *dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage]
+	storageRequestRouterOnce sync.Once
+)
+
+func registerStorageRequestModule(register storageRequestModule) {
+	storageRequestModules = append(storageRequestModules, register)
+}
+
+func getStorageRequestRouter() *dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage] {
+	storageRequestRouterOnce.Do(func() {
+		storageRequestRouter = newStorageRequestRouter()
+	})
+	return storageRequestRouter
+}
 
 func newStorageRequestRouter() *dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage] {
 	router := dispatch.NewOneofRouter[storageRequestContext, *storage.ResponseMessage]()
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_StoreNewMessage) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleStoreNewMessage(ctx.request, payload.StoreNewMessage)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryMessage) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleQueryMessage(ctx.request, payload.QueryMessage)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QuerySyncMessages) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleQuerySyncMessages(ctx.request, payload.QuerySyncMessages)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_UpdateUserName) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleUpdateUserName(ctx.request, payload.UpdateUserName)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_UpdateUserAvatar) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleUpdateUserAvatar(ctx.request, payload.UpdateUserAvatar)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryUser) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleQueryUser(ctx.request, payload.QueryUser)
-	})
-	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryFileExists) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleQueryFileExists(ctx.request, payload.QueryFileExists)
-	})
+	for _, register := range storageRequestModules {
+		register(router)
+	}
 	return router
 }
 
@@ -113,7 +113,7 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 
 	var resp *storage.ResponseMessage
 	var err error
-	resp, err = storageRequestRouter.Dispatch(storageRequestContext{
+	resp, err = getStorageRequestRouter().Dispatch(storageRequestContext{
 		handler: h,
 		request: req,
 	}, req.Payload)

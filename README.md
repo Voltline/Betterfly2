@@ -224,6 +224,7 @@ Betterfly2/
 
 详细的 API 文档请参阅：
 - [API_DOCUMENTATION.md](API_DOCUMENTATION.md) - 存储服务 HTTP API 文档
+- [INTERFACE_DEVELOPMENT.md](INTERFACE_DEVELOPMENT.md) - 服务端接口新增与模块自注册指南
 - [RustFS 配置说明](services/RUSTFS_SETUP.md) - 对象存储配置指南
 
 ---

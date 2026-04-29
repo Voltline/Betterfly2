@@ -95,3 +95,14 @@ type ABExperimentOverride struct {
 	CreatedAt    string `gorm:"type:varchar(35);comment:创建时间"`
 	UpdatedAt    string `gorm:"type:varchar(35);comment:更新时间"`
 }
+
+type ChatbotAuditLog struct {
+	ID         int64  `gorm:"primaryKey;autoIncrement:true;comment:Chatbot操作审计ID"`
+	BotID      string `gorm:"type:varchar(100);index:idx_chatbot_audit_bot_time,priority:1;comment:Bot标识"`
+	Action     string `gorm:"type:varchar(100);index;comment:操作名称"`
+	TargetType string `gorm:"type:varchar(50);comment:目标类型，例如user/group/message"`
+	TargetID   string `gorm:"type:varchar(128);comment:目标ID"`
+	Status     string `gorm:"type:varchar(30);comment:操作状态，例如ok/error"`
+	Error      string `gorm:"type:text;comment:错误信息"`
+	CreatedAt  string `gorm:"type:varchar(35);index:idx_chatbot_audit_bot_time,priority:2;comment:创建时间"`
+}

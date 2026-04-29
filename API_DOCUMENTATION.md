@@ -11,8 +11,80 @@
 2. [Kafka MQ API（对内接口）](#kafka-mq-api对内接口)
 3. [Protobuf 消息定义](#protobuf消息定义)
 4. [ABTest Service API](#abtest-service-api)
+5. [Chatbot Service API](#chatbot-service-api)
 
 ---
+
+## Chatbot Service API
+
+ChatbotService 为 OpenClaw 等外部 Agent 提供受控工具 API。当前一期提供只读查询、审计和 OpenClaw webhook 骨架；发送消息接口已预留，但尚未接入 DataForwardingService 的实时路由。
+
+**基础URL**: `http://localhost:8083`
+
+更完整的接入、部署和 OpenClaw skill 说明见 `services/chatbotService/README.md`。
+
+**认证方式**:
+
+```http
+Authorization: Bearer <CHATBOT_BOT_TOKEN>
+```
+
+也可以使用 `X-Bot-Token`。默认 docker-compose 开发 token 为 `dev-chatbot-token`，生产环境必须替换。
+
+**Scope**:
+
+- `read:user`
+- `read:group`
+- `read:messages`
+- `send:message`
+- `openclaw:webhook`
+
+### 查询用户
+
+```http
+GET /chatbot/v1/users/{user_id}
+```
+
+### 查询群信息与群成员
+
+```http
+GET /chatbot/v1/groups/{group_id}
+GET /chatbot/v1/groups/{group_id}/members
+```
+
+### 查询最近消息
+
+```http
+GET /chatbot/v1/conversations/direct/{peer_user_id}/recent_messages?user_id={user_id}&limit=20
+GET /chatbot/v1/conversations/group/{group_id}/recent_messages?limit=20
+```
+
+### 发送消息（一期预留）
+
+```http
+POST /chatbot/v1/messages/send
+```
+
+当前返回 `501 Not Implemented`，下一阶段会接入 DataForwardingService。
+
+### OpenClaw Webhook
+
+```http
+POST /chatbot/v1/openclaw/webhook
+```
+
+示例:
+
+```json
+{
+  "event_id": "evt-001",
+  "type": "tool_call",
+  "payload": {
+    "tool": "betterfly.query_group",
+    "group_id": 10001
+  }
+}
+```
 
 ## ABTest Service API
 

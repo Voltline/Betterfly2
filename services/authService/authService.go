@@ -74,6 +74,7 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 			result = pb.AuthResult_JWT_ERROR
 			jwt = ""
 			logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", err)
+			goto RETURN
 		}
 		newJwt, err := utils.GenerateJWT(user)
 		if err != nil {

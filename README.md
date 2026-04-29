@@ -93,6 +93,7 @@
 | **Storage Service** | 8081 (HTTP) | 消息存储、文件管理，支持多级缓存 |
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
 | **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
+| **Chatbot Service** | 8083 (HTTP) | 面向 OpenClaw 等 Agent 的受控工具 API，详见 `services/chatbotService/README.md` |
 
 ### 基础设施服务 / Infrastructure Services
 
@@ -206,6 +207,7 @@ Betterfly2/
 │   └── storage/               # 存储服务协议
 ├── services/                  # 微服务实现
 │   ├── authService/           # 认证服务
+│   ├── chatbotService/        # Chatbot/OpenClaw 工具服务
 │   ├── dataForwardingService/ # 数据转发服务
 │   ├── friendService/         # 好友服务
 │   ├── storageService/        # 存储服务

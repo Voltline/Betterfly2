@@ -253,6 +253,23 @@ services:
     networks:
       - backend
 
+  chatbot_service:
+    build:
+      context: ..
+      dockerfile: services/chatbotService/Dockerfile
+    container_name: chatbotService
+    environment:
+      PORT: ${CHATBOT_HTTP_PORT:-8083}
+      PGSQL_DSN: ${PGSQL_DSN}
+      CHATBOT_BOT_ID: ${CHATBOT_BOT_ID:-openclaw}
+      CHATBOT_BOT_TOKEN: ${CHATBOT_BOT_TOKEN:-dev-chatbot-token}
+      CHATBOT_BOT_SCOPES: ${CHATBOT_BOT_SCOPES:-read:user,read:group,read:messages,openclaw:webhook}
+      LOG_LEVEL: debug
+    ports:
+      - "${CHATBOT_HTTP_PORT:-8083}:${CHATBOT_HTTP_PORT:-8083}"
+    networks:
+      - backend
+
 networks:
   backend:
     driver: bridge

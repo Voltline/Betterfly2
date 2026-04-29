@@ -92,6 +92,7 @@
 | **Auth Service** | 50051 (gRPC) | 用户认证、JWT Token 管理和授权服务 |
 | **Storage Service** | 8081 (HTTP) | 消息存储、文件管理，支持多级缓存 |
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
+| **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
 
 ### 基础设施服务 / Infrastructure Services
 

@@ -1,15 +1,149 @@
 # Betterfly2 API 文档
 
-本文档描述了 Betterfly2 存储服务的所有 API 接口。
+本文档描述了 Betterfly2 当前 HTTP API 与内部接口。
 
-**文档版本**: 1.1  
-**最后更新**: 2026-03-27
+**文档版本**: 1.2  
+**最后更新**: 2026-04-29
 
 ## 目录
 
 1. [HTTP API（对外接口）](#http-api对外接口)
 2. [Kafka MQ API（对内接口）](#kafka-mq-api对内接口)
 3. [Protobuf 消息定义](#protobuf消息定义)
+4. [ABTest Service API](#abtest-service-api)
+
+---
+
+## ABTest Service API
+
+ABTestService 提供统一实验配置与稳定分流能力。当前主要用于客户端实验，接口设计已预留服务端实验入口。
+
+**基础URL**: `http://localhost:8082`
+
+### 客户端获取实验配置
+
+**接口**: `GET /abtest/v1/client/config`
+
+**Query参数**:
+
+- `device_id` 必需，客户端设备唯一ID
+- `platform` 可选，例如 `ios`、`android`
+- `app_version` 可选，例如 `1.2.0`
+- `os` 可选，例如 `iOS`
+- `system_version` 可选，例如 `17.4`
+
+**示例**:
+
+```http
+GET /abtest/v1/client/config?device_id=device-001&platform=ios&app_version=1.2.0&system_version=17.4
+```
+
+**响应**:
+
+```json
+{
+  "server_time": "2026-04-29T10:00:00Z",
+  "merged_config": {
+    "enable_new_chat_ui": true
+  },
+  "experiments": [
+    {
+      "experiment_id": 1,
+      "experiment_key": "new_chat_ui",
+      "experiment_type": "client",
+      "group_key": "variant",
+      "version": 3,
+      "start_time": "2026-04-29T10:00:00Z",
+      "end_time": "2026-05-06T10:00:00Z",
+      "duration_seconds": 604800,
+      "config": {
+        "enable_new_chat_ui": true
+      }
+    }
+  ]
+}
+```
+
+### 通用实验求值接口
+
+**接口**: `POST /abtest/v1/evaluate`
+
+该接口用于未来服务端实验。`subject_type` 可以是 `device`、`user`、`server` 等，`context` 用于传入版本、平台、区域等扩展条件。
+
+```json
+{
+  "subject_type": "server",
+  "subject_id": "dataForwardingService",
+  "context": {
+    "region": "sg",
+    "feature": "message_sync"
+  }
+}
+```
+
+### 管理面板与管理API
+
+管理面板:
+
+```http
+GET /abtest/admin
+```
+
+管理 API 默认受 `ABTEST_ADMIN_TOKEN` 保护；本地未设置该环境变量时开放。
+
+常用接口:
+
+- `GET /abtest/admin/api/experiments`
+- `POST /abtest/admin/api/experiments`
+- `GET /abtest/admin/api/experiments/{id}`
+- `PUT /abtest/admin/api/experiments/{id}`
+- `POST /abtest/admin/api/experiments/{id}/start`
+- `POST /abtest/admin/api/experiments/{id}/pause`
+- `POST /abtest/admin/api/experiments/{id}/stop`
+- `POST /abtest/admin/api/experiments/{id}/groups`
+- `POST /abtest/admin/api/experiments/{id}/overrides`
+
+创建实验示例:
+
+```json
+{
+  "experiment_key": "new_chat_ui",
+  "name": "新聊天页",
+  "experiment_type": "client",
+  "start_time": "2026-04-29T10:00:00Z",
+  "duration_seconds": 604800,
+  "targeting": {
+    "platforms": ["ios"],
+    "min_app_version": "1.2.0",
+    "min_system_version": "17.0"
+  },
+  "groups": [
+    {
+      "group_key": "control",
+      "traffic_basis_points": 5000,
+      "config": {"enable_new_chat_ui": false}
+    },
+    {
+      "group_key": "variant",
+      "traffic_basis_points": 5000,
+      "config": {"enable_new_chat_ui": true}
+    }
+  ]
+}
+```
+
+Targeting 规则当前支持:
+
+- `platforms`
+- `app_versions`
+- `os`、`oses` 或 `operating_systems`
+- `min_app_version`
+- `max_app_version`
+- `system_versions`
+- `min_system_version`
+- `max_system_version`
+- `include`: 任意 context 字段白名单
+- `exclude`: 任意 context 字段黑名单
 
 ---
 

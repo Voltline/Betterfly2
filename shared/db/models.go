@@ -56,3 +56,42 @@ type FileMetadata struct {
 	CreatedAt   string `gorm:"type:varchar(25);comment:文件创建时间"`
 	UpdatedAt   string `gorm:"type:varchar(25);comment:文件更新时间"`
 }
+
+type ABExperiment struct {
+	ID              int64  `gorm:"primaryKey;autoIncrement:true;comment:实验ID"`
+	ExperimentKey   string `gorm:"uniqueIndex;type:varchar(100);comment:实验唯一key"`
+	Name            string `gorm:"type:varchar(100);comment:实验名称"`
+	Description     string `gorm:"type:text;comment:实验描述"`
+	ExperimentType  string `gorm:"type:varchar(20);index;comment:实验类型，例如client/server/all"`
+	Status          string `gorm:"type:varchar(20);index;comment:实验状态，例如draft/running/paused/stopped"`
+	StartTime       string `gorm:"type:varchar(35);index;comment:实验绝对开始时间，RFC3339格式"`
+	DurationSeconds int64  `gorm:"comment:实验持续时间，单位秒"`
+	EndTime         string `gorm:"type:varchar(35);index;comment:实验绝对结束时间，RFC3339格式"`
+	Salt            string `gorm:"type:varchar(100);comment:稳定分流盐值"`
+	TargetingJSON   string `gorm:"type:text;comment:实验命中规则JSON，预留客户端版本/系统版本等扩展条件"`
+	Version         int64  `gorm:"default:1;comment:实验配置版本"`
+	CreatedAt       string `gorm:"type:varchar(35);comment:创建时间"`
+	UpdatedAt       string `gorm:"type:varchar(35);comment:更新时间"`
+}
+
+type ABExperimentGroup struct {
+	ID                 int64  `gorm:"primaryKey;autoIncrement:true;comment:实验分组ID"`
+	ExperimentID       int64  `gorm:"index:idx_ab_groups_experiment;comment:实验ID"`
+	GroupKey           string `gorm:"type:varchar(100);comment:分组key"`
+	TrafficBasisPoints int    `gorm:"comment:分流比例，万分比，10000代表100%"`
+	ConfigJSON         string `gorm:"type:text;comment:该组下发配置JSON"`
+	CreatedAt          string `gorm:"type:varchar(35);comment:创建时间"`
+	UpdatedAt          string `gorm:"type:varchar(35);comment:更新时间"`
+}
+
+type ABExperimentOverride struct {
+	ID           int64  `gorm:"primaryKey;autoIncrement:true;comment:实验例外规则ID"`
+	ExperimentID int64  `gorm:"index:idx_ab_overrides_experiment_subject,priority:1;comment:实验ID"`
+	SubjectType  string `gorm:"type:varchar(30);index:idx_ab_overrides_experiment_subject,priority:2;comment:主体类型，例如device/user/server"`
+	SubjectID    string `gorm:"type:varchar(128);index:idx_ab_overrides_experiment_subject,priority:3;comment:主体ID，例如设备号"`
+	Action       string `gorm:"type:varchar(30);comment:例外动作，例如force_group/exclude/merge_config"`
+	GroupKey     string `gorm:"type:varchar(100);comment:强制命中的分组key"`
+	ConfigJSON   string `gorm:"type:text;comment:额外覆盖配置JSON"`
+	CreatedAt    string `gorm:"type:varchar(35);comment:创建时间"`
+	UpdatedAt    string `gorm:"type:varchar(35);comment:更新时间"`
+}

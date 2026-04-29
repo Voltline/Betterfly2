@@ -86,6 +86,10 @@ type UpdateExperimentRequest struct {
 	Targeting       map[string]interface{} `json:"targeting,omitempty"`
 }
 
+type RenewExperimentRequest struct {
+	DurationSeconds int64 `json:"duration_seconds"`
+}
+
 type GroupInput struct {
 	GroupKey           string                 `json:"group_key"`
 	TrafficBasisPoints int                    `json:"traffic_basis_points,omitempty"`
@@ -132,8 +136,15 @@ type Store interface {
 	CreateExperiment(req CreateExperimentRequest) (Experiment, error)
 	UpdateExperiment(id int64, req UpdateExperimentRequest) (Experiment, error)
 	SetExperimentStatus(id int64, status string) (Experiment, error)
+	RenewExperiment(id int64, req RenewExperimentRequest) (Experiment, error)
+	WithdrawExperiment(id int64) (Experiment, error)
 	AddGroup(experimentID int64, req GroupInput) (Group, error)
+	UpdateGroup(experimentID, groupID int64, req GroupInput) (Group, error)
+	DeleteGroup(experimentID, groupID int64) error
+	PushFullGroup(experimentID, groupID int64) (Experiment, error)
 	AddOverride(experimentID int64, req OverrideInput) (Override, error)
+	UpdateOverride(experimentID, overrideID int64, req OverrideInput) (Override, error)
+	DeleteOverride(experimentID, overrideID int64) error
 	ListEvaluationExperiments() ([]Experiment, error)
 }
 

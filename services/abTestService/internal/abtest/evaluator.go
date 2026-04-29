@@ -37,12 +37,40 @@ func (s *Service) SetExperimentStatus(id int64, status string) (Experiment, erro
 	return s.store.SetExperimentStatus(id, status)
 }
 
+func (s *Service) RenewExperiment(id int64, req RenewExperimentRequest) (Experiment, error) {
+	return s.store.RenewExperiment(id, req)
+}
+
+func (s *Service) WithdrawExperiment(id int64) (Experiment, error) {
+	return s.store.WithdrawExperiment(id)
+}
+
 func (s *Service) AddGroup(experimentID int64, req GroupInput) (Group, error) {
 	return s.store.AddGroup(experimentID, req)
 }
 
+func (s *Service) UpdateGroup(experimentID, groupID int64, req GroupInput) (Group, error) {
+	return s.store.UpdateGroup(experimentID, groupID, req)
+}
+
+func (s *Service) DeleteGroup(experimentID, groupID int64) error {
+	return s.store.DeleteGroup(experimentID, groupID)
+}
+
+func (s *Service) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
+	return s.store.PushFullGroup(experimentID, groupID)
+}
+
 func (s *Service) AddOverride(experimentID int64, req OverrideInput) (Override, error) {
 	return s.store.AddOverride(experimentID, req)
+}
+
+func (s *Service) UpdateOverride(experimentID, overrideID int64, req OverrideInput) (Override, error) {
+	return s.store.UpdateOverride(experimentID, overrideID, req)
+}
+
+func (s *Service) DeleteOverride(experimentID, overrideID int64) error {
+	return s.store.DeleteOverride(experimentID, overrideID)
 }
 
 func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
@@ -195,6 +223,9 @@ func selectGroup(experiment Experiment, req EvaluateRequest, override *Override)
 		if bucket < upper {
 			return group, true
 		}
+	}
+	if len(groups) > 0 {
+		return groups[0], true
 	}
 	return Group{}, false
 }

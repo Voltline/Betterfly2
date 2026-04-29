@@ -100,8 +100,15 @@ GET /abtest/admin
 - `POST /abtest/admin/api/experiments/{id}/start`
 - `POST /abtest/admin/api/experiments/{id}/pause`
 - `POST /abtest/admin/api/experiments/{id}/stop`
+- `POST /abtest/admin/api/experiments/{id}/renew`
+- `POST /abtest/admin/api/experiments/{id}/withdraw`
 - `POST /abtest/admin/api/experiments/{id}/groups`
+- `PUT /abtest/admin/api/experiments/{id}/groups/{group_id}`
+- `DELETE /abtest/admin/api/experiments/{id}/groups/{group_id}`
+- `POST /abtest/admin/api/experiments/{id}/groups/{group_id}/push_full`
 - `POST /abtest/admin/api/experiments/{id}/overrides`
+- `PUT /abtest/admin/api/experiments/{id}/overrides/{override_id}`
+- `DELETE /abtest/admin/api/experiments/{id}/overrides/{override_id}`
 
 创建实验示例:
 

@@ -20,36 +20,42 @@
     body {
       margin: 0;
       color: var(--ink);
-      font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       background:
         radial-gradient(circle at top left, rgba(255, 191, 91, .28), transparent 34rem),
         radial-gradient(circle at bottom right, rgba(63, 127, 113, .24), transparent 38rem),
         linear-gradient(135deg, #f6efe1 0%, #e6efe9 100%);
       min-height: 100vh;
     }
-    .shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 100vh; }
+    .shell { min-height: 100vh; }
     aside {
       position: sticky;
       top: 0;
-      height: 100vh;
-      padding: 28px 22px;
-      border-right: 1px solid rgba(40, 95, 88, .18);
+      z-index: 10;
+      display: grid;
+      grid-template-columns: minmax(220px, .8fr) auto minmax(320px, .9fr);
+      gap: 16px;
+      align-items: center;
+      padding: 14px 22px;
+      border-bottom: 1px solid rgba(40, 95, 88, .18);
       background: rgba(32, 48, 42, .92);
       color: #f7efe2;
-      box-shadow: 14px 0 48px rgba(28, 38, 33, .18);
+      box-shadow: 0 14px 48px rgba(28, 38, 33, .14);
+      backdrop-filter: blur(18px);
     }
-    .brand { margin-bottom: 28px; }
-    .brand-mark { width: 44px; height: 44px; border-radius: 15px; background: linear-gradient(135deg, #f2b35f, #79b7a6); margin-bottom: 14px; box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
-    .brand h1 { margin: 0; font-size: 25px; line-height: 1.1; letter-spacing: -.03em; }
-    .brand p { margin: 8px 0 0; color: rgba(247, 239, 226, .72); font-size: 13px; line-height: 1.5; }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 12px; background: linear-gradient(135deg, #f2b35f, #79b7a6); box-shadow: inset 0 0 0 1px rgba(255,255,255,.35); }
+    .brand h1 { margin: 0; font-size: 19px; line-height: 1.1; letter-spacing: 0; }
+    .brand p { margin: 3px 0 0; color: rgba(247, 239, 226, .72); font-size: 12px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .nav-row { display: flex; gap: 8px; justify-content: center; }
     .nav-button {
-      display: block;
-      width: 100%;
+      display: inline-flex;
+      width: auto;
       border: 0;
-      border-radius: 16px;
-      padding: 13px 14px;
-      margin: 8px 0;
-      text-align: left;
+      border-radius: 999px;
+      padding: 9px 13px;
+      margin: 0;
+      text-align: center;
       color: #f7efe2;
       background: transparent;
       cursor: pointer;
@@ -57,34 +63,36 @@
       font-weight: 800;
       transition: background .16s ease, transform .16s ease;
     }
-    .nav-button:hover, .nav-button.active { background: rgba(255, 255, 255, .13); transform: translateX(3px); }
-    .token-box { margin-top: 28px; padding: 15px; border-radius: 18px; background: rgba(255, 255, 255, .1); }
-    .token-box p { margin: 0 0 10px; color: rgba(247, 239, 226, .72); font-size: 12px; line-height: 1.5; }
-    main { padding: 30px; }
-    .topbar { margin-bottom: 22px; }
+    .nav-button:hover, .nav-button.active { background: rgba(255, 255, 255, .13); transform: translateY(-1px); }
+    .token-box { display: grid; grid-template-columns: minmax(0, 1fr) 170px auto; gap: 8px; align-items: center; padding: 9px; border-radius: 16px; background: rgba(255, 255, 255, .1); }
+    .token-box p { margin: 0; color: rgba(247, 239, 226, .72); font-size: 11px; line-height: 1.35; }
+    .token-box .actions { margin: 0; flex-wrap: nowrap; }
+    .token-box input { padding: 9px 10px; border-radius: 12px; }
+    main { padding: 22px; max-width: 1500px; margin: 0 auto; }
+    .topbar { display: flex; align-items: end; justify-content: space-between; gap: 22px; margin-bottom: 14px; }
     .eyebrow { color: var(--amber); font-weight: 900; letter-spacing: .12em; font-size: 12px; text-transform: uppercase; }
-    .page-title { margin: 4px 0 6px; font-size: clamp(30px, 5vw, 54px); line-height: .96; letter-spacing: -.055em; }
+    .page-title { margin: 4px 0 0; font-size: clamp(28px, 3vw, 40px); line-height: 1; letter-spacing: 0; }
     .subtitle { margin: 0; max-width: 820px; color: var(--muted); line-height: 1.65; }
     .panel {
       background: var(--panel);
       border: 1px solid rgba(223, 208, 183, .9);
-      border-radius: 28px;
-      padding: 22px;
+      border-radius: 24px;
+      padding: 18px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(18px);
     }
     .view { display: none; animation: rise .24s ease both; }
     .view.active { display: block; }
     @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
-    .stat { padding: 18px; border-radius: 22px; background: linear-gradient(145deg, #fffdf8, #edf5ef); border: 1px solid rgba(223, 208, 183, .72); }
-    .stat span { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
-    .stat strong { display: block; margin-top: 8px; font-size: 32px; letter-spacing: -.04em; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 18px; background: linear-gradient(145deg, #fffdf8, #edf5ef); border: 1px solid rgba(223, 208, 183, .72); }
+    .stat span { color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+    .stat strong { display: block; font-size: 24px; letter-spacing: 0; }
     .toolbar { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
     .search { max-width: 420px; }
     .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 22px; background: #fffdf8; }
     table { width: 100%; border-collapse: collapse; min-width: 980px; }
-    th, td { padding: 13px 14px; border-bottom: 1px solid #eadfcc; text-align: left; vertical-align: middle; font-size: 13px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid #eadfcc; text-align: left; vertical-align: middle; font-size: 12px; }
     th { color: #5f6b64; background: #f3eadb; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; }
     tbody tr { cursor: pointer; transition: background .15s ease; }
     tbody tr:hover { background: #f5fbf6; }
@@ -100,14 +108,23 @@
     .progress { height: 10px; border-radius: 999px; overflow: hidden; background: #eee4d4; margin: 4px 0; min-width: 120px; }
     .progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--green), #e0a348); }
     .detail-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .detail-title h2 { margin: 0; font-size: 28px; letter-spacing: -.03em; }
-    .kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
-    .kv div { padding: 13px; border-radius: 16px; background: rgba(237, 245, 239, .75); }
+    .detail-title h2 { margin: 0; font-size: 28px; letter-spacing: 0; }
+    .kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin: 13px 0; }
+    .kv div { padding: 10px 12px; border-radius: 14px; background: rgba(237, 245, 239, .75); }
     .kv span { display: block; color: var(--muted); font-size: 12px; font-weight: 800; }
     .kv strong { display: block; margin-top: 5px; font-size: 15px; word-break: break-word; }
-    .group-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+    .group-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }
     .group-row { padding: 13px; border-radius: 16px; background: #fffdf8; border: 1px solid var(--line); }
     .group-row header { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 900; }
+    .group-panel { display: grid; gap: 10px; padding: 14px; border-radius: 18px; background: #fffdf8; border: 1px solid var(--line); }
+    .group-panel header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .group-panel h4 { margin: 0; font-size: 17px; }
+    .group-editor { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; }
+    .group-panel textarea { min-height: 110px; }
+    .assignment-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; padding: 8px; border: 1px dashed #d6c6ad; border-radius: 13px; background: #fffaf0; }
+    .assignment-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 8px; background: #e8f3ed; color: var(--green); font-size: 12px; font-weight: 900; }
+    .assignment-chip button { padding: 2px 6px; box-shadow: none; background: transparent; color: var(--red); }
+    .inline-add { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
     .config-preview { max-height: 220px; overflow: auto; }
     .detail-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
     .inline-duration { display: grid; grid-template-columns: 1fr 140px; gap: 10px; }
@@ -145,9 +162,12 @@
     .result { max-height: 300px; white-space: pre-wrap; }
     .empty { padding: 24px; border: 1px dashed #cab89d; border-radius: 18px; color: var(--muted); text-align: center; }
     @media (max-width: 980px) {
-      .shell { grid-template-columns: 1fr; }
-      aside { position: relative; height: auto; }
-      .stats, .form-grid, .kv { grid-template-columns: 1fr; }
+      aside { position: relative; grid-template-columns: 1fr; align-items: stretch; }
+      .brand p { white-space: normal; }
+      .nav-row { justify-content: flex-start; flex-wrap: wrap; }
+      .token-box { grid-template-columns: 1fr; }
+      .topbar { display: block; }
+      .stats, .form-grid, .kv, .group-list, .group-editor { grid-template-columns: 1fr; }
       main { padding: 18px; }
     }
   </style>
@@ -157,12 +177,16 @@
     <aside>
       <div class="brand">
         <div class="brand-mark"></div>
-        <h1>ABTest Console</h1>
-        <p>统一配置客户端与未来服务端实验，按设备或服务主体稳定分流。</p>
+        <div>
+          <h1>ABTest Console</h1>
+          <p>统一配置客户端与未来服务端实验。</p>
+        </div>
       </div>
-      <button class="nav-button active" data-view="dashboard" onclick="showView('dashboard')">实验列表</button>
-      <button class="nav-button" data-view="create" onclick="showView('create')">新增实验</button>
-      <button class="nav-button" data-view="debug" onclick="showView('debug')">请求结果</button>
+      <div class="nav-row">
+        <button class="nav-button active" data-view="dashboard" onclick="showView('dashboard')">实验列表</button>
+        <button class="nav-button" data-view="create" onclick="showView('create')">新增实验</button>
+        <button class="nav-button" data-view="debug" onclick="showView('debug')">请求结果</button>
+      </div>
       <div class="token-box">
         <p>{{.TokenHint}}</p>
         <input id="token" placeholder="ABTEST_ADMIN_TOKEN">
@@ -362,7 +386,7 @@
       const selected = exp.id === selectedExperimentID ? 'selected' : '';
       const status = escapeHTML(exp.status || 'draft');
       const progress = experimentProgress(exp);
-      const groups = (exp.groups || []).map(g => escapeHTML(g.group_key) + ' ' + formatRatio(g.traffic_basis_points)).join('<br>') || '暂无分组';
+      const groups = (exp.groups || []).map((g, index) => escapeHTML(g.group_key) + ' ' + formatGroupRatio(exp.groups || [], index)).join('<br>') || '暂无分组';
       return '<tr class="' + selected + '" onclick="openExperiment(' + exp.id + ')">' +
         '<td>' + exp.id + '</td>' +
         '<td class="key-cell"><strong>' + escapeHTML(exp.name || exp.experiment_key) + '</strong><span>' + escapeHTML(exp.experiment_key) + '</span></td>' +
@@ -390,15 +414,7 @@
     }
 
     function detailHTML(exp) {
-      const groups = (exp.groups || []).map(group => '<div class="group-row">' +
-        '<header><span>' + escapeHTML(group.group_key) + '</span><span>' + formatRatio(group.traffic_basis_points) + '</span></header>' +
-        '<pre class="config-preview">' + escapeHTML(JSON.stringify(group.config || {}, null, 2)) + '</pre>' +
-      '</div>').join('') || '<div class="empty">暂无分组</div>';
-      const overrides = (exp.overrides || []).map(item => '<div class="group-row">' +
-        '<header><span>' + escapeHTML(item.subject_type) + ':' + escapeHTML(item.subject_id) + '</span><span>' + escapeHTML(item.action) + '</span></header>' +
-        '<div class="meta">group: ' + escapeHTML(item.group_key || '-') + '</div>' +
-        '<pre class="config-preview">' + escapeHTML(JSON.stringify(item.config || {}, null, 2)) + '</pre>' +
-      '</div>').join('') || '<div class="empty">暂无例外</div>';
+      const groups = (exp.groups || []).map((group, index) => groupPanelHTML(exp, group, index)).join('') || '<div class="empty">暂无分组</div>';
 
       return '<div class="detail-title">' +
           '<div><h2>' + escapeHTML(exp.name || exp.experiment_key) + '</h2><div class="meta">' + escapeHTML(exp.experiment_key) + '</div></div>' +
@@ -419,11 +435,34 @@
           '<button onclick="setStatus(' + exp.id + ', \'start\')">启动</button>' +
           '<button class="secondary" onclick="setStatus(' + exp.id + ', \'pause\')">暂停</button>' +
           '<button class="danger" onclick="setStatus(' + exp.id + ', \'stop\')">停止</button>' +
+          '<button class="danger" onclick="withdrawExperiment(' + exp.id + ')">撤回</button>' +
         '</div>' +
+        '<div class="detail-section"><h3>到期续期</h3><div class="inline-duration"><input id="renew_duration_value_' + exp.id + '" type="number" min="1" value="7"><select id="renew_duration_unit_' + exp.id + '">' + durationOptions('day') + '</select></div><div class="actions"><button onclick="renewExperiment(' + exp.id + ')">续期实验</button></div></div>' +
         '<div class="detail-section"><h3>修改基础参数</h3>' + editExperimentForm(exp) + '</div>' +
         '<div class="detail-section"><h3>Targeting</h3><pre class="config-preview">' + escapeHTML(JSON.stringify(exp.targeting || {}, null, 2)) + '</pre></div>' +
-        '<div class="detail-section"><h3>分组配置</h3><div class="group-list">' + groups + '</div>' + addGroupForm(exp) + '</div>' +
-        '<div class="detail-section"><h3>例外规则</h3><div class="group-list">' + overrides + '</div>' + addOverrideForm(exp) + '</div>';
+        '<div class="detail-section"><h3>分组与指定设备</h3><p class="meta">每个分组都可以直接改名称、占比和配置；在分组下输入设备 ID，会创建 force_group 例外并把设备固定到该组。</p><div class="group-list">' + groups + '</div>' + addGroupForm(exp) + '</div>';
+    }
+
+    function groupPanelHTML(exp, group, index) {
+      const assigned = (exp.overrides || []).filter(item =>
+        item.subject_type === 'device' && item.action === 'force_group' && item.group_key === group.group_key
+      );
+      const chips = assigned.map(item => '<span class="assignment-chip">' +
+        escapeHTML(item.subject_id) +
+        '<button title="移除设备例外" onclick="deleteOverride(' + exp.id + ', ' + item.id + ')">x</button>' +
+      '</span>').join('') || '<span class="meta">暂无指定设备</span>';
+
+      return '<div class="group-panel">' +
+        '<header><h4>' + escapeHTML(group.group_key) + '</h4><span class="badge">' + formatGroupRatio(exp.groups || [], index) + '</span></header>' +
+        '<div class="group-editor">' +
+          '<div><label>分组名称</label><input id="group_key_edit_' + group.id + '" value="' + escapeAttr(group.group_key || '') + '"></div>' +
+          '<div><label>万分比</label><input id="group_traffic_edit_' + group.id + '" type="number" min="0" max="10000" value="' + Number(group.traffic_basis_points || 0) + '"></div>' +
+        '</div>' +
+        '<label>分组 Config JSON</label><textarea id="group_config_edit_' + group.id + '">' + escapeHTML(JSON.stringify(group.config || {}, null, 2)) + '</textarea>' +
+        '<div class="actions"><button onclick="updateGroup(' + exp.id + ', ' + group.id + ')">保存分组</button><button class="secondary" onclick="pushFullGroup(' + exp.id + ', ' + group.id + ')">推全到该组</button><button class="danger" onclick="deleteGroup(' + exp.id + ', ' + group.id + ')">删除分组</button></div>' +
+        '<label>固定到该组的设备</label><div class="assignment-list">' + chips + '</div>' +
+        '<div class="inline-add"><input id="assign_device_' + group.id + '" placeholder="输入 device_id 后加入 ' + escapeAttr(group.group_key) + '"><button onclick="assignDeviceToGroup(' + exp.id + ', ' + group.id + ')">加入该组</button></div>' +
+      '</div>';
     }
 
     function editExperimentForm(exp) {
@@ -441,10 +480,12 @@
     }
 
     function addGroupForm(exp) {
+      const remaining = remainingTraffic(exp);
       return '<div class="detail-section"><h3>添加分组</h3><div class="form-grid">' +
         '<div><label>分组 Key</label><input id="group_key_' + exp.id + '" placeholder="variant"></div>' +
-        '<div><label>分流万分比</label><input id="traffic_basis_points_' + exp.id + '" type="number" value="0"></div>' +
+        '<div><label>分流万分比</label><input id="traffic_basis_points_' + exp.id + '" type="number" min="0" max="' + remaining + '" value="' + remaining + '"></div>' +
         '</div><label>分组 Config JSON</label><textarea id="group_config_' + exp.id + '">{"flag":true}</textarea>' +
+        '<p class="meta">当前已使用 ' + formatRatio(usedTraffic(exp)) + '，剩余 ' + formatRatio(remaining) + '。服务端会拒绝总和超过 100%。</p>' +
         '<div class="actions"><button onclick="addGroup(' + exp.id + ')">添加分组</button></div></div>';
     }
 
@@ -512,6 +553,32 @@
       }
     }
 
+    async function renewExperiment(id) {
+      try {
+        const body = {
+          duration_seconds: durationSeconds('renew_duration_value_' + id, 'renew_duration_unit_' + id)
+        };
+        const result = await api('/abtest/admin/api/experiments/' + id + '/renew', {method: 'POST', body: JSON.stringify(body)});
+        showResult(result);
+        selectedExperimentID = result.id;
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function withdrawExperiment(id) {
+      if (!confirm('确认撤回这个实验吗？撤回后客户端下一次拉配置将不会再收到它。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + id + '/withdraw', {method: 'POST'});
+        showResult(result);
+        selectedExperimentID = result.id;
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
     async function addGroup(id) {
       try {
         const body = {
@@ -522,6 +589,77 @@
         const result = await api('/abtest/admin/api/experiments/' + id + '/groups', {method: 'POST', body: JSON.stringify(body)});
         showResult(result);
         selectedExperimentID = Number(id);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function updateGroup(experimentID, groupID) {
+      try {
+        const body = {
+          group_key: document.getElementById('group_key_edit_' + groupID).value,
+          traffic_basis_points: Number(document.getElementById('group_traffic_edit_' + groupID).value),
+          config: JSON.parse(document.getElementById('group_config_edit_' + groupID).value || '{}')
+        };
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID, {method: 'PUT', body: JSON.stringify(body)});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function pushFullGroup(experimentID, groupID) {
+      if (!confirm('确认把该分组推全到 100% 吗？其它分组会被置为 0%。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID + '/push_full', {method: 'POST'});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function deleteGroup(experimentID, groupID) {
+      if (!confirm('确认删除这个分组吗？固定到该组的设备例外也会一起删除。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID, {method: 'DELETE'});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function assignDeviceToGroup(experimentID, groupID) {
+      const deviceID = document.getElementById('assign_device_' + groupID).value.trim();
+      const groupKey = document.getElementById('group_key_edit_' + groupID).value.trim();
+      if (!deviceID || !groupKey) {
+        showResult({error: 'device_id and group_key are required'});
+        return;
+      }
+      try {
+        const exp = experiments.find(item => item.id === Number(experimentID));
+        const existing = ((exp && exp.overrides) || []).find(item =>
+          item.subject_type === 'device' && item.subject_id === deviceID && item.action === 'force_group'
+        );
+        const body = {
+          subject_type: 'device',
+          subject_id: deviceID,
+          action: 'force_group',
+          group_key: groupKey,
+          config: existing && existing.config ? existing.config : {}
+        };
+        const path = existing
+          ? '/abtest/admin/api/experiments/' + experimentID + '/overrides/' + existing.id
+          : '/abtest/admin/api/experiments/' + experimentID + '/overrides';
+        const result = await api(path, {method: existing ? 'PUT' : 'POST', body: JSON.stringify(body)});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
         await loadExperiments();
       } catch (err) {
         showResult(err);
@@ -540,6 +678,36 @@
         const result = await api('/abtest/admin/api/experiments/' + id + '/overrides', {method: 'POST', body: JSON.stringify(body)});
         showResult(result);
         selectedExperimentID = Number(id);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function updateOverride(experimentID, overrideID) {
+      try {
+        const body = {
+          subject_type: document.getElementById('override_subject_type_' + overrideID).value,
+          subject_id: document.getElementById('override_subject_id_' + overrideID).value,
+          action: document.getElementById('override_action_edit_' + overrideID).value,
+          group_key: document.getElementById('override_group_edit_' + overrideID).value,
+          config: JSON.parse(document.getElementById('override_config_edit_' + overrideID).value || '{}')
+        };
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/overrides/' + overrideID, {method: 'PUT', body: JSON.stringify(body)});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function deleteOverride(experimentID, overrideID) {
+      if (!confirm('确认删除这个例外规则吗？')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/overrides/' + overrideID, {method: 'DELETE'});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
         await loadExperiments();
       } catch (err) {
         showResult(err);
@@ -594,6 +762,20 @@
       return (Number(bp || 0) / 100).toFixed(2) + '%';
     }
 
+    function usedTraffic(exp) {
+      return (exp.groups || []).reduce((sum, group) => sum + Number(group.traffic_basis_points || 0), 0);
+    }
+
+    function remainingTraffic(exp) {
+      return Math.max(0, 10000 - usedTraffic(exp));
+    }
+
+    function formatGroupRatio(groups, index) {
+      const allZero = groups.length > 0 && groups.every(group => Number(group.traffic_basis_points || 0) === 0);
+      if (allZero) return index === 0 ? '默认100%' : '0.00%';
+      return formatRatio(groups[index] && groups[index].traffic_basis_points);
+    }
+
     function durationSeconds(valueID, unitID) {
       const value = Number(document.getElementById(valueID).value || 0);
       const unit = document.getElementById(unitID).value;
@@ -619,6 +801,10 @@
 
     function optionHTML(value, selected) {
       return '<option value="' + value + '"' + (value === selected ? ' selected' : '') + '>' + value + '</option>';
+    }
+
+    function overrideActionOptions(selected) {
+      return ['force_group', 'exclude', 'merge_config'].map(action => optionHTML(action, selected)).join('');
     }
 
     function fromDateTimeLocalUTC8(value) {

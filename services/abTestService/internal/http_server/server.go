@@ -117,14 +117,14 @@ func (s *Server) experiments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseExperimentPath(strings.TrimPrefix(r.URL.Path, "/abtest/admin/api/experiments/"))
+	id, action, childID, childAction, ok := parseExperimentPath(strings.TrimPrefix(r.URL.Path, "/abtest/admin/api/experiments/"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
 	if action != "" {
-		s.experimentAction(w, r, id, action)
+		s.experimentAction(w, r, id, action, childID, childAction)
 		return
 	}
 
@@ -153,14 +153,13 @@ func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int64, action string) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
+func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int64, action string, childID int64, childAction string) {
 	switch action {
 	case "start":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		experiment, err := s.service.SetExperimentStatus(id, abtest.StatusRunning)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -168,6 +167,10 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 		}
 		writeJSON(w, http.StatusOK, experiment)
 	case "pause":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		experiment, err := s.service.SetExperimentStatus(id, abtest.StatusPaused)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -175,38 +178,155 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 		}
 		writeJSON(w, http.StatusOK, experiment)
 	case "stop":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		experiment, err := s.service.SetExperimentStatus(id, abtest.StatusStopped)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, experiment)
+	case "renew":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		var req abtest.RenewExperimentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		experiment, err := s.service.RenewExperiment(id, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, experiment)
+	case "withdraw":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		experiment, err := s.service.WithdrawExperiment(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, experiment)
 	case "groups":
+		s.groupAction(w, r, id, childID, childAction)
+	case "overrides":
+		s.overrideAction(w, r, id, childID)
+	default:
+		writeError(w, http.StatusNotFound, "not found")
+	}
+}
+
+func (s *Server) groupAction(w http.ResponseWriter, r *http.Request, experimentID, groupID int64, childAction string) {
+	if groupID == 0 {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		var req abtest.GroupInput
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		group, err := s.service.AddGroup(id, req)
+		group, err := s.service.AddGroup(experimentID, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, group)
-	case "overrides":
+		return
+	}
+
+	if childAction == "push_full" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		experiment, err := s.service.PushFullGroup(experimentID, groupID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, experiment)
+		return
+	}
+	if childAction != "" {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var req abtest.GroupInput
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		group, err := s.service.UpdateGroup(experimentID, groupID, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, group)
+	case http.MethodDelete:
+		if err := s.service.DeleteGroup(experimentID, groupID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) overrideAction(w http.ResponseWriter, r *http.Request, experimentID, overrideID int64) {
+	if overrideID == 0 {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		var req abtest.OverrideInput
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		override, err := s.service.AddOverride(id, req)
+		override, err := s.service.AddOverride(experimentID, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusCreated, override)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var req abtest.OverrideInput
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		override, err := s.service.UpdateOverride(experimentID, overrideID, req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, override)
+	case http.MethodDelete:
+		if err := s.service.DeleteOverride(experimentID, overrideID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 	default:
-		writeError(w, http.StatusNotFound, "not found")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -242,19 +362,36 @@ func (s *Server) isAdminAuthorized(r *http.Request) bool {
 	return token == s.adminToken
 }
 
-func parseExperimentPath(path string) (int64, string, bool) {
+func parseExperimentPath(path string) (int64, string, int64, string, bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
-		return 0, "", false
+		return 0, "", 0, "", false
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return 0, "", false
+		return 0, "", 0, "", false
 	}
 	if len(parts) == 1 {
-		return id, "", true
+		return id, "", 0, "", true
 	}
-	return id, parts[1], true
+	if len(parts) == 2 {
+		return id, parts[1], 0, "", true
+	}
+	if len(parts) == 3 {
+		childID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			return 0, "", 0, "", false
+		}
+		return id, parts[1], childID, "", true
+	}
+	if len(parts) == 4 {
+		childID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			return 0, "", 0, "", false
+		}
+		return id, parts[1], childID, parts[3], true
+	}
+	return 0, "", 0, "", false
 }
 
 func firstNonEmpty(values ...string) string {

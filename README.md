@@ -93,6 +93,7 @@
 | **Storage Service** | 8081 (HTTP) | 消息存储、文件管理，支持多级缓存 |
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
 | **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
+| **Payment Service** | 8084 (HTTP) | 支付订单、渠道回调、幂等与状态机 |
 
 ### 基础设施服务 / Infrastructure Services
 
@@ -209,6 +210,8 @@ Betterfly2/
 │   ├── dataForwardingService/ # 数据转发服务
 │   ├── friendService/         # 好友服务
 │   ├── storageService/        # 存储服务
+│   ├── abTestService/         # 实验配置服务
+│   ├── paymentService/        # 支付订单服务
 │   └── monitoring/            # 监控配置 (Prometheus/Grafana)
 ├── shared/                    # 共享组件
 │   ├── db/                    # 数据库连接与模型

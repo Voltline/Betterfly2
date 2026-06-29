@@ -11,8 +11,108 @@
 2. [Kafka MQ API（对内接口）](#kafka-mq-api对内接口)
 3. [Protobuf 消息定义](#protobuf消息定义)
 4. [ABTest Service API](#abtest-service-api)
+5. [Payment Service API](#payment-service-api)
 
 ---
+
+## Payment Service API
+
+PaymentService 提供统一支付订单、渠道回调、幂等与状态机能力。当前一期接入 `mock` provider，用于先跑通服务边界；真实微信/支付宝/Stripe 渠道后续应通过 provider adapter 接入。
+
+**基础URL**: `http://localhost:8084`
+
+### 健康检查
+
+```http
+GET /health
+GET /ready
+```
+
+### 创建订单
+
+需要客户端 JWT:
+
+```http
+POST /payment/v1/orders
+Authorization: Bearer <JWT>
+X-User-ID: <user_id>
+Idempotency-Key: <client_request_id>
+Content-Type: application/json
+```
+
+`Idempotency-Key` 必填，同一用户使用相同幂等键会返回同一张订单，避免客户端重试时重复创建支付单。
+
+请求:
+
+```json
+{
+  "subject": "Betterfly Premium",
+  "description": "monthly membership",
+  "amount_cents": 1200,
+  "currency": "CNY",
+  "provider": "mock",
+  "expire_seconds": 1800,
+  "client_payload": {
+    "sku": "premium_monthly"
+  }
+}
+```
+
+### 查询订单
+
+```http
+GET /payment/v1/orders/{order_no}
+Authorization: Bearer <JWT>
+X-User-ID: <user_id>
+```
+
+用户只能查询自己的订单。
+
+### 查询当前用户订单列表
+
+```http
+GET /payment/v1/orders?limit=20
+Authorization: Bearer <JWT>
+X-User-ID: <user_id>
+```
+
+### Mock 支付成功
+
+仅用于开发测试。若配置了 `PAYMENT_ADMIN_TOKEN`，需要携带 `X-Admin-Token`。
+
+```http
+POST /payment/v1/mock/pay/{order_no}
+```
+
+### Provider 回调
+
+```http
+POST /payment/v1/providers/mock/callback
+X-Payment-Signature: <hmac_sha256>
+Content-Type: application/json
+```
+
+请求:
+
+```json
+{
+  "event_id": "evt_001",
+  "event_type": "payment.succeeded",
+  "order_no": "pay_20260629120000_ab12cd34ef56",
+  "provider_trade_no": "mock_trade_001",
+  "amount_cents": 1200,
+  "status": "paid"
+}
+```
+
+回调验签使用 `PAYMENT_MOCK_CALLBACK_SECRET`。真实渠道接入时应替换为渠道自己的签名算法、证书校验和事件去重策略。
+
+### 管理端订单列表
+
+```http
+GET /payment/admin/api/orders?user_id=1&limit=20
+X-Admin-Token: <PAYMENT_ADMIN_TOKEN>
+```
 
 ## ABTest Service API
 

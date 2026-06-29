@@ -253,6 +253,26 @@ services:
     networks:
       - backend
 
+  payment_service:
+    build:
+      context: ..
+      dockerfile: services/paymentService/Dockerfile
+    container_name: paymentService
+    environment:
+      PORT: ${PAYMENT_HTTP_PORT:-8084}
+      PGSQL_DSN: ${PGSQL_DSN}
+      AUTH_RPC_ADDR: auth_service:50051
+      PAYMENT_ADMIN_TOKEN: ${PAYMENT_ADMIN_TOKEN:-}
+      PAYMENT_PUBLIC_BASE_URL: ${PAYMENT_PUBLIC_BASE_URL:-http://localhost:8084}
+      PAYMENT_MOCK_CALLBACK_SECRET: ${PAYMENT_MOCK_CALLBACK_SECRET:-dev-payment-secret}
+      LOG_LEVEL: debug
+    ports:
+      - "${PAYMENT_HTTP_PORT:-8084}:${PAYMENT_HTTP_PORT:-8084}"
+    depends_on:
+      - auth_service
+    networks:
+      - backend
+
 networks:
   backend:
     driver: bridge

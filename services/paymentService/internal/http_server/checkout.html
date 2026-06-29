@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Betterfly Checkout</title>
+  <style>
+    :root {
+      --ink: #0a2540;
+      --subtle: #697386;
+      --muted: #8792a2;
+      --line: #e6ebf1;
+      --field: #f7fafc;
+      --blue: #635bff;
+      --blue-dark: #4f46e5;
+      --green: #00a878;
+      --red: #df1b41;
+      --canvas: #f6f9fc;
+      --shadow: 0 22px 70px rgba(50, 50, 93, 0.13), 0 6px 18px rgba(0, 0, 0, 0.05);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 18% 8%, rgba(99, 91, 255, 0.16), transparent 28rem),
+        radial-gradient(circle at 86% 14%, rgba(0, 212, 255, 0.18), transparent 24rem),
+        linear-gradient(180deg, #ffffff 0%, var(--canvas) 100%);
+    }
+
+    .topbar {
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 34px;
+      border-bottom: 1px solid rgba(230, 235, 241, 0.82);
+      background: rgba(255, 255, 255, 0.78);
+      backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: -0.04em;
+      font-size: 18px;
+    }
+
+    .logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, var(--blue), #00d4ff);
+      box-shadow: 0 12px 26px rgba(99, 91, 255, 0.26);
+    }
+
+    .secure {
+      color: var(--subtle);
+      font-size: 13px;
+      font-weight: 680;
+    }
+
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 34px auto 54px;
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      overflow: hidden;
+      background: white;
+      box-shadow: var(--shadow);
+    }
+
+    .summary {
+      padding: 42px;
+      background:
+        radial-gradient(circle at 12% 16%, rgba(99, 91, 255, 0.18), transparent 18rem),
+        linear-gradient(180deg, #f8fbff 0%, #eef4fb 100%);
+      border-right: 1px solid var(--line);
+      min-height: 720px;
+    }
+
+    .checkout {
+      padding: 42px;
+      background: white;
+    }
+
+    .back {
+      color: var(--subtle);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+      display: inline-flex;
+      gap: 8px;
+      margin-bottom: 34px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 42px;
+      line-height: 1;
+      letter-spacing: -0.06em;
+    }
+
+    .price {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      margin: 24px 0 28px;
+    }
+
+    .price strong {
+      font-size: 46px;
+      line-height: 0.95;
+      letter-spacing: -0.06em;
+    }
+
+    .price span {
+      color: var(--subtle);
+      font-weight: 750;
+      margin-bottom: 5px;
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 16px 0;
+      border-top: 1px solid rgba(214, 224, 236, 0.92);
+    }
+
+    .item:last-child {
+      border-bottom: 1px solid rgba(214, 224, 236, 0.92);
+    }
+
+    .item-icon {
+      height: 54px;
+      border-radius: 15px;
+      background:
+        linear-gradient(135deg, rgba(99, 91, 255, 0.95), rgba(0, 212, 255, 0.86));
+      box-shadow: 0 16px 28px rgba(99, 91, 255, 0.18);
+    }
+
+    .item-title {
+      font-weight: 790;
+      letter-spacing: -0.02em;
+    }
+
+    .item-meta {
+      color: var(--subtle);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .amount {
+      font-weight: 790;
+    }
+
+    .total {
+      display: grid;
+      gap: 12px;
+      margin-top: 24px;
+      color: var(--subtle);
+      font-size: 14px;
+    }
+
+    .total-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .total-row.final {
+      color: var(--ink);
+      font-weight: 820;
+      font-size: 18px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(214, 224, 236, 0.92);
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 21px;
+      letter-spacing: -0.04em;
+    }
+
+    .hint {
+      color: var(--subtle);
+      font-size: 13px;
+      line-height: 1.65;
+      margin-bottom: 22px;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      margin-bottom: 22px;
+    }
+
+    .tab {
+      border: 0;
+      background: white;
+      color: var(--subtle);
+      padding: 12px;
+      font-weight: 780;
+      cursor: pointer;
+      border-right: 1px solid var(--line);
+    }
+
+    .tab:last-child { border-right: 0; }
+    .tab.active {
+      color: var(--ink);
+      background: #f7fafc;
+      box-shadow: inset 0 -2px 0 var(--blue);
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+      color: #425466;
+      font-size: 12px;
+      font-weight: 780;
+    }
+
+    input, select {
+      width: 100%;
+      height: 44px;
+      border: 1px solid #dbe3ee;
+      border-radius: 11px;
+      padding: 0 12px;
+      font: inherit;
+      color: var(--ink);
+      background: white;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s, background .15s;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
+      background: white;
+    }
+
+    .wide { grid-column: 1 / -1; }
+
+    .card-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 110px 110px;
+      gap: 10px;
+    }
+
+    .section {
+      margin-top: 28px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    .pay-button {
+      width: 100%;
+      height: 48px;
+      border: 0;
+      border-radius: 12px;
+      margin-top: 24px;
+      color: white;
+      background: var(--blue);
+      font-weight: 820;
+      font-size: 15px;
+      cursor: pointer;
+      box-shadow: 0 16px 32px rgba(99, 91, 255, 0.22);
+      transition: transform .12s, background .12s;
+    }
+
+    .pay-button:hover {
+      transform: translateY(-1px);
+      background: var(--blue-dark);
+    }
+
+    .pay-button:disabled {
+      opacity: .62;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .dev {
+      margin-top: 24px;
+      padding: 16px;
+      border: 1px dashed #c9d4e4;
+      border-radius: 15px;
+      background: #fbfdff;
+    }
+
+    .dev summary {
+      cursor: pointer;
+      font-weight: 820;
+      color: var(--subtle);
+    }
+
+    .result {
+      margin-top: 18px;
+      border-radius: 14px;
+      padding: 14px;
+      display: none;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .result.show {
+      display: block;
+    }
+
+    .result.ok {
+      color: #05603a;
+      background: #e8fbf4;
+      border: 1px solid #b7ebd3;
+    }
+
+    .result.err {
+      color: #8a1538;
+      background: #fff1f3;
+      border: 1px solid #ffc4d1;
+    }
+
+    .receipt {
+      margin-top: 18px;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      background: #fbfdff;
+    }
+
+    .receipt.show {
+      display: block;
+    }
+
+    .receipt-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 13px 14px;
+      border-bottom: 1px solid #edf2f7;
+      font-size: 13px;
+    }
+
+    .receipt-row:last-child { border-bottom: 0; }
+    .receipt-row span:first-child { color: var(--subtle); }
+    .receipt-row span:last-child {
+      font-weight: 760;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(255,255,255,.45);
+      border-top-color: white;
+      border-radius: 999px;
+      animation: spin .8s linear infinite;
+      vertical-align: -2px;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 900px) {
+      .page { grid-template-columns: 1fr; }
+      .summary {
+        min-height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 620px) {
+      .topbar { padding: 0 18px; }
+      .page { width: 100%; margin: 0; border-radius: 0; border-left: 0; border-right: 0; }
+      .summary, .checkout { padding: 26px 20px; }
+      .fields, .card-row { grid-template-columns: 1fr; }
+      h1 { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><div class="logo"></div><span>Betterfly</span></div>
+    <div class="secure">Secure mock checkout</div>
+  </header>
+
+  <main class="page">
+    <section class="summary">
+      <a class="back" href="/payment/debug">← Back to payment console</a>
+      <h1>Complete your purchase</h1>
+      <div class="price"><strong id="heroPrice">¥12.00</strong><span>CNY</span></div>
+
+      <div class="item">
+        <div class="item-icon"></div>
+        <div>
+          <div class="item-title" id="summaryTitle">Betterfly Premium</div>
+          <div class="item-meta">Monthly membership · Mock provider</div>
+        </div>
+        <div class="amount" id="summaryAmount">¥12.00</div>
+      </div>
+
+      <div class="total">
+        <div class="total-row"><span>Subtotal</span><strong id="subtotal">¥12.00</strong></div>
+        <div class="total-row"><span>Tax</span><strong>¥0.00</strong></div>
+        <div class="total-row final"><span>Total due today</span><strong id="total">¥12.00</strong></div>
+      </div>
+    </section>
+
+    <section class="checkout">
+      <h2>Payment method</h2>
+      <p class="hint">这是一个类似 Stripe Checkout 的用户侧操作页。卡号不会被发送到服务端；当前只用于 mock 支付流程验证。</p>
+
+      <div class="tabs">
+        <button class="tab active" type="button">Card</button>
+        <button class="tab" type="button">Alipay</button>
+        <button class="tab" type="button">WeChat</button>
+      </div>
+
+      <div class="fields">
+        <label class="wide">Email
+          <input id="email" value="test@betterfly.local" autocomplete="email">
+        </label>
+        <label class="wide">Card information
+          <div class="card-row">
+            <input id="cardNumber" value="4242 4242 4242 4242" inputmode="numeric">
+            <input id="cardExpiry" value="12 / 30">
+            <input id="cardCvc" value="123" inputmode="numeric">
+          </div>
+        </label>
+        <label class="wide">Name on card
+          <input id="cardName" value="Voltline">
+        </label>
+        <label>Country or region
+          <select id="country">
+            <option>China</option>
+            <option>United States</option>
+            <option>Germany</option>
+            <option>Singapore</option>
+          </select>
+        </label>
+        <label>Postal code
+          <input id="postalCode" value="100000">
+        </label>
+      </div>
+
+      <div class="section">
+        <h2>Order</h2>
+        <div class="fields">
+          <label>Product
+            <input id="subject" value="Betterfly Premium">
+          </label>
+          <label>Amount cents
+            <input id="amountCents" type="number" value="1200">
+          </label>
+          <label>Currency
+            <input id="currency" value="CNY">
+          </label>
+          <label>Idempotency key
+            <input id="idempotencyKey">
+          </label>
+        </div>
+      </div>
+
+      <details class="dev">
+        <summary>Developer credentials</summary>
+        <div class="fields" style="margin-top: 14px;">
+          <label>User ID
+            <input id="userId" value="1">
+          </label>
+          <label>Admin token
+            <input id="adminToken" placeholder="empty in local dev">
+          </label>
+          <label class="wide">JWT
+            <input id="jwt" placeholder="Bearer token without prefix">
+          </label>
+        </div>
+      </details>
+
+      <button class="pay-button" id="payButton" onclick="pay()">Pay <span id="buttonAmount">¥12.00</span></button>
+
+      <div class="result" id="resultBox"></div>
+
+      <div class="receipt" id="receipt">
+        <div class="receipt-row"><span>Status</span><span id="receiptStatus">-</span></div>
+        <div class="receipt-row"><span>Order</span><span id="receiptOrder">-</span></div>
+        <div class="receipt-row"><span>Amount</span><span id="receiptAmount">-</span></div>
+        <div class="receipt-row"><span>Provider</span><span id="receiptProvider">-</span></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+
+    function init() {
+      const saved = JSON.parse(localStorage.getItem("bf2_payment_checkout") || "{}");
+      for (const [key, value] of Object.entries(saved)) {
+        if ($(key)) $(key).value = value;
+      }
+      if (!$("idempotencyKey").value) newKey();
+      updatePrice();
+      ["subject", "amountCents", "currency"].forEach(id => $(id).addEventListener("input", updatePrice));
+    }
+
+    function newKey() {
+      $("idempotencyKey").value = "checkout_" + crypto.randomUUID();
+    }
+
+    function saveSettings() {
+      const keys = ["userId", "jwt", "adminToken", "email", "cardName"];
+      const data = {};
+      keys.forEach(key => data[key] = $(key).value);
+      localStorage.setItem("bf2_payment_checkout", JSON.stringify(data));
+    }
+
+    function formatMoney(cents, currency) {
+      const value = Number(cents || 0) / 100;
+      if ((currency || "CNY").toUpperCase() === "CNY") return "¥" + value.toFixed(2);
+      return value.toFixed(2) + " " + (currency || "CNY");
+    }
+
+    function updatePrice() {
+      const amount = formatMoney($("amountCents").value, $("currency").value);
+      $("heroPrice").textContent = amount;
+      $("summaryAmount").textContent = amount;
+      $("subtotal").textContent = amount;
+      $("total").textContent = amount;
+      $("buttonAmount").textContent = amount;
+      $("summaryTitle").textContent = $("subject").value || "Betterfly Product";
+    }
+
+    async function pay() {
+      saveSettings();
+      setLoading(true);
+      hideResult();
+      try {
+        const order = await createOrder();
+        const paid = await mockPay(order.order_no);
+        showReceipt(paid.order || paid);
+        showResult("ok", "Payment succeeded. Mock provider 已经把订单推进到 paid 状态。");
+        newKey();
+      } catch (err) {
+        showResult("err", err.message || String(err));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function createOrder() {
+      const jwt = $("jwt").value.trim();
+      const resp = await fetch("/payment/v1/orders", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": jwt ? `Bearer ${jwt}` : "",
+          "X-User-ID": $("userId").value.trim(),
+          "Idempotency-Key": $("idempotencyKey").value.trim()
+        },
+        body: JSON.stringify({
+          subject: $("subject").value.trim(),
+          description: "checkout page payment",
+          amount_cents: Number($("amountCents").value),
+          currency: $("currency").value.trim(),
+          provider: "mock",
+          expire_seconds: 1800,
+          client_payload: {
+            source: "checkout_page",
+            email: $("email").value.trim()
+          }
+        })
+      });
+      return readResponse(resp, "Create order failed");
+    }
+
+    async function mockPay(orderNo) {
+      const token = $("adminToken").value.trim();
+      const resp = await fetch(`/payment/v1/mock/pay/${encodeURIComponent(orderNo)}`, {
+        method: "POST",
+        headers: token ? {"X-Admin-Token": token} : {}
+      });
+      return readResponse(resp, "Mock payment failed");
+    }
+
+    async function readResponse(resp, fallback) {
+      const text = await resp.text();
+      let body = text;
+      try { body = JSON.parse(text); } catch (_) {}
+      if (!resp.ok) {
+        const detail = typeof body === "string" ? body : (body.error || JSON.stringify(body));
+        throw new Error(`${fallback}: ${detail}`);
+      }
+      return body;
+    }
+
+    function showReceipt(order) {
+      $("receipt").classList.add("show");
+      $("receiptStatus").textContent = order.status || "-";
+      $("receiptOrder").textContent = order.order_no || "-";
+      $("receiptAmount").textContent = formatMoney(order.amount_cents, order.currency);
+      $("receiptProvider").textContent = order.provider || "-";
+    }
+
+    function showResult(type, text) {
+      const box = $("resultBox");
+      box.className = `result show ${type}`;
+      box.textContent = text;
+    }
+
+    function hideResult() {
+      $("resultBox").className = "result";
+      $("resultBox").textContent = "";
+    }
+
+    function setLoading(loading) {
+      const button = $("payButton");
+      button.disabled = loading;
+      button.innerHTML = loading ? '<span class="spinner"></span>Processing payment...' : `Pay <span id="buttonAmount">${formatMoney($("amountCents").value, $("currency").value)}</span>`;
+    }
+
+    init();
+  </script>
+</body>
+</html>

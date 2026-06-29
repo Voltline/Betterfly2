@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Betterfly Pay Console</title>
+  <style>
+    :root {
+      --ink: #0a2540;
+      --muted: #64748b;
+      --line: #e6ebf1;
+      --surface: #ffffff;
+      --canvas: #f6f9fc;
+      --blue: #635bff;
+      --cyan: #00d4ff;
+      --green: #00a878;
+      --red: #df1b41;
+      --amber: #f6a609;
+      --shadow: 0 24px 70px rgba(50, 50, 93, 0.12), 0 8px 20px rgba(0, 0, 0, 0.06);
+      --radius: 18px;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(0, 212, 255, 0.24), transparent 24rem),
+        radial-gradient(circle at 78% 0%, rgba(99, 91, 255, 0.22), transparent 28rem),
+        linear-gradient(180deg, #f7fbff 0%, var(--canvas) 42%, #eef3f8 100%);
+      min-height: 100vh;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    aside {
+      background: rgba(255, 255, 255, 0.74);
+      backdrop-filter: blur(22px);
+      border-right: 1px solid rgba(230, 235, 241, 0.9);
+      padding: 26px 18px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 760;
+      letter-spacing: -0.04em;
+      font-size: 20px;
+      margin-bottom: 28px;
+    }
+
+    .mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      box-shadow: 0 14px 35px rgba(99, 91, 255, 0.28);
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav a {
+      color: #425466;
+      text-decoration: none;
+      padding: 10px 12px;
+      border-radius: 12px;
+      font-weight: 650;
+      font-size: 14px;
+    }
+
+    .nav a:hover,
+    .nav a.active {
+      color: var(--ink);
+      background: #eef4ff;
+    }
+
+    main {
+      padding: 30px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      color: white;
+      border-radius: 28px;
+      padding: 34px;
+      min-height: 190px;
+      background:
+        radial-gradient(circle at 78% 22%, rgba(0, 212, 255, 0.45), transparent 18rem),
+        linear-gradient(135deg, #0a2540 0%, #233b8f 54%, #635bff 100%);
+      box-shadow: var(--shadow);
+    }
+
+    .hero:after {
+      content: "";
+      position: absolute;
+      inset: auto -8% -46% 44%;
+      height: 220px;
+      transform: rotate(-8deg);
+      background: rgba(255, 255, 255, 0.16);
+      border-radius: 999px;
+    }
+
+    .eyebrow {
+      color: rgba(255,255,255,0.76);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 10px 0 8px;
+      max-width: 720px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 0.95;
+      letter-spacing: -0.065em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: rgba(255,255,255,0.76);
+      max-width: 670px;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+      gap: 22px;
+      margin-top: 22px;
+    }
+
+    .card {
+      background: rgba(255,255,255,0.92);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 34px rgba(50, 50, 93, 0.08);
+      padding: 20px;
+    }
+
+    .card h2 {
+      margin: 0 0 4px;
+      letter-spacing: -0.035em;
+      font-size: 19px;
+    }
+
+    .card .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 18px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 7px;
+      color: #425466;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid #dbe3ee;
+      border-radius: 12px;
+      padding: 11px 12px;
+      color: var(--ink);
+      background: white;
+      outline: none;
+      font: inherit;
+      font-size: 14px;
+      transition: border-color .15s, box-shadow .15s;
+    }
+
+    textarea {
+      min-height: 104px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      line-height: 1.55;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
+    }
+
+    .wide { grid-column: 1 / -1; }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 16px;
+      color: white;
+      background: var(--ink);
+      cursor: pointer;
+      font-weight: 760;
+      letter-spacing: -0.01em;
+      box-shadow: 0 10px 22px rgba(10, 37, 64, 0.16);
+    }
+
+    button.secondary {
+      color: var(--ink);
+      background: #eef4ff;
+      box-shadow: none;
+    }
+
+    button.blue {
+      background: var(--blue);
+    }
+
+    button.green {
+      background: var(--green);
+    }
+
+    button.red {
+      background: var(--red);
+    }
+
+    .status-line {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 18px 0 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 999px;
+      padding: 7px 10px;
+      background: #eef4ff;
+      color: #425466;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--green);
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: white;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 760px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 13px 14px;
+      border-bottom: 1px solid #eef2f7;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #697386;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      background: #fbfdff;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .status {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      background: #eef4ff;
+      color: var(--blue);
+    }
+
+    .status.paid {
+      background: #e8fbf4;
+      color: var(--green);
+    }
+
+    .status.failed, .status.closed {
+      background: #fff1f3;
+      color: var(--red);
+    }
+
+    .status.created, .status.pending {
+      background: #fff8e6;
+      color: #996300;
+    }
+
+    .console {
+      background: #07182e;
+      color: #d6e6ff;
+      border-radius: 16px;
+      padding: 16px;
+      min-height: 210px;
+      max-height: 440px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .mini {
+      display: grid;
+      gap: 5px;
+      padding: 14px;
+      border-radius: 15px;
+      background: #f7fafc;
+      border: 1px solid #edf2f7;
+    }
+
+    .mini strong {
+      font-size: 24px;
+      letter-spacing: -0.04em;
+    }
+
+    .mini span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1000px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { position: static; height: auto; }
+      .grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 680px) {
+      main { padding: 18px; }
+      .fields, .split { grid-template-columns: 1fr; }
+      .hero { padding: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand"><div class="mark"></div><span>Betterfly Pay</span></div>
+      <nav class="nav">
+        <a class="active" href="#overview">Overview</a>
+        <a href="#create">Create payment</a>
+        <a href="#orders">Orders</a>
+        <a href="#callbacks">Callbacks</a>
+        <a href="#console">Console</a>
+      </nav>
+      <div class="status-line">
+        <span class="pill"><span class="dot"></span> Mock provider</span>
+        <span class="pill">Port 8084</span>
+      </div>
+    </aside>
+
+    <main>
+      <section id="overview" class="hero">
+        <div class="eyebrow">Payment debugging console</div>
+        <h1>Move money through a safe mock rail.</h1>
+        <p>创建订单、重复幂等请求、查询状态、触发 mock 支付成功，或者手工构造 provider callback。页面只用于本地调试，不保存敏感 token。</p>
+      </section>
+
+      <div class="grid">
+        <section class="stack">
+          <div class="card">
+            <h2>Credentials</h2>
+            <div class="sub">JWT 用于用户订单接口；Admin token 用于 mock pay 和管理列表；Callback secret 用于本页生成 HMAC 签名。</div>
+            <div class="fields">
+              <label>User ID
+                <input id="userId" value="1">
+              </label>
+              <label>Admin token
+                <input id="adminToken" placeholder="empty in local dev">
+              </label>
+              <label class="wide">JWT
+                <input id="jwt" placeholder="Bearer token without prefix">
+              </label>
+              <label class="wide">Mock callback secret
+                <input id="callbackSecret" value="dev-payment-secret">
+              </label>
+            </div>
+            <div class="actions" style="margin-top: 14px;">
+              <button class="secondary" onclick="saveSettings()">Save locally</button>
+              <button class="secondary" onclick="health()">Check health</button>
+            </div>
+          </div>
+
+          <div id="create" class="card">
+            <h2>Create payment</h2>
+            <div class="sub">创建支付订单。`Idempotency-Key` 必填，重复提交会返回同一张订单。</div>
+            <div class="fields">
+              <label>Subject
+                <input id="subject" value="Betterfly Premium">
+              </label>
+              <label>Amount cents
+                <input id="amountCents" type="number" value="1200">
+              </label>
+              <label>Currency
+                <input id="currency" value="CNY">
+              </label>
+              <label>Provider
+                <select id="provider"><option value="mock">mock</option></select>
+              </label>
+              <label>Expire seconds
+                <input id="expireSeconds" type="number" value="1800">
+              </label>
+              <label>Idempotency key
+                <input id="idempotencyKey">
+              </label>
+              <label class="wide">Description
+                <input id="description" value="monthly membership">
+              </label>
+              <label class="wide">Client payload JSON
+                <textarea id="clientPayload">{
+  "sku": "premium_monthly",
+  "source": "debug_console"
+}</textarea>
+              </label>
+            </div>
+            <div class="actions" style="margin-top: 14px;">
+              <button class="blue" onclick="createOrder()">Create order</button>
+              <button class="secondary" onclick="newIdempotency()">New idempotency key</button>
+              <button class="secondary" onclick="reuseLastOrder()">Use last order</button>
+            </div>
+          </div>
+
+          <div id="orders" class="card">
+            <h2>Orders</h2>
+            <div class="sub">用户视角和管理端视角都可以查。管理端不填 user_id 时会返回最近订单。</div>
+            <div class="fields">
+              <label>Order no
+                <input id="orderNo" placeholder="pay_...">
+              </label>
+              <label>Limit
+                <input id="limit" type="number" value="20">
+              </label>
+            </div>
+            <div class="actions" style="margin-top: 14px;">
+              <button onclick="getOrder()">Get order</button>
+              <button class="secondary" onclick="listUserOrders()">List user orders</button>
+              <button class="secondary" onclick="listAdminOrders()">List admin orders</button>
+              <button class="green" onclick="mockPay()">Mock pay success</button>
+            </div>
+            <div class="table-wrap" style="margin-top: 16px;">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Order</th>
+                    <th>Status</th>
+                    <th>Amount</th>
+                    <th>User</th>
+                    <th>Provider</th>
+                    <th>Created</th>
+                    <th>Pay URL</th>
+                  </tr>
+                </thead>
+                <tbody id="ordersBody">
+                  <tr><td colspan="7">No orders loaded.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="stack">
+          <div class="card">
+            <h2>Snapshot</h2>
+            <div class="sub">最近一次响应的快速概览。</div>
+            <div class="split">
+              <div class="mini"><span>Last status</span><strong id="metricStatus">-</strong></div>
+              <div class="mini"><span>Last amount</span><strong id="metricAmount">-</strong></div>
+            </div>
+            <div class="split" style="margin-top: 12px;">
+              <div class="mini"><span>Order no</span><strong id="metricOrder" style="font-size:13px;line-height:1.4;">-</strong></div>
+              <div class="mini"><span>Provider</span><strong id="metricProvider">-</strong></div>
+            </div>
+          </div>
+
+          <div id="callbacks" class="card">
+            <h2>Provider callback</h2>
+            <div class="sub">手工构造 mock 回调并自动生成 `X-Payment-Signature`。用于测试金额不一致、重复事件、失败/关闭状态。</div>
+            <div class="fields">
+              <label>Event ID
+                <input id="eventId">
+              </label>
+              <label>Status
+                <select id="callbackStatus">
+                  <option value="paid">paid</option>
+                  <option value="failed">failed</option>
+                  <option value="closed">closed</option>
+                </select>
+              </label>
+              <label>Provider trade no
+                <input id="providerTradeNo">
+              </label>
+              <label>Callback amount
+                <input id="callbackAmount" type="number" value="1200">
+              </label>
+              <label class="wide">Callback JSON
+                <textarea id="callbackPayload"></textarea>
+              </label>
+            </div>
+            <div class="actions" style="margin-top: 14px;">
+              <button onclick="fillCallback()">Fill from form</button>
+              <button class="blue" onclick="sendCallback()">Send callback</button>
+              <button class="red" onclick="sendMismatchCallback()">Amount mismatch</button>
+            </div>
+          </div>
+
+          <div id="console" class="card">
+            <h2>Response console</h2>
+            <div class="sub">显示请求、响应和错误。调试支付时，这比猜状态靠谱。</div>
+            <div class="console" id="consoleBox">Ready.</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+
+    function loadSettings() {
+      const saved = JSON.parse(localStorage.getItem("bf2_payment_debug") || "{}");
+      for (const [key, value] of Object.entries(saved)) {
+        if ($(key)) $(key).value = value;
+      }
+      if (!$("idempotencyKey").value) newIdempotency();
+      if (!$("eventId").value) newEventId();
+      fillCallback();
+    }
+
+    function saveSettings() {
+      const keys = ["userId", "jwt", "adminToken", "callbackSecret"];
+      const data = {};
+      keys.forEach(key => data[key] = $(key).value);
+      localStorage.setItem("bf2_payment_debug", JSON.stringify(data));
+      log("settings saved", data);
+    }
+
+    function newIdempotency() {
+      $("idempotencyKey").value = "debug_" + crypto.randomUUID();
+    }
+
+    function newEventId() {
+      $("eventId").value = "evt_" + crypto.randomUUID().slice(0, 12);
+    }
+
+    function authHeaders(extra = {}) {
+      const jwt = $("jwt").value.trim();
+      return {
+        "Content-Type": "application/json",
+        "Authorization": jwt ? `Bearer ${jwt}` : "",
+        "X-User-ID": $("userId").value.trim(),
+        ...extra
+      };
+    }
+
+    function adminHeaders(extra = {}) {
+      const token = $("adminToken").value.trim();
+      return {
+        "Content-Type": "application/json",
+        ...(token ? {"X-Admin-Token": token} : {}),
+        ...extra
+      };
+    }
+
+    async function request(label, url, options = {}) {
+      const started = performance.now();
+      try {
+        const resp = await fetch(url, options);
+        const text = await resp.text();
+        let body = text;
+        try { body = JSON.parse(text); } catch (_) {}
+        log(`${label} ${resp.status} ${Math.round(performance.now() - started)}ms`, body);
+        if (!resp.ok) throw new Error(typeof body === "string" ? body : JSON.stringify(body));
+        return body;
+      } catch (err) {
+        log(`${label} failed`, {error: err.message});
+        throw err;
+      }
+    }
+
+    async function health() {
+      await request("GET /health", "/health");
+    }
+
+    function parsePayload() {
+      const raw = $("clientPayload").value.trim();
+      if (!raw) return {};
+      return JSON.parse(raw);
+    }
+
+    async function createOrder() {
+      const body = {
+        subject: $("subject").value.trim(),
+        description: $("description").value.trim(),
+        amount_cents: Number($("amountCents").value),
+        currency: $("currency").value.trim(),
+        provider: $("provider").value,
+        expire_seconds: Number($("expireSeconds").value),
+        client_payload: parsePayload()
+      };
+      const order = await request("POST /payment/v1/orders", "/payment/v1/orders", {
+        method: "POST",
+        headers: authHeaders({"Idempotency-Key": $("idempotencyKey").value.trim()}),
+        body: JSON.stringify(body)
+      });
+      setLastOrder(order);
+      renderOrders([order]);
+      fillCallback();
+    }
+
+    async function getOrder() {
+      const orderNo = $("orderNo").value.trim();
+      if (!orderNo) return log("missing order_no", {});
+      const order = await request("GET /payment/v1/orders/{order_no}", `/payment/v1/orders/${encodeURIComponent(orderNo)}`, {
+        headers: authHeaders()
+      });
+      setLastOrder(order);
+      renderOrders([order]);
+    }
+
+    async function listUserOrders() {
+      const data = await request("GET /payment/v1/orders", `/payment/v1/orders?limit=${$("limit").value}`, {
+        headers: authHeaders()
+      });
+      renderOrders(data.orders || []);
+    }
+
+    async function listAdminOrders() {
+      const userID = $("userId").value.trim();
+      const query = new URLSearchParams({limit: $("limit").value});
+      if (userID) query.set("user_id", userID);
+      const data = await request("GET /payment/admin/api/orders", `/payment/admin/api/orders?${query}`, {
+        headers: adminHeaders()
+      });
+      renderOrders(data.orders || []);
+    }
+
+    async function mockPay() {
+      const orderNo = $("orderNo").value.trim();
+      if (!orderNo) return log("missing order_no", {});
+      const data = await request("POST /payment/v1/mock/pay/{order_no}", `/payment/v1/mock/pay/${encodeURIComponent(orderNo)}`, {
+        method: "POST",
+        headers: adminHeaders()
+      });
+      if (data.order) {
+        setLastOrder(data.order);
+        renderOrders([data.order]);
+      }
+    }
+
+    function fillCallback() {
+      if (!$("eventId").value.trim()) newEventId();
+      if (!$("providerTradeNo").value.trim()) $("providerTradeNo").value = "mock_trade_" + Math.random().toString(16).slice(2, 10);
+      const payload = {
+        provider: "mock",
+        event_id: $("eventId").value.trim(),
+        event_type: $("callbackStatus").value === "paid" ? "payment.succeeded" : "payment.updated",
+        order_no: $("orderNo").value.trim(),
+        provider_trade_no: $("providerTradeNo").value.trim(),
+        amount_cents: Number($("callbackAmount").value),
+        status: $("callbackStatus").value
+      };
+      $("callbackPayload").value = JSON.stringify(payload, null, 2);
+    }
+
+    async function sendCallback() {
+      const payload = $("callbackPayload").value.trim();
+      const signature = await hmacSHA256($("callbackSecret").value, payload);
+      const data = await request("POST /payment/v1/providers/mock/callback", "/payment/v1/providers/mock/callback", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-Payment-Signature": signature},
+        body: payload
+      });
+      if (data.order) {
+        setLastOrder(data.order);
+        renderOrders([data.order]);
+      }
+    }
+
+    async function sendMismatchCallback() {
+      $("callbackAmount").value = String(Number($("amountCents").value || 1200) + 1);
+      fillCallback();
+      await sendCallback();
+    }
+
+    async function hmacSHA256(secret, message) {
+      const enc = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        "raw",
+        enc.encode(secret),
+        {name: "HMAC", hash: "SHA-256"},
+        false,
+        ["sign"]
+      );
+      const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+      return [...new Uint8Array(sig)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+
+    function setLastOrder(order) {
+      $("orderNo").value = order.order_no || $("orderNo").value;
+      $("callbackAmount").value = order.amount_cents || $("callbackAmount").value;
+      $("metricStatus").textContent = order.status || "-";
+      $("metricAmount").textContent = order.amount_cents ? `${order.amount_cents} ${order.currency || ""}` : "-";
+      $("metricOrder").textContent = order.order_no || "-";
+      $("metricProvider").textContent = order.provider || "-";
+    }
+
+    function reuseLastOrder() {
+      fillCallback();
+      log("using order", {order_no: $("orderNo").value});
+    }
+
+    function renderOrders(orders) {
+      const body = $("ordersBody");
+      if (!orders.length) {
+        body.innerHTML = '<tr><td colspan="7">No orders found.</td></tr>';
+        return;
+      }
+      body.innerHTML = orders.map(order => `
+        <tr>
+          <td><button class="secondary" onclick="selectOrder('${escapeHTML(order.order_no)}')">${escapeHTML(order.order_no || "")}</button></td>
+          <td><span class="status ${escapeHTML(order.status || "")}">${escapeHTML(order.status || "")}</span></td>
+          <td>${escapeHTML(String(order.amount_cents || ""))} ${escapeHTML(order.currency || "")}</td>
+          <td>${escapeHTML(String(order.user_id || ""))}</td>
+          <td>${escapeHTML(order.provider || "")}</td>
+          <td>${escapeHTML(order.created_at || "")}</td>
+          <td>${order.pay_url ? `<a href="${escapeAttr(order.pay_url)}" target="_blank">open</a>` : ""}</td>
+        </tr>
+      `).join("");
+      setLastOrder(orders[0]);
+    }
+
+    function selectOrder(orderNo) {
+      $("orderNo").value = orderNo;
+      fillCallback();
+    }
+
+    function log(label, value) {
+      const now = new Date().toLocaleTimeString();
+      $("consoleBox").textContent = `[${now}] ${label}\n${JSON.stringify(value, null, 2)}\n\n` + $("consoleBox").textContent;
+    }
+
+    function escapeHTML(value) {
+      return String(value).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[ch]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHTML(value).replace(/`/g, "&#96;");
+    }
+
+    ["orderNo", "callbackAmount", "callbackStatus", "providerTradeNo"].forEach(id => {
+      document.addEventListener("input", event => {
+        if (event.target && event.target.id === id) fillCallback();
+      });
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>

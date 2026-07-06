@@ -117,14 +117,14 @@ func (s *Server) experiments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := parseExperimentPath(strings.TrimPrefix(r.URL.Path, "/abtest/admin/api/experiments/"))
+	id, action, childID, childAction, ok := parseExperimentPath(strings.TrimPrefix(r.URL.Path, "/abtest/admin/api/experiments/"))
 	if !ok {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
 	if action != "" {
-		s.experimentAction(w, r, id, action)
+		s.experimentAction(w, r, id, action, childID, childAction)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int64, action string) {
+func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int64, action string, childID int64, childAction string) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -181,7 +181,31 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 			return
 		}
 		writeJSON(w, http.StatusOK, experiment)
+	case "withdraw":
+		experiment, err := s.service.WithdrawExperiment(id)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, experiment)
 	case "groups":
+		if childAction == "push_full" {
+			if childID <= 0 {
+				writeError(w, http.StatusNotFound, "not found")
+				return
+			}
+			experiment, err := s.service.PushFullGroup(id, childID)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, experiment)
+			return
+		}
+		if childID != 0 || childAction != "" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
 		var req abtest.GroupInput
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
@@ -194,6 +218,10 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 		}
 		writeJSON(w, http.StatusCreated, group)
 	case "overrides":
+		if childID != 0 || childAction != "" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
 		var req abtest.OverrideInput
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
@@ -242,19 +270,29 @@ func (s *Server) isAdminAuthorized(r *http.Request) bool {
 	return token == s.adminToken
 }
 
-func parseExperimentPath(path string) (int64, string, bool) {
+func parseExperimentPath(path string) (int64, string, int64, string, bool) {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
-		return 0, "", false
+		return 0, "", 0, "", false
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return 0, "", false
+		return 0, "", 0, "", false
 	}
 	if len(parts) == 1 {
-		return id, "", true
+		return id, "", 0, "", true
 	}
-	return id, parts[1], true
+	if len(parts) == 2 {
+		return id, parts[1], 0, "", true
+	}
+	if len(parts) == 4 {
+		childID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			return 0, "", 0, "", false
+		}
+		return id, parts[1], childID, parts[3], true
+	}
+	return 0, "", 0, "", false
 }
 
 func firstNonEmpty(values ...string) string {

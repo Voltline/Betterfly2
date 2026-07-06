@@ -200,8 +200,14 @@ GET /abtest/admin
 - `POST /abtest/admin/api/experiments/{id}/start`
 - `POST /abtest/admin/api/experiments/{id}/pause`
 - `POST /abtest/admin/api/experiments/{id}/stop`
+- `POST /abtest/admin/api/experiments/{id}/withdraw`
 - `POST /abtest/admin/api/experiments/{id}/groups`
+- `POST /abtest/admin/api/experiments/{id}/groups/{group_id}/push_full`
 - `POST /abtest/admin/api/experiments/{id}/overrides`
+
+### 推全语义
+
+`push_full` 不只是把目标分组流量调成 `10000`。推全后实验会进入 `rolled_out` 状态，并记录 `rollout_group_key`。客户端或服务端再次获取该 `experiment_key` 时，会直接返回该分组配置，不再检查实验开始/结束时间，也不再走流量分桶。撤回推全使用 `withdraw`，撤回后状态变为 `stopped`，客户端下一次拉配置将不再收到该 key。
 
 创建实验示例:
 

@@ -7,10 +7,11 @@ const (
 	ExperimentTypeClient = "client"
 	ExperimentTypeServer = "server"
 
-	StatusDraft   = "draft"
-	StatusRunning = "running"
-	StatusPaused  = "paused"
-	StatusStopped = "stopped"
+	StatusDraft     = "draft"
+	StatusRunning   = "running"
+	StatusPaused    = "paused"
+	StatusStopped   = "stopped"
+	StatusRolledOut = "rolled_out"
 
 	SubjectTypeDevice = "device"
 
@@ -30,6 +31,7 @@ type Experiment struct {
 	DurationSeconds int64                  `json:"duration_seconds"`
 	EndTime         string                 `json:"end_time"`
 	Salt            string                 `json:"salt,omitempty"`
+	RolloutGroupKey string                 `json:"rollout_group_key,omitempty"`
 	Targeting       map[string]interface{} `json:"targeting,omitempty"`
 	Version         int64                  `json:"version"`
 	Groups          []Group                `json:"groups,omitempty"`
@@ -132,6 +134,8 @@ type Store interface {
 	CreateExperiment(req CreateExperimentRequest) (Experiment, error)
 	UpdateExperiment(id int64, req UpdateExperimentRequest) (Experiment, error)
 	SetExperimentStatus(id int64, status string) (Experiment, error)
+	PushFullGroup(experimentID, groupID int64) (Experiment, error)
+	WithdrawExperiment(id int64) (Experiment, error)
 	AddGroup(experimentID int64, req GroupInput) (Group, error)
 	AddOverride(experimentID int64, req OverrideInput) (Override, error)
 	ListEvaluationExperiments() ([]Experiment, error)

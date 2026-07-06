@@ -25,7 +25,7 @@ func (s *GormStore) ListExperiments() ([]Experiment, error) {
 
 func (s *GormStore) ListEvaluationExperiments() ([]Experiment, error) {
 	var experiments []db.ABExperiment
-	if err := db.DB().Where("status = ?", StatusRunning).Order("id asc").Find(&experiments).Error; err != nil {
+	if err := db.DB().Where("status IN ?", []string{StatusRunning, StatusRolledOut}).Order("id asc").Find(&experiments).Error; err != nil {
 		return nil, err
 	}
 	return s.loadExperiments(experiments)
@@ -136,7 +136,13 @@ func (s *GormStore) UpdateExperiment(id int64, req UpdateExperimentRequest) (Exp
 		if status == "" {
 			return Experiment{}, errors.New("invalid status")
 		}
+		if status == StatusRolledOut && strings.TrimSpace(current.RolloutGroupKey) == "" {
+			return Experiment{}, errors.New("rolled_out status requires push_full group")
+		}
 		updates["status"] = status
+		if status != StatusRolledOut {
+			updates["rollout_group_key"] = ""
+		}
 	}
 	if req.StartTime != nil {
 		updates["start_time"] = strings.TrimSpace(*req.StartTime)
@@ -173,10 +179,81 @@ func (s *GormStore) SetExperimentStatus(id int64, status string) (Experiment, er
 	if err != nil {
 		return Experiment{}, err
 	}
+	if status == StatusRolledOut && strings.TrimSpace(current.RolloutGroupKey) == "" {
+		return Experiment{}, errors.New("rolled_out status requires push_full group")
+	}
 	if err := db.DB().Model(&db.ABExperiment{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"status":     status,
-		"version":    current.Version + 1,
-		"updated_at": NowString(),
+		"status":            status,
+		"rollout_group_key": rolloutGroupKeyForStatus(status, current.RolloutGroupKey),
+		"version":           current.Version + 1,
+		"updated_at":        NowString(),
+	}).Error; err != nil {
+		return Experiment{}, err
+	}
+	return s.GetExperiment(id)
+}
+
+func (s *GormStore) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
+	current, err := s.GetExperiment(experimentID)
+	if err != nil {
+		return Experiment{}, err
+	}
+
+	tx := db.DB().Begin()
+	if tx.Error != nil {
+		return Experiment{}, tx.Error
+	}
+
+	var target db.ABExperimentGroup
+	if err := tx.First(&target, "id = ? AND experiment_id = ?", groupID, experimentID).Error; err != nil {
+		tx.Rollback()
+		return Experiment{}, err
+	}
+
+	now := NowString()
+	if err := tx.Model(&db.ABExperimentGroup{}).
+		Where("experiment_id = ?", experimentID).
+		Updates(map[string]interface{}{
+			"traffic_basis_points": 0,
+			"updated_at":           now,
+		}).Error; err != nil {
+		tx.Rollback()
+		return Experiment{}, err
+	}
+	if err := tx.Model(&db.ABExperimentGroup{}).
+		Where("id = ? AND experiment_id = ?", groupID, experimentID).
+		Updates(map[string]interface{}{
+			"traffic_basis_points": 10000,
+			"updated_at":           now,
+		}).Error; err != nil {
+		tx.Rollback()
+		return Experiment{}, err
+	}
+	if err := tx.Model(&db.ABExperiment{}).Where("id = ?", experimentID).Updates(map[string]interface{}{
+		"status":            StatusRolledOut,
+		"rollout_group_key": target.GroupKey,
+		"version":           current.Version + 1,
+		"updated_at":        now,
+	}).Error; err != nil {
+		tx.Rollback()
+		return Experiment{}, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Experiment{}, err
+	}
+	return s.GetExperiment(experimentID)
+}
+
+func (s *GormStore) WithdrawExperiment(id int64) (Experiment, error) {
+	current, err := s.GetExperiment(id)
+	if err != nil {
+		return Experiment{}, err
+	}
+	if err := db.DB().Model(&db.ABExperiment{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status":            StatusStopped,
+		"rollout_group_key": "",
+		"version":           current.Version + 1,
+		"updated_at":        NowString(),
 	}).Error; err != nil {
 		return Experiment{}, err
 	}
@@ -303,6 +380,7 @@ func experimentFromModel(model db.ABExperiment) Experiment {
 		DurationSeconds: model.DurationSeconds,
 		EndTime:         model.EndTime,
 		Salt:            model.Salt,
+		RolloutGroupKey: model.RolloutGroupKey,
 		Targeting:       jsonToMap(model.TargetingJSON),
 		Version:         model.Version,
 		CreatedAt:       model.CreatedAt,
@@ -349,6 +427,9 @@ func normalizeCreateExperiment(req *CreateExperimentRequest) error {
 	req.Status = normalizeStatus(req.Status)
 	if req.Status == "" {
 		req.Status = StatusDraft
+	}
+	if req.Status == StatusRolledOut {
+		return errors.New("rolled_out status requires push_full group")
 	}
 	if req.DurationSeconds <= 0 {
 		return errors.New("duration_seconds must be positive")
@@ -425,7 +506,16 @@ func normalizeStatus(value string) string {
 		return StatusPaused
 	case StatusStopped:
 		return StatusStopped
+	case StatusRolledOut:
+		return StatusRolledOut
 	default:
 		return ""
 	}
+}
+
+func rolloutGroupKeyForStatus(status, currentGroupKey string) string {
+	if status == StatusRolledOut {
+		return currentGroupKey
+	}
+	return ""
 }

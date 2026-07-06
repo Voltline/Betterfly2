@@ -34,6 +34,14 @@ func (s *memoryStore) SetExperimentStatus(id int64, status string) (Experiment, 
 	return Experiment{}, nil
 }
 
+func (s *memoryStore) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
+	return Experiment{}, nil
+}
+
+func (s *memoryStore) WithdrawExperiment(id int64) (Experiment, error) {
+	return Experiment{}, nil
+}
+
 func (s *memoryStore) AddGroup(experimentID int64, req GroupInput) (Group, error) {
 	return Group{}, nil
 }
@@ -165,5 +173,72 @@ func TestEvaluateForceGroupOverride(t *testing.T) {
 	}
 	if !assignment.OverrideApplied {
 		t.Fatal("expected override to be marked")
+	}
+}
+
+func TestEvaluateRolledOutIgnoresTimeTargetingAndTraffic(t *testing.T) {
+	now := time.Now().UTC()
+	service := NewService(&memoryStore{experiments: []Experiment{{
+		ID:              1,
+		ExperimentKey:   "released_feature",
+		ExperimentType:  ExperimentTypeClient,
+		Status:          StatusRolledOut,
+		StartTime:       now.Add(-48 * time.Hour).Format(time.RFC3339),
+		DurationSeconds: int64(time.Hour / time.Second),
+		EndTime:         now.Add(-47 * time.Hour).Format(time.RFC3339),
+		RolloutGroupKey: "variant",
+		Targeting: map[string]interface{}{
+			"platforms": []interface{}{"ios"},
+		},
+		Groups: []Group{
+			{ID: 1, GroupKey: "control", TrafficBasisPoints: 10000, Config: map[string]interface{}{"flag": false}},
+			{ID: 2, GroupKey: "variant", TrafficBasisPoints: 0, Config: map[string]interface{}{"flag": true}},
+		},
+	}}})
+
+	resp, err := service.Evaluate(EvaluateRequest{
+		SubjectType: SubjectTypeDevice,
+		SubjectID:   "android-device-outside-window",
+		Context:     map[string]string{"platform": "android"},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if len(resp.Experiments) != 1 {
+		t.Fatalf("expected rolled out assignment, got %#v", resp.Experiments)
+	}
+	assignment := resp.Experiments[0]
+	if assignment.GroupKey != "variant" || assignment.Config["flag"] != true {
+		t.Fatalf("expected rolled out variant assignment, got %#v", assignment)
+	}
+}
+
+func TestEvaluateRunningExpiredStillSkipped(t *testing.T) {
+	now := time.Now().UTC()
+	service := NewService(&memoryStore{experiments: []Experiment{{
+		ID:              1,
+		ExperimentKey:   "expired_running_feature",
+		ExperimentType:  ExperimentTypeClient,
+		Status:          StatusRunning,
+		StartTime:       now.Add(-48 * time.Hour).Format(time.RFC3339),
+		DurationSeconds: int64(time.Hour / time.Second),
+		EndTime:         now.Add(-47 * time.Hour).Format(time.RFC3339),
+		Groups: []Group{{
+			ID:                 1,
+			GroupKey:           "variant",
+			TrafficBasisPoints: 10000,
+			Config:             map[string]interface{}{"flag": true},
+		}},
+	}}})
+
+	resp, err := service.Evaluate(EvaluateRequest{
+		SubjectType: SubjectTypeDevice,
+		SubjectID:   "device-001",
+	})
+	if err != nil {
+		t.Fatalf("Evaluate() error = %v", err)
+	}
+	if len(resp.Experiments) != 0 {
+		t.Fatalf("expected expired running experiment to be skipped, got %#v", resp.Experiments)
 	}
 }

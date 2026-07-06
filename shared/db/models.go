@@ -68,6 +68,7 @@ type ABExperiment struct {
 	DurationSeconds int64  `gorm:"comment:实验持续时间，单位秒"`
 	EndTime         string `gorm:"type:varchar(35);index;comment:实验绝对结束时间，RFC3339格式"`
 	Salt            string `gorm:"type:varchar(100);comment:稳定分流盐值"`
+	RolloutGroupKey string `gorm:"type:varchar(100);comment:推全后固定返回的分组key"`
 	TargetingJSON   string `gorm:"type:text;comment:实验命中规则JSON，预留客户端版本/系统版本等扩展条件"`
 	Version         int64  `gorm:"default:1;comment:实验配置版本"`
 	CreatedAt       string `gorm:"type:varchar(35);comment:创建时间"`

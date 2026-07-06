@@ -96,6 +96,7 @@
     .badge.running { background: var(--green-2); color: var(--green); }
     .badge.paused { background: #fff0cf; color: #8a5b00; }
     .badge.stopped { background: #f6d8d1; color: var(--red); }
+    .badge.rolled_out { background: #e7e3ff; color: #5246d8; }
     .badge.draft { background: #e8e8e8; color: #555; }
     .progress { height: 10px; border-radius: 999px; overflow: hidden; background: #eee4d4; margin: 4px 0; min-width: 120px; }
     .progress > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--green), #e0a348); }
@@ -392,7 +393,9 @@
     function detailHTML(exp) {
       const groups = (exp.groups || []).map(group => '<div class="group-row">' +
         '<header><span>' + escapeHTML(group.group_key) + '</span><span>' + formatRatio(group.traffic_basis_points) + '</span></header>' +
+        (exp.rollout_group_key === group.group_key ? '<div class="meta">当前推全分组：客户端获取该 key 时会默认返回此组</div>' : '') +
         '<pre class="config-preview">' + escapeHTML(JSON.stringify(group.config || {}, null, 2)) + '</pre>' +
+        '<div class="actions"><button class="secondary" onclick="pushFullGroup(' + exp.id + ', ' + group.id + ')">推全到该组</button></div>' +
       '</div>').join('') || '<div class="empty">暂无分组</div>';
       const overrides = (exp.overrides || []).map(item => '<div class="group-row">' +
         '<header><span>' + escapeHTML(item.subject_type) + ':' + escapeHTML(item.subject_id) + '</span><span>' + escapeHTML(item.action) + '</span></header>' +
@@ -411,6 +414,7 @@
           '<div><span>剩余/进度</span><strong>' + formatRemaining(exp) + ' · ' + experimentProgress(exp) + '%</strong></div>' +
           '<div><span>开始时间 UTC+8</span><strong>' + escapeHTML(formatUTC8(exp.start_time)) + '</strong></div>' +
           '<div><span>结束时间 UTC+8</span><strong>' + escapeHTML(formatUTC8(exp.end_time)) + '</strong></div>' +
+          '<div><span>推全分组</span><strong>' + escapeHTML(exp.rollout_group_key || '-') + '</strong></div>' +
           '<div><span>持续时间</span><strong>' + formatDuration(exp.duration_seconds || 0) + '</strong></div>' +
           '<div><span>版本</span><strong>v' + escapeHTML(String(exp.version || 1)) + '</strong></div>' +
         '</div>' +
@@ -419,6 +423,7 @@
           '<button onclick="setStatus(' + exp.id + ', \'start\')">启动</button>' +
           '<button class="secondary" onclick="setStatus(' + exp.id + ', \'pause\')">暂停</button>' +
           '<button class="danger" onclick="setStatus(' + exp.id + ', \'stop\')">停止</button>' +
+          '<button class="danger" onclick="withdrawExperiment(' + exp.id + ')">撤回推全</button>' +
         '</div>' +
         '<div class="detail-section"><h3>修改基础参数</h3>' + editExperimentForm(exp) + '</div>' +
         '<div class="detail-section"><h3>Targeting</h3><pre class="config-preview">' + escapeHTML(JSON.stringify(exp.targeting || {}, null, 2)) + '</pre></div>' +
@@ -431,7 +436,7 @@
       return '<div class="form-grid">' +
         '<div><label>实验名称</label><input id="edit_name" value="' + escapeAttr(exp.name || '') + '"></div>' +
         '<div><label>实验类型</label><select id="edit_experiment_type">' + optionHTML('client', exp.experiment_type) + optionHTML('server', exp.experiment_type) + optionHTML('all', exp.experiment_type) + '</select></div>' +
-        '<div><label>状态</label><select id="edit_status">' + optionHTML('draft', exp.status) + optionHTML('running', exp.status) + optionHTML('paused', exp.status) + optionHTML('stopped', exp.status) + '</select></div>' +
+        '<div><label>状态</label><select id="edit_status">' + optionHTML('draft', exp.status) + optionHTML('running', exp.status) + optionHTML('paused', exp.status) + optionHTML('stopped', exp.status) + optionHTML('rolled_out', exp.status) + '</select></div>' +
         '<div><label>开始时间（UTC+8）</label><input id="edit_start_time" type="datetime-local" value="' + escapeAttr(toDateTimeLocalUTC8(exp.start_time)) + '"></div>' +
         '<div><label>持续时间</label><div class="inline-duration"><input id="edit_duration_value" type="number" min="1" value="' + duration.value + '"><select id="edit_duration_unit">' + durationOptions(duration.unit) + '</select></div></div>' +
         '<div><label>说明</label><input id="edit_description" value="' + escapeAttr(exp.description || '') + '"></div>' +
@@ -504,6 +509,30 @@
     async function setStatus(id, action) {
       try {
         const result = await api('/abtest/admin/api/experiments/' + id + '/' + action, {method: 'POST'});
+        showResult(result);
+        selectedExperimentID = result.id;
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function pushFullGroup(experimentID, groupID) {
+      if (!confirm('确认推全到该分组吗？推全后该 experiment_key 将不再考虑时间窗口，默认返回该组，直到撤回。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID + '/push_full', {method: 'POST'});
+        showResult(result);
+        selectedExperimentID = result.id;
+        await loadExperiments();
+      } catch (err) {
+        showResult(err);
+      }
+    }
+
+    async function withdrawExperiment(id) {
+      if (!confirm('确认撤回推全吗？撤回后客户端下一次拉配置将不会再收到该 key。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + id + '/withdraw', {method: 'POST'});
         showResult(result);
         selectedExperimentID = result.id;
         await loadExperiments();

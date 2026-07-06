@@ -37,6 +37,14 @@ func (s *Service) SetExperimentStatus(id int64, status string) (Experiment, erro
 	return s.store.SetExperimentStatus(id, status)
 }
 
+func (s *Service) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
+	return s.store.PushFullGroup(experimentID, groupID)
+}
+
+func (s *Service) WithdrawExperiment(id int64) (Experiment, error) {
+	return s.store.WithdrawExperiment(id)
+}
+
 func (s *Service) AddGroup(experimentID int64, req GroupInput) (Group, error) {
 	return s.store.AddGroup(experimentID, req)
 }
@@ -80,10 +88,17 @@ func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 }
 
 func evaluateExperiment(experiment Experiment, req EvaluateRequest, now time.Time) (Assignment, bool) {
-	if experiment.Status != StatusRunning {
+	if !experimentTypeMatches(experiment.ExperimentType, req.SubjectType) {
 		return Assignment{}, false
 	}
-	if !experimentTypeMatches(experiment.ExperimentType, req.SubjectType) {
+	if experiment.Status == StatusRolledOut {
+		group, ok := rolloutGroup(experiment)
+		if !ok {
+			return Assignment{}, false
+		}
+		return buildAssignment(experiment, group, false), true
+	}
+	if experiment.Status != StatusRunning {
 		return Assignment{}, false
 	}
 	if !experimentWindowMatches(experiment, now) {
@@ -193,6 +208,19 @@ func selectGroup(experiment Experiment, req EvaluateRequest, override *Override)
 	for _, group := range groups {
 		upper += group.TrafficBasisPoints
 		if bucket < upper {
+			return group, true
+		}
+	}
+	return Group{}, false
+}
+
+func rolloutGroup(experiment Experiment) (Group, bool) {
+	key := strings.TrimSpace(experiment.RolloutGroupKey)
+	if key == "" {
+		return Group{}, false
+	}
+	for _, group := range experiment.Groups {
+		if group.GroupKey == key {
 			return group, true
 		}
 	}

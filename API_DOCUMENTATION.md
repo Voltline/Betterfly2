@@ -2,8 +2,8 @@
 
 本文档描述了 Betterfly2 当前 HTTP API 与内部接口。
 
-**文档版本**: 1.2  
-**最后更新**: 2026-04-29
+**文档版本**: 1.3
+**最后更新**: 2026-07-10
 
 ## 目录
 
@@ -11,108 +11,70 @@
 2. [Kafka MQ API（对内接口）](#kafka-mq-api对内接口)
 3. [Protobuf 消息定义](#protobuf消息定义)
 4. [ABTest Service API](#abtest-service-api)
-5. [Payment Service API](#payment-service-api)
+5. [Call Service API](#call-service-api)
 
 ---
 
-## Payment Service API
+## Call Service API
 
-PaymentService 提供统一支付订单、渠道回调、幂等与状态机能力。当前一期接入 `mock` provider，用于先跑通服务边界；真实微信/支付宝/Stripe 渠道后续应通过 provider adapter 接入。
+CallService 提供一对一 WebRTC 语音和视频通话的控制面。媒体流不经过 CallService；客户端通过 WebRTC 建立点对点连接，无法直连时由 Coturn 中继。
 
-**基础URL**: `http://localhost:8084`
+服务健康检查为 `GET /health` 和 `GET /ready`，默认端口 `8085`。客户端通话 API 继续复用已登录的 `/ws` Protobuf 连接，具体消息见本文“通话协议”章节。
 
-### 健康检查
+### 通话协议
 
-```http
-GET /health
-GET /ready
+协议定义位于 `proto/call/call_interface.proto`。客户端将 `call_interface.ClientRequest` 放入 `df_interface.RequestMessage.call_request`，并携带当前登录 JWT。服务端返回 `df_interface.ResponseMessage.call_event`。
+
+客户端命令:
+
+- `get_config`: 获取 STUN/TURN 地址和短期 TURN 凭证。
+- `initiate`: 发起一对一语音或视频通话，必须携带 `callee_user_id`、`AUDIO/VIDEO` 和 SDP offer。
+- `accept`: 被叫接听，必须携带 `call_id` 和 SDP answer。
+- `reject`: 被叫拒绝响铃中的通话。
+- `hangup`: 任一参与者取消或结束通话。
+- `ice_candidate`: 将 trickle ICE candidate 转发给另一参与者。
+
+服务端事件:
+
+- `CALL_CONFIG`: ICE server 列表。
+- `OUTGOING_CALL`: 服务端已创建通话，主叫获得唯一 `call_id`。
+- `INCOMING_CALL`: 被叫收到来电、主叫 ID、通话类型及 SDP offer。
+- `CALL_ACCEPTED`: 主叫收到 SDP answer，双方进入 `ACTIVE`。
+- `CALL_REJECTED`: 被叫拒绝。
+- `CALL_ENDED`: 挂断、取消、断连或响铃超时。
+- `ICE_CANDIDATE_RECEIVED`: 收到对端 candidate。
+- `CALL_ERROR`: 离线、忙线、越权、状态冲突或参数错误。
+
+典型时序:
+
+```text
+caller -> DF -> call-service: initiate(offer)
+call-service -> caller: OUTGOING_CALL(call_id)
+call-service -> callee: INCOMING_CALL(call_id, offer)
+callee -> DF -> call-service: accept(call_id, answer)
+call-service -> caller: CALL_ACCEPTED(answer)
+caller <-> call-service <-> callee: ice_candidate
+caller <========= WebRTC media / Coturn relay =========> callee
+either side -> call-service: hangup(call_id)
+call-service -> both sides: CALL_ENDED
 ```
 
-### 创建订单
+身份安全边界:
 
-需要客户端 JWT:
+- `caller_user_id` 不由客户端填写，DF 从已认证 WebSocket 会话中注入 `InternalRequest.user_id`。
+- CallService 会验证接听者必须是被叫方，ICE 与挂断操作者必须是通话参与者。
+- 同一用户同时只能占用一个 `RINGING` 或 `ACTIVE` 通话。
+- TURN 使用基于共享密钥生成的短期 HMAC 凭证，`TURN_SHARED_SECRET` 不会下发给客户端。
 
-```http
-POST /payment/v1/orders
-Authorization: Bearer <JWT>
-X-User-ID: <user_id>
-Idempotency-Key: <client_request_id>
-Content-Type: application/json
-```
+### 部署端口
 
-`Idempotency-Key` 必填，同一用户使用相同幂等键会返回同一张订单，避免客户端重试时重复创建支付单。
+- `8085/tcp`: CallService 健康检查，仅需内网开放。
+- `3478/udp`、`3478/tcp`: STUN/TURN 监听端口，需要对客户端开放。
+- `49160-49200/udp`: Coturn 媒体中继端口范围，需要对客户端开放。
 
-请求:
+生产环境必须将 `TURN_EXTERNAL_IP` 设置为服务器公网 IP，并将 `TURN_PUBLIC_HOST` 设置为客户端可访问的域名或公网 IP；也可以通过 `CALL_STUN_URLS`、`CALL_TURN_URLS` 显式覆盖自动生成的地址。`TURN_SHARED_SECRET` 必须在 CallService 与 Coturn 中保持一致。
 
-```json
-{
-  "subject": "Betterfly Premium",
-  "description": "monthly membership",
-  "amount_cents": 1200,
-  "currency": "CNY",
-  "provider": "mock",
-  "expire_seconds": 1800,
-  "client_payload": {
-    "sku": "premium_monthly"
-  }
-}
-```
-
-### 查询订单
-
-```http
-GET /payment/v1/orders/{order_no}
-Authorization: Bearer <JWT>
-X-User-ID: <user_id>
-```
-
-用户只能查询自己的订单。
-
-### 查询当前用户订单列表
-
-```http
-GET /payment/v1/orders?limit=20
-Authorization: Bearer <JWT>
-X-User-ID: <user_id>
-```
-
-### Mock 支付成功
-
-仅用于开发测试。若配置了 `PAYMENT_ADMIN_TOKEN`，需要携带 `X-Admin-Token`。
-
-```http
-POST /payment/v1/mock/pay/{order_no}
-```
-
-### Provider 回调
-
-```http
-POST /payment/v1/providers/mock/callback
-X-Payment-Signature: <hmac_sha256>
-Content-Type: application/json
-```
-
-请求:
-
-```json
-{
-  "event_id": "evt_001",
-  "event_type": "payment.succeeded",
-  "order_no": "pay_20260629120000_ab12cd34ef56",
-  "provider_trade_no": "mock_trade_001",
-  "amount_cents": 1200,
-  "status": "paid"
-}
-```
-
-回调验签使用 `PAYMENT_MOCK_CALLBACK_SECRET`。真实渠道接入时应替换为渠道自己的签名算法、证书校验和事件去重策略。
-
-### 管理端订单列表
-
-```http
-GET /payment/admin/api/orders?user_id=1&limit=20
-X-Admin-Token: <PAYMENT_ADMIN_TOKEN>
-```
+当前范围是一对一通话。群语音/群视频需要引入 SFU；未来可以复用现有 `call_id`、ICE 配置和状态事件，在媒体层接入 LiveKit、mediasoup 或 ion-sfu。
 
 ## ABTest Service API
 

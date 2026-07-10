@@ -253,23 +253,52 @@ services:
     networks:
       - backend
 
-  payment_service:
+  call_service:
     build:
       context: ..
-      dockerfile: services/paymentService/Dockerfile
-    container_name: paymentService
+      dockerfile: services/callService/Dockerfile
+    container_name: callService
     environment:
-      PORT: ${PAYMENT_HTTP_PORT:-8084}
-      PGSQL_DSN: ${PGSQL_DSN}
-      AUTH_RPC_ADDR: auth_service:50051
-      PAYMENT_ADMIN_TOKEN: ${PAYMENT_ADMIN_TOKEN:-}
-      PAYMENT_PUBLIC_BASE_URL: ${PAYMENT_PUBLIC_BASE_URL:-http://localhost:8084}
-      PAYMENT_MOCK_CALLBACK_SECRET: ${PAYMENT_MOCK_CALLBACK_SECRET:-dev-payment-secret}
+      HTTP_PORT: ${CALL_HTTP_PORT:-8085}
+      REDIS_ADDR: redis:6379
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_CALL_TOPIC: call-service
+      KAFKA_CONSUMER_GROUP: call-service-group
+      CALL_RING_TIMEOUT_SECONDS: ${CALL_RING_TIMEOUT_SECONDS:-45}
+      CALL_ACTIVE_TTL_SECONDS: ${CALL_ACTIVE_TTL_SECONDS:-21600}
+      TURN_PUBLIC_HOST: ${TURN_PUBLIC_HOST:-localhost}
+      CALL_STUN_URLS: ${CALL_STUN_URLS:-}
+      CALL_TURN_URLS: ${CALL_TURN_URLS:-}
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-betterfly-dev-turn-secret}
+      TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
       LOG_LEVEL: debug
     ports:
-      - "${PAYMENT_HTTP_PORT:-8084}:${PAYMENT_HTTP_PORT:-8084}"
+      - "${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
     depends_on:
-      - auth_service
+      - redis
+      - kafka1
+      - kafka2
+    networks:
+      - backend
+
+  coturn:
+    image: coturn/coturn:latest
+    container_name: coturn
+    command:
+      - --no-cli
+      - --log-file=stdout
+      - --fingerprint
+      - --realm=${TURN_REALM:-betterfly.local}
+      - --use-auth-secret
+      - --static-auth-secret=${TURN_SHARED_SECRET:-betterfly-dev-turn-secret}
+      - --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
     networks:
       - backend
 

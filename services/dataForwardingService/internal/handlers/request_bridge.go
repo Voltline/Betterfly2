@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	callpb "Betterfly2/proto/call"
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
@@ -13,6 +14,7 @@ import (
 const (
 	storageServiceTopic = "storage-service"
 	friendServiceTopic  = "friend-service"
+	callServiceTopic    = "call-service"
 )
 
 func currentContainerTopic() string {
@@ -49,6 +51,14 @@ func publishFriendRequest(req *friend.RequestMessage) error {
 	_, err := mq.PublishEnvelope(publisher.PublishMessage, friendServiceTopic, envelope.MessageType_FRIEND_REQUEST, req)
 	if err != nil {
 		logger.Sugar().Errorf("发布friend请求失败: %v", err)
+	}
+	return err
+}
+
+func publishCallRequest(req *callpb.InternalRequest) error {
+	_, err := mq.PublishEnvelope(publisher.PublishMessage, callServiceTopic, envelope.MessageType_CALL_REQUEST, req)
+	if err != nil {
+		logger.Sugar().Errorf("发布call请求失败: %v", err)
 	}
 	return err
 }

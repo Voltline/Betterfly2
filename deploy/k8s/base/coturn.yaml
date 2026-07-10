@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coturn
+  namespace: betterfly2
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: coturn
+  template:
+    metadata:
+      labels:
+        app: coturn
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: coturn
+          image: coturn/coturn:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --no-cli
+            - --log-file=stdout
+            - --fingerprint
+            - --realm=$(TURN_REALM)
+            - --use-auth-secret
+            - --static-auth-secret=$(TURN_SHARED_SECRET)
+            - --external-ip=$(TURN_EXTERNAL_IP)
+            - --listening-port=3478
+            - --min-port=49160
+            - --max-port=49200
+          env:
+            - name: TURN_REALM
+              valueFrom:
+                configMapKeyRef:
+                  name: betterfly2-config
+                  key: TURN_REALM
+            - name: TURN_EXTERNAL_IP
+              valueFrom:
+                configMapKeyRef:
+                  name: betterfly2-config
+                  key: TURN_EXTERNAL_IP
+            - name: TURN_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: TURN_SHARED_SECRET

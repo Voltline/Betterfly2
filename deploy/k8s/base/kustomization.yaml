@@ -11,4 +11,6 @@ resources:
   - data-forwarding.yaml
   - storage-service.yaml
   - friend-service.yaml
+  - call-service.yaml
+  - coturn.yaml
   - ingress.yaml

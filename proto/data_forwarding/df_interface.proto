@@ -5,6 +5,7 @@ option go_package = "Betterfly2/proto/data_forwarding";
 import "data_forwarding/common.proto";
 import "data_forwarding/request.proto";
 import "data_forwarding/response.proto";
+import "call/call_interface.proto";
 
 message RequestMessage {
   string jwt = 1;
@@ -32,6 +33,7 @@ message RequestMessage {
     QueryGroupMembers query_group_members = 21;
     DeleteGroupUser delete_group_user = 22;
     QueryJoinedGroups query_joined_groups = 23;
+    call_interface.ClientRequest call_request = 24;
   }
 }
 
@@ -53,5 +55,6 @@ message ResponseMessage {
     GroupMembersRsp group_members_rsp = 13;
     JoinedGroupsRsp joined_groups_rsp = 14;
     PostAckRsp post_ack_rsp = 15;
+    call_interface.CallEvent call_event = 16;
   }
 }

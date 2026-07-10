@@ -96,36 +96,3 @@ type ABExperimentOverride struct {
 	CreatedAt    string `gorm:"type:varchar(35);comment:创建时间"`
 	UpdatedAt    string `gorm:"type:varchar(35);comment:更新时间"`
 }
-
-type PaymentOrder struct {
-	ID                  int64  `gorm:"primaryKey;autoIncrement:true;comment:支付订单ID"`
-	OrderNo             string `gorm:"uniqueIndex;type:varchar(64);comment:内部订单号"`
-	UserID              int64  `gorm:"index:idx_payment_orders_user_status_time,priority:1;uniqueIndex:uidx_payment_orders_user_idempotency,priority:1;comment:下单用户ID"`
-	Subject             string `gorm:"type:varchar(120);comment:订单标题"`
-	Description         string `gorm:"type:varchar(255);comment:订单描述"`
-	AmountCents         int64  `gorm:"comment:支付金额，单位为分"`
-	Currency            string `gorm:"type:varchar(12);comment:币种，例如CNY/USD"`
-	Status              string `gorm:"type:varchar(24);index:idx_payment_orders_user_status_time,priority:2;comment:订单状态"`
-	Provider            string `gorm:"type:varchar(32);index;comment:支付渠道，例如mock/alipay/wechat/stripe"`
-	ProviderTradeNo     string `gorm:"type:varchar(128);index;comment:渠道交易号"`
-	IdempotencyKey      string `gorm:"type:varchar(128);uniqueIndex:uidx_payment_orders_user_idempotency,priority:2;comment:客户端幂等键"`
-	PayURL              string `gorm:"type:varchar(512);comment:支付跳转或拉起URL"`
-	ClientPayloadJSON   string `gorm:"type:text;comment:客户端附加参数JSON"`
-	ProviderPayloadJSON string `gorm:"type:text;comment:渠道创建订单响应JSON"`
-	ExpiresAt           string `gorm:"type:varchar(35);comment:订单过期时间，RFC3339格式"`
-	PaidAt              string `gorm:"type:varchar(35);comment:支付完成时间，RFC3339格式"`
-	CreatedAt           string `gorm:"type:varchar(35);index:idx_payment_orders_user_status_time,priority:3;comment:创建时间"`
-	UpdatedAt           string `gorm:"type:varchar(35);comment:更新时间"`
-}
-
-type PaymentEvent struct {
-	ID         int64  `gorm:"primaryKey;autoIncrement:true;comment:支付事件ID"`
-	OrderNo    string `gorm:"type:varchar(64);index;comment:内部订单号"`
-	Provider   string `gorm:"type:varchar(32);uniqueIndex:uidx_payment_events_provider_event,priority:1;comment:支付渠道"`
-	EventID    string `gorm:"type:varchar(128);uniqueIndex:uidx_payment_events_provider_event,priority:2;comment:渠道事件ID"`
-	EventType  string `gorm:"type:varchar(64);comment:事件类型"`
-	Status     string `gorm:"type:varchar(24);comment:事件处理状态"`
-	RawPayload string `gorm:"type:text;comment:事件原始报文"`
-	Error      string `gorm:"type:text;comment:事件处理错误"`
-	CreatedAt  string `gorm:"type:varchar(35);comment:创建时间"`
-}

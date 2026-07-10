@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	callpb "Betterfly2/proto/call"
 	pb "Betterfly2/proto/data_forwarding"
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
@@ -105,6 +106,17 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 				}
 				session.MarkMessage(msg, "")
 				continue
+			case envelope.MessageType_CALL_RESPONSE:
+				delivery := &callpb.Delivery{}
+				if err := proto.Unmarshal(env.Payload, delivery); err != nil {
+					sugar.Errorf("解析Envelope中的CALL_RESPONSE payload失败: %v", err)
+					continue
+				}
+				if err := h.handleCallDelivery(delivery); err != nil {
+					sugar.Errorf("处理call响应失败: %v", err)
+				}
+				session.MarkMessage(msg, "")
+				continue
 			case envelope.MessageType_DF_REQUEST:
 				requestMsg, err := handlers.HandleRequestData(env.Payload)
 				if err != nil {
@@ -179,6 +191,23 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 		session.MarkMessage(msg, "")
 	}
 	return nil
+}
+
+func (h *NewKafkaConsumerGroupHandler) handleCallDelivery(delivery *callpb.Delivery) error {
+	if h.wsHandler == nil {
+		return fmt.Errorf("WebSocket处理器未设置，无法转发通话事件")
+	}
+	if delivery.GetTargetUserId() <= 0 || delivery.GetEvent() == nil {
+		return fmt.Errorf("通话投递报文不完整")
+	}
+	response := &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_CallEvent{CallEvent: delivery.GetEvent()},
+	}
+	payload, err := proto.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("序列化通话事件失败: %w", err)
+	}
+	return h.wsHandler.SendMessage(strconv.FormatInt(delivery.GetTargetUserId(), 10), payload)
 }
 
 func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.ResponseMessage) error {

@@ -6,6 +6,7 @@ toolchain go1.24.1
 
 require (
 	Betterfly2/proto v0.0.0
+	Betterfly2/proto/call v0.0.0
 	Betterfly2/proto/data_forwarding v0.0.0
 	Betterfly2/proto/friend v0.0.0
 	Betterfly2/proto/storage v0.0.0
@@ -14,6 +15,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.21.0
 	github.com/redis/go-redis/v9 v9.8.0
+	golang.org/x/crypto v0.45.0
 	google.golang.org/grpc v1.64.1
 	google.golang.org/protobuf v1.36.6
 )
@@ -50,7 +52,6 @@ require (
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
@@ -62,6 +63,7 @@ require (
 
 replace (
 	Betterfly2/proto => ../../proto
+	Betterfly2/proto/call => ../../proto/call
 	Betterfly2/proto/data_forwarding => ../../proto/data_forwarding
 	Betterfly2/proto/friend => ../../proto/friend
 	Betterfly2/proto/storage => ../../proto/storage

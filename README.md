@@ -93,7 +93,7 @@
 | **Storage Service** | 8081 (HTTP) | 消息存储、文件管理，支持多级缓存 |
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
 | **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
-| **Payment Service** | 8084 (HTTP) | 支付订单、渠道回调、幂等与状态机 |
+| **Call Service** | 8085 (HTTP health) | WebRTC语音/视频通话信令、状态与ICE配置 |
 
 ### 基础设施服务 / Infrastructure Services
 
@@ -103,6 +103,7 @@
 | **Kafka** | 9092, 9094 | 消息队列（双节点集群） |
 | **Kafka UI** | 8080 | Kafka 管理控制台 |
 | **RustFS** | 9000, 9001 | S3 兼容对象存储 |
+| **Coturn** | 3478, 49160-49200/UDP | WebRTC STUN/TURN 与媒体中继 |
 | **PostgreSQL** | 5432 | 关系型数据库 |
 | **Prometheus** | 9090 | 指标采集 |
 | **Grafana** | 3000 | 监控仪表板 |
@@ -202,6 +203,7 @@ Betterfly2/
 │   └── ws_ssl/                # WebSocket SSL 证书生成
 ├── proto/                     # Protocol Buffer 定义
 │   ├── data_forwarding/       # 客户端-服务器通信协议
+│   ├── call/                  # WebRTC通话控制协议
 │   ├── envelope/              # 消息信封定义
 │   ├── server_rpc/            # 服务间 gRPC 定义
 │   └── storage/               # 存储服务协议
@@ -211,7 +213,7 @@ Betterfly2/
 │   ├── friendService/         # 好友服务
 │   ├── storageService/        # 存储服务
 │   ├── abTestService/         # 实验配置服务
-│   ├── paymentService/        # 支付订单服务
+│   ├── callService/           # WebRTC通话信令服务
 │   └── monitoring/            # 监控配置 (Prometheus/Grafana)
 ├── shared/                    # 共享组件
 │   ├── db/                    # 数据库连接与模型

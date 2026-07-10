@@ -15,6 +15,7 @@ Included:
 - `dataForwardingService`
 - `storageService`
 - `friendService`
+- `callService` and a Coturn relay
 - Optional nginx Ingress routes for `/ws` and `/storage_service`
 
 Not production-ready yet:
@@ -33,6 +34,7 @@ docker build -t betterfly2/auth-service:latest -f services/authService/Dockerfil
 docker build -t betterfly2/data-forwarding-service:latest -f services/dataForwardingService/Dockerfile .
 docker build -t betterfly2/storage-service:latest -f services/storageService/Dockerfile .
 docker build -t betterfly2/friend-service:latest -f services/friendService/Dockerfile .
+docker build -t betterfly2/call-service:latest -f services/callService/Dockerfile .
 ```
 
 For `kind`, load the images into the cluster:
@@ -42,6 +44,7 @@ kind load docker-image betterfly2/auth-service:latest
 kind load docker-image betterfly2/data-forwarding-service:latest
 kind load docker-image betterfly2/storage-service:latest
 kind load docker-image betterfly2/friend-service:latest
+kind load docker-image betterfly2/call-service:latest
 ```
 
 For a remote cluster, push these images to a registry and update the image names
@@ -57,6 +60,11 @@ cp deploy/k8s/base/secret.example.yaml /tmp/betterfly2-secret.yaml
 
 Edit `/tmp/betterfly2-secret.yaml`, especially `PGSQL_DSN`, then apply it with
 the rest of the base manifests.
+
+For WebRTC, also replace `TURN_SHARED_SECRET` and set `TURN_PUBLIC_HOST` plus
+`TURN_EXTERNAL_IP` in `base/configmap.yaml`. Coturn uses `hostNetwork`, so the
+selected node must have a stable public IP and allow `3478/tcp`, `3478/udp`,
+and `49160-49200/udp` through its firewall or security group.
 
 ## Deploy
 

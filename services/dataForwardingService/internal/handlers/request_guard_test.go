@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	callpb "Betterfly2/proto/call"
 	pb "Betterfly2/proto/data_forwarding"
 	"strings"
 	"testing"
@@ -19,6 +20,18 @@ func TestAuthenticatedPayloadRejectsMissingJWT(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "用户未携带有效JWT") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCallRequestRejectsMissingJWT(t *testing.T) {
+	request := &pb.RequestMessage{
+		Payload: &pb.RequestMessage_CallRequest{CallRequest: &callpb.ClientRequest{
+			Payload: &callpb.ClientRequest_GetConfig{GetConfig: &callpb.GetCallConfig{}},
+		}},
+	}
+	_, err := authenticatedPayload(1001, request, "操作通话", "call_request", (*pb.RequestMessage).GetCallRequest)
+	if err == nil || !strings.Contains(err.Error(), "用户未携带有效JWT") {
+		t.Fatalf("expected unauthenticated call request to be rejected, got %v", err)
 	}
 }
 

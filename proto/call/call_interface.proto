@@ -1,0 +1,133 @@
+syntax = "proto3";
+package call_interface;
+option go_package = "Betterfly2/proto/call";
+
+enum CallType {
+  CALL_TYPE_UNSPECIFIED = 0;
+  AUDIO = 1;
+  VIDEO = 2;
+}
+
+enum CallState {
+  CALL_STATE_UNSPECIFIED = 0;
+  RINGING = 1;
+  ACTIVE = 2;
+  ENDED = 3;
+}
+
+enum CallEventType {
+  CALL_EVENT_UNSPECIFIED = 0;
+  CALL_CONFIG = 1;
+  OUTGOING_CALL = 2;
+  INCOMING_CALL = 3;
+  CALL_ACCEPTED = 4;
+  CALL_REJECTED = 5;
+  CALL_ENDED = 6;
+  ICE_CANDIDATE_RECEIVED = 7;
+  CALL_ERROR = 8;
+}
+
+enum CallEndReason {
+  CALL_END_REASON_UNSPECIFIED = 0;
+  REJECTED = 1;
+  HANGUP = 2;
+  CANCELLED = 3;
+  TIMEOUT = 4;
+  DISCONNECTED = 5;
+}
+
+enum CallErrorCode {
+  CALL_ERROR_UNSPECIFIED = 0;
+  INVALID_ARGUMENT = 1;
+  USER_OFFLINE = 2;
+  USER_BUSY = 3;
+  CALL_NOT_FOUND = 4;
+  INVALID_STATE = 5;
+  FORBIDDEN = 6;
+  INTERNAL_ERROR = 10;
+}
+
+message SessionDescription {
+  string type = 1; // offer or answer
+  string sdp = 2;
+}
+
+message IceCandidate {
+  string candidate = 1;
+  string sdp_mid = 2;
+  int32 sdp_mline_index = 3;
+  string username_fragment = 4;
+}
+
+message IceServer {
+  repeated string urls = 1;
+  string username = 2;
+  string credential = 3;
+}
+
+message GetCallConfig {}
+
+message InitiateCall {
+  int64 callee_user_id = 1;
+  CallType call_type = 2;
+  SessionDescription offer = 3;
+}
+
+message AcceptCall {
+  string call_id = 1;
+  SessionDescription answer = 2;
+}
+
+message RejectCall {
+  string call_id = 1;
+  string message = 2;
+}
+
+message HangupCall {
+  string call_id = 1;
+  CallEndReason reason = 2;
+}
+
+message SendIceCandidate {
+  string call_id = 1;
+  IceCandidate candidate = 2;
+}
+
+message ClientRequest {
+  oneof payload {
+    GetCallConfig get_config = 1;
+    InitiateCall initiate = 2;
+    AcceptCall accept = 3;
+    RejectCall reject = 4;
+    HangupCall hangup = 5;
+    SendIceCandidate ice_candidate = 6;
+  }
+}
+
+message CallEvent {
+  CallEventType event_type = 1;
+  string call_id = 2;
+  int64 peer_user_id = 3;
+  CallType call_type = 4;
+  CallState state = 5;
+  SessionDescription session_description = 6;
+  IceCandidate ice_candidate = 7;
+  repeated IceServer ice_servers = 8;
+  CallEndReason end_reason = 9;
+  string message = 10;
+  CallErrorCode error_code = 11;
+  string timestamp = 12;
+}
+
+// InternalRequest is produced only by an authenticated dataForwardingService.
+message InternalRequest {
+  string from_kafka_topic = 1;
+  int64 user_id = 2;
+  ClientRequest request = 3;
+}
+
+// Delivery tells the destination DF pod which connected user receives the event.
+message Delivery {
+  int64 target_user_id = 1;
+  CallEvent event = 2;
+}

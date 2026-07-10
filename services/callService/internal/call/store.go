@@ -52,11 +52,22 @@ func (s *RedisStore) Ping(ctx context.Context) error {
 }
 
 func (s *RedisStore) UserTopic(ctx context.Context, userID int64) (string, error) {
-	topic, err := s.client.HGet(ctx, "ws_connection_mapping", strconv.FormatInt(userID, 10)).Result()
+	userIDString := strconv.FormatInt(userID, 10)
+	topic, err := s.client.HGet(ctx, "ws_connection_mapping", userIDString).Result()
 	if errors.Is(err, redis.Nil) || topic == "" {
 		return "", ErrUserOffline
 	}
-	return topic, err
+	if err != nil {
+		return "", err
+	}
+	lease, err := s.client.Get(ctx, "ws_route_lease:"+userIDString).Result()
+	if errors.Is(err, redis.Nil) || lease == "" || lease != topic {
+		return "", ErrUserOffline
+	}
+	if err != nil {
+		return "", err
+	}
+	return topic, nil
 }
 
 func (s *RedisStore) CreateSession(ctx context.Context, session Session) error {

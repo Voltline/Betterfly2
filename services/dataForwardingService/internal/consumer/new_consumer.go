@@ -5,6 +5,7 @@ import (
 	pb "Betterfly2/proto/data_forwarding"
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
+	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/handlers"
@@ -117,6 +118,17 @@ func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroup
 				}
 				session.MarkMessage(msg, "")
 				continue
+			case envelope.MessageType_PUSH_RESPONSE:
+				response := &pushpb.ResponseMessage{}
+				if err := proto.Unmarshal(env.Payload, response); err != nil {
+					sugar.Errorf("解析Envelope中的PUSH_RESPONSE payload失败: %v", err)
+					continue
+				}
+				if err := h.handlePushResponse(response); err != nil {
+					sugar.Errorf("处理push响应失败: %v", err)
+				}
+				session.MarkMessage(msg, "")
+				continue
 			case envelope.MessageType_DF_REQUEST:
 				requestMsg, err := handlers.HandleRequestData(env.Payload)
 				if err != nil {
@@ -206,6 +218,24 @@ func (h *NewKafkaConsumerGroupHandler) handleCallDelivery(delivery *callpb.Deliv
 	payload, err := proto.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("序列化通话事件失败: %w", err)
+	}
+	return h.wsHandler.SendMessage(strconv.FormatInt(delivery.GetTargetUserId(), 10), payload)
+}
+
+func (h *NewKafkaConsumerGroupHandler) handlePushResponse(response *pushpb.ResponseMessage) error {
+	if h.wsHandler == nil {
+		return fmt.Errorf("WebSocket处理器未设置，无法转发推送响应")
+	}
+	delivery := response.GetClientDelivery()
+	if delivery == nil || delivery.GetTargetUserId() <= 0 || delivery.GetEvent() == nil {
+		return fmt.Errorf("推送响应不是有效的客户端投递报文")
+	}
+	dfResponse := &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_PushEvent{PushEvent: delivery.GetEvent()},
+	}
+	payload, err := proto.Marshal(dfResponse)
+	if err != nil {
+		return fmt.Errorf("序列化推送响应失败: %w", err)
 	}
 	return h.wsHandler.SendMessage(strconv.FormatInt(delivery.GetTargetUserId(), 10), payload)
 }

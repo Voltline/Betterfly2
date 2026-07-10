@@ -375,3 +375,7 @@ func (c *Connection) Close() {
 		}
 	})
 }
+
+func (c *Connection) IsClosed() bool {
+	return c.closed.Load()
+}

@@ -35,6 +35,7 @@ Aliases:
   abtest                 -> abtest_service
   call                   -> call_service
   turn                   -> coturn
+  push                   -> push_service
 
 Options:
   --all          Rebuild all services, similar to the old full rebuild flow.
@@ -54,10 +55,10 @@ EOF
 list_targets() {
   cat <<'EOF'
 Compose services:
-  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service call_service coturn
+  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service call_service push_service coturn
 
 Useful aliases:
-  dataforwarding df-all auth storage friend abtest call turn
+  dataforwarding df-all auth storage friend abtest call push turn
 EOF
 }
 
@@ -98,7 +99,10 @@ add_target() {
     turn)
       add_service "coturn"
       ;;
-    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|call_service|coturn)
+    push)
+      add_service "push_service"
+      ;;
+    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|call_service|push_service|coturn)
       add_service "$1"
       ;;
     *)

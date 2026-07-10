@@ -12,6 +12,46 @@
 3. [Protobuf 消息定义](#protobuf消息定义)
 4. [ABTest Service API](#abtest-service-api)
 5. [Call Service API](#call-service-api)
+6. [Push Service API](#push-service-api)
+
+---
+
+## Push Service API
+
+PushService 通过现有 `/ws` Protobuf 连接管理 PushKit VoIP token，并在被叫离线时由 CallService 自动请求 APNs。协议定义位于 `proto/push/push_interface.proto`。
+
+### 注册与删除 VoIP token
+
+客户端登录后发送 `df_interface.RequestMessage.push_request.register_voip_token`，携带客户端稳定 `device_id`、`PKPushCredentials.token` 的小写十六进制字符串，以及真实的 `SANDBOX` 或 `PRODUCTION` 环境。服务端返回 `df_interface.ResponseMessage.push_event`。
+
+同一设备的 token 更新会替换旧记录；同一个 APNs token 登录到新用户时会转移到新用户，避免把来电推给前一个账号。客户端退出账号或 PushKit token 失效时发送 `push_request.unregister_voip_token`，携带 `device_id` 和对应环境。
+
+### PushKit 与 CallKit 恢复流程
+
+VoIP Push payload 示例:
+
+```json
+{
+  "aps": {"content-available": 1},
+  "event": "incoming_call",
+  "call_id": "00112233445566778899aabbccddeeff",
+  "call_uuid": "00112233-4455-6677-8899-aabbccddeeff",
+  "caller_user_id": 1001,
+  "call_type": "video",
+  "has_video": true,
+  "expires_at": "2026-07-10T10:00:45Z"
+}
+```
+
+客户端收到 PushKit 回调后必须立即使用 `call_uuid` 向 CallKit 报告来电。随后恢复登录 WebSocket，并发送 `call_request.resume_call(call_id)`；服务端返回正常的 `INCOMING_CALL`，其中包含 SDP offer 和 ICE servers。若返回 `CALL_NOT_FOUND` 或 `INVALID_STATE`，客户端应结束刚刚报告的 CallKit 通话，因为主叫可能已经取消或响铃已经超时。
+
+为覆盖 DF Pod 突然退出但 Redis 路由租约尚未过期的窗口，每个来电都会同时尝试 VoIP Push；在线客户端可能同时收到 WebSocket `INCOMING_CALL` 和 PushKit payload，必须使用相同的 `call_id/call_uuid` 幂等去重，只创建一个 CallKit 通话。
+
+### APNs 环境
+
+PushService 根据每条 token 的 `environment` 自动选择 sandbox 或 production endpoint，不使用全局环境开关。APNs provider topic 固定为 `com.Voltline.Betterfly2.voip`，私钥通过 `APNS_PRIVATE_KEY_BASE64` 或 `APNS_PRIVATE_KEY_PATH` 注入。
+
+PushService 健康检查为 `GET /health` 和 `GET /ready`，默认端口 `8086`，不需要暴露到公网。
 
 ---
 
@@ -33,6 +73,7 @@ CallService 提供一对一 WebRTC 语音和视频通话的控制面。媒体流
 - `reject`: 被叫拒绝响铃中的通话。
 - `hangup`: 任一参与者取消或结束通话。
 - `ice_candidate`: 将 trickle ICE candidate 转发给另一参与者。
+- `resume_call`: PushKit 唤醒并重新登录后，使用 `call_id` 恢复待接来电的 SDP/ICE。
 
 服务端事件:
 
@@ -74,7 +115,7 @@ call-service -> both sides: CALL_ENDED
 
 生产环境必须将 `TURN_EXTERNAL_IP` 设置为服务器公网 IP，并将 `TURN_PUBLIC_HOST` 设置为客户端可访问的域名或公网 IP；也可以通过 `CALL_STUN_URLS`、`CALL_TURN_URLS` 显式覆盖自动生成的地址。`TURN_SHARED_SECRET` 必须在 CallService 与 Coturn 中保持一致。
 
-当前范围是一对一通话。群语音/群视频需要引入 SFU；未来可以复用现有 `call_id`、ICE 配置和状态事件，在媒体层接入 LiveKit、mediasoup 或 ion-sfu。
+当前范围是一对一通话，支持 PushKit 离线唤醒。群语音/群视频需要引入 SFU；未来可以复用现有 `call_id`、ICE 配置和状态事件，在媒体层接入 LiveKit、mediasoup 或 ion-sfu。
 
 ## ABTest Service API
 

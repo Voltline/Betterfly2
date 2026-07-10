@@ -93,6 +93,10 @@ message SendIceCandidate {
   IceCandidate candidate = 2;
 }
 
+message ResumeCall {
+  string call_id = 1;
+}
+
 message ClientRequest {
   oneof payload {
     GetCallConfig get_config = 1;
@@ -101,6 +105,7 @@ message ClientRequest {
     RejectCall reject = 4;
     HangupCall hangup = 5;
     SendIceCandidate ice_candidate = 6;
+    ResumeCall resume_call = 7;
   }
 }
 

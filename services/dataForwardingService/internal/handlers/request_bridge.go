@@ -4,6 +4,7 @@ import (
 	callpb "Betterfly2/proto/call"
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
+	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
@@ -15,6 +16,7 @@ const (
 	storageServiceTopic = "storage-service"
 	friendServiceTopic  = "friend-service"
 	callServiceTopic    = "call-service"
+	pushServiceTopic    = "push-service"
 )
 
 func currentContainerTopic() string {
@@ -59,6 +61,14 @@ func publishCallRequest(req *callpb.InternalRequest) error {
 	_, err := mq.PublishEnvelope(publisher.PublishMessage, callServiceTopic, envelope.MessageType_CALL_REQUEST, req)
 	if err != nil {
 		logger.Sugar().Errorf("发布call请求失败: %v", err)
+	}
+	return err
+}
+
+func publishPushRequest(req *pushpb.RequestMessage) error {
+	_, err := mq.PublishEnvelope(publisher.PublishMessage, pushServiceTopic, envelope.MessageType_PUSH_REQUEST, req)
+	if err != nil {
+		logger.Sugar().Errorf("发布push请求失败: %v", err)
 	}
 	return err
 }

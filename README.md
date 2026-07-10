@@ -94,6 +94,7 @@
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
 | **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
 | **Call Service** | 8085 (HTTP health) | WebRTC语音/视频通话信令、状态与ICE配置 |
+| **Push Service** | 8086 (HTTP health) | PushKit VoIP token与APNs双环境推送 |
 
 ### 基础设施服务 / Infrastructure Services
 
@@ -204,6 +205,7 @@ Betterfly2/
 ├── proto/                     # Protocol Buffer 定义
 │   ├── data_forwarding/       # 客户端-服务器通信协议
 │   ├── call/                  # WebRTC通话控制协议
+│   ├── push/                  # APNs与客户端推送协议
 │   ├── envelope/              # 消息信封定义
 │   ├── server_rpc/            # 服务间 gRPC 定义
 │   └── storage/               # 存储服务协议
@@ -214,6 +216,7 @@ Betterfly2/
 │   ├── storageService/        # 存储服务
 │   ├── abTestService/         # 实验配置服务
 │   ├── callService/           # WebRTC通话信令服务
+│   ├── pushService/           # APNs统一推送服务
 │   └── monitoring/            # 监控配置 (Prometheus/Grafana)
 ├── shared/                    # 共享组件
 │   ├── db/                    # 数据库连接与模型

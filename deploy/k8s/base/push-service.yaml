@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: push-service
+  namespace: betterfly2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: push-service
+  template:
+    metadata:
+      labels:
+        app: push-service
+    spec:
+      containers:
+        - name: push-service
+          image: betterfly2/push-service:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: HTTP_PORT
+              value: "8086"
+            - name: KAFKA_PUSH_TOPIC
+              value: push-service
+            - name: KAFKA_CONSUMER_GROUP
+              value: push-service-group
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+            - name: APNS_PRIVATE_KEY_BASE64
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: APNS_PRIVATE_KEY_BASE64
+          ports:
+            - name: health
+              containerPort: 8086
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: health
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: push-service
+  namespace: betterfly2
+spec:
+  selector:
+    app: push-service
+  ports:
+    - name: health
+      port: 8086
+      targetPort: health

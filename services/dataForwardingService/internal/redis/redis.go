@@ -6,12 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 var Rdb *redis.Client
 var ctx = context.Background()
+
+const routeLeaseTTL = 90 * time.Second
+
+func routeLeaseKey(userID string) string { return "ws_route_lease:" + userID }
 
 // InitRedis 初始化 Redis
 func InitRedis() error {
@@ -39,6 +44,7 @@ func RegisterConnection(id string, containerID string) error {
 	pipe := Rdb.TxPipeline()
 	pipe.HSet(ctx, "ws_connection_mapping", id, containerID)
 	pipe.SAdd(ctx, "container_connections:"+containerID, id)
+	pipe.SetEx(ctx, routeLeaseKey(id), containerID, routeLeaseTTL)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -60,8 +66,20 @@ func UnregisterConnection(id string, containerID string) error {
 	pipe := Rdb.TxPipeline()
 	pipe.HDel(ctx, "ws_connection_mapping", id)
 	pipe.SRem(ctx, fmt.Sprintf("container_connections:%s", containerID), id)
+	pipe.Del(ctx, routeLeaseKey(id))
 	_, err = pipe.Exec(ctx)
 	return err
+}
+
+func RefreshConnection(id string, containerID string) error {
+	current, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+	if err != nil {
+		return err
+	}
+	if current != containerID {
+		return fmt.Errorf("用户连接映射已变更: %s", id)
+	}
+	return Rdb.SetEx(ctx, routeLeaseKey(id), containerID, routeLeaseTTL).Err()
 }
 
 func GetContainerByConnection(id string) string {

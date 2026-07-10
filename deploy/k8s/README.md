@@ -16,6 +16,7 @@ Included:
 - `storageService`
 - `friendService`
 - `callService` and a Coturn relay
+- `pushService` with APNs token authentication
 - Optional nginx Ingress routes for `/ws` and `/storage_service`
 
 Not production-ready yet:
@@ -35,6 +36,7 @@ docker build -t betterfly2/data-forwarding-service:latest -f services/dataForwar
 docker build -t betterfly2/storage-service:latest -f services/storageService/Dockerfile .
 docker build -t betterfly2/friend-service:latest -f services/friendService/Dockerfile .
 docker build -t betterfly2/call-service:latest -f services/callService/Dockerfile .
+docker build -t betterfly2/push-service:latest -f services/pushService/Dockerfile .
 ```
 
 For `kind`, load the images into the cluster:
@@ -45,6 +47,7 @@ kind load docker-image betterfly2/data-forwarding-service:latest
 kind load docker-image betterfly2/storage-service:latest
 kind load docker-image betterfly2/friend-service:latest
 kind load docker-image betterfly2/call-service:latest
+kind load docker-image betterfly2/push-service:latest
 ```
 
 For a remote cluster, push these images to a registry and update the image names
@@ -65,6 +68,10 @@ For WebRTC, also replace `TURN_SHARED_SECRET` and set `TURN_PUBLIC_HOST` plus
 `TURN_EXTERNAL_IP` in `base/configmap.yaml`. Coturn uses `hostNetwork`, so the
 selected node must have a stable public IP and allow `3478/tcp`, `3478/udp`,
 and `49160-49200/udp` through its firewall or security group.
+
+PushService also requires `APNS_PRIVATE_KEY_BASE64` in `betterfly2-secret`. Encode
+the Apple `.p8` key without line breaks; never commit the original key or the
+encoded value. Worker nodes need outbound access to APNs on `443/tcp`.
 
 ## Deploy
 

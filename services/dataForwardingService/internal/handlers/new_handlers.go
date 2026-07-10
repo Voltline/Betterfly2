@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
@@ -86,6 +87,23 @@ func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Reque
 	// 启动读写协程
 	go h.readProcess(connection)
 	go h.writeToClient(connection)
+}
+
+func (h *WebSocketHandler) refreshRouteLease(conn *connection.Connection, userID string) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if conn.IsClosed() {
+			return
+		}
+		containerID := os.Getenv("HOSTNAME")
+		if containerID == "" {
+			containerID = "local"
+		}
+		if err := redisClient.RefreshConnection(userID, containerID); err != nil {
+			logger.Sugar().Warnf("刷新WebSocket路由租约失败: user_id=%s error=%v", userID, err)
+		}
+	}
 }
 
 // readProcess 读取处理协程
@@ -202,6 +220,7 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 	if err != nil {
 		logger.Sugar().Errorf("创建会话失败: %v", err)
 	}
+	go h.refreshRouteLease(conn, userIDStr)
 
 	// 返回登录结果
 	h.sendResponse(conn, rsp)

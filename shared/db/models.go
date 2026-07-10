@@ -96,3 +96,16 @@ type ABExperimentOverride struct {
 	CreatedAt    string `gorm:"type:varchar(35);comment:创建时间"`
 	UpdatedAt    string `gorm:"type:varchar(35);comment:更新时间"`
 }
+
+type PushDeviceToken struct {
+	ID          int64  `gorm:"primaryKey;autoIncrement:true;comment:推送设备记录ID"`
+	UserID      int64  `gorm:"uniqueIndex:uidx_push_user_device_env_type,priority:1;index:idx_push_user_active,priority:1;comment:所属用户ID"`
+	DeviceID    string `gorm:"type:varchar(128);uniqueIndex:uidx_push_user_device_env_type,priority:2;comment:客户端稳定设备ID"`
+	Token       string `gorm:"type:varchar(256);uniqueIndex:uidx_push_token_env_type,priority:1;comment:APNs设备token"`
+	Environment string `gorm:"type:varchar(20);uniqueIndex:uidx_push_user_device_env_type,priority:3;uniqueIndex:uidx_push_token_env_type,priority:2;comment:sandbox或production"`
+	PushType    string `gorm:"type:varchar(20);uniqueIndex:uidx_push_user_device_env_type,priority:4;uniqueIndex:uidx_push_token_env_type,priority:3;comment:推送类型，例如voip"`
+	BundleID    string `gorm:"type:varchar(255);comment:应用Bundle ID"`
+	IsActive    bool   `gorm:"default:true;index:idx_push_user_active,priority:2;comment:token是否有效"`
+	CreatedAt   string `gorm:"type:varchar(35);comment:创建时间"`
+	UpdatedAt   string `gorm:"type:varchar(35);comment:更新时间"`
+}

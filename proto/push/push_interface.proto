@@ -1,0 +1,91 @@
+syntax = "proto3";
+package push_interface;
+option go_package = "Betterfly2/proto/push";
+
+enum PushEnvironment {
+  PUSH_ENVIRONMENT_UNSPECIFIED = 0;
+  SANDBOX = 1;
+  PRODUCTION = 2;
+}
+
+enum PushResult {
+  PUSH_OK = 0;
+  INVALID_ARGUMENT = 1;
+  TOKEN_NOT_FOUND = 2;
+  APNS_ERROR = 3;
+  PUSH_INTERNAL_ERROR = 10;
+}
+
+message RegisterVoIPToken {
+  string device_id = 1;
+  string token = 2;
+  PushEnvironment environment = 3;
+}
+
+message UnregisterVoIPToken {
+  string device_id = 1;
+  PushEnvironment environment = 2;
+}
+
+message ClientRequest {
+  oneof payload {
+    RegisterVoIPToken register_voip_token = 1;
+    UnregisterVoIPToken unregister_voip_token = 2;
+  }
+}
+
+message ClientEvent {
+  string operation = 1;
+  PushResult result = 2;
+  string device_id = 3;
+  PushEnvironment environment = 4;
+  string message = 5;
+  string timestamp = 6;
+}
+
+// ClientCommand is created by an authenticated dataForwardingService.
+message ClientCommand {
+  string from_kafka_topic = 1;
+  int64 user_id = 2;
+  ClientRequest request = 3;
+}
+
+// VoIPCallRequest is created by CallService when an offline callee must be woken.
+message VoIPCallRequest {
+  string call_id = 1;
+  int64 caller_user_id = 2;
+  int64 callee_user_id = 3;
+  string call_type = 4;
+  string result_kafka_topic = 5;
+  string expires_at = 6;
+  bool required = 7;
+}
+
+message RequestMessage {
+  oneof payload {
+    ClientCommand client_command = 1;
+    VoIPCallRequest voip_call = 2;
+  }
+}
+
+message ClientDelivery {
+  int64 target_user_id = 1;
+  ClientEvent event = 2;
+}
+
+message VoIPPushResult {
+  string call_id = 1;
+  int64 caller_user_id = 2;
+  int64 callee_user_id = 3;
+  bool accepted = 4;
+  string reason = 5;
+  string timestamp = 6;
+  bool required = 7;
+}
+
+message ResponseMessage {
+  oneof payload {
+    ClientDelivery client_delivery = 1;
+    VoIPPushResult voip_result = 2;
+  }
+}

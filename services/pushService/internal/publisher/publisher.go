@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	callpb "Betterfly2/proto/call"
 	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/mq"
@@ -31,11 +30,11 @@ func NewKafkaPublisher(brokers []string) (*KafkaPublisher, error) {
 	return &KafkaPublisher{producer: producer}, nil
 }
 
-func (p *KafkaPublisher) Publish(_ context.Context, topic string, delivery *callpb.Delivery) error {
+func (p *KafkaPublisher) Publish(_ context.Context, topic string, response *pushpb.ResponseMessage) error {
 	if strings.TrimSpace(topic) == "" {
 		return fmt.Errorf("empty destination topic")
 	}
-	payload, err := mq.MarshalEnvelope(envelope.MessageType_CALL_RESPONSE, delivery)
+	payload, err := mq.MarshalEnvelope(envelope.MessageType_PUSH_RESPONSE, response)
 	if err != nil {
 		return err
 	}
@@ -43,21 +42,7 @@ func (p *KafkaPublisher) Publish(_ context.Context, topic string, delivery *call
 	return err
 }
 
-func (p *KafkaPublisher) PublishPush(_ context.Context, topic string, request *pushpb.RequestMessage) error {
-	if strings.TrimSpace(topic) == "" {
-		return fmt.Errorf("empty destination topic")
-	}
-	payload, err := mq.MarshalEnvelope(envelope.MessageType_PUSH_REQUEST, request)
-	if err != nil {
-		return err
-	}
-	_, _, err = p.producer.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(payload)})
-	return err
-}
-
-func (p *KafkaPublisher) Close() error {
-	return p.producer.Close()
-}
+func (p *KafkaPublisher) Close() error { return p.producer.Close() }
 
 func WaitForBrokers(brokers []string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

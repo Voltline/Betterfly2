@@ -7,6 +7,7 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
+	pushpb "Betterfly2/proto/push"
 )
 
 type memoryStore struct {
@@ -133,6 +134,12 @@ type publishedDelivery struct {
 
 type memoryPublisher struct {
 	deliveries []publishedDelivery
+	pushes     []*pushpb.RequestMessage
+}
+
+func (p *memoryPublisher) PublishPush(_ context.Context, _ string, request *pushpb.RequestMessage) error {
+	p.pushes = append(p.pushes, request)
+	return nil
 }
 
 func (p *memoryPublisher) Publish(_ context.Context, topic string, delivery *callpb.Delivery) error {
@@ -196,17 +203,29 @@ func TestCallLifecycle(t *testing.T) {
 	}
 }
 
-func TestOfflineAndUnauthorizedRequestsReturnErrors(t *testing.T) {
+func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
 	publisher := &memoryPublisher{}
 	service := NewService(store, publisher, testICE{}, time.Minute)
 
 	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
-		t.Fatalf("offline request should produce a client error: %v", err)
+		t.Fatalf("offline request should create a push-backed call: %v", err)
 	}
-	if got := publisher.deliveries[0].delivery.GetEvent().GetErrorCode(); got != callpb.CallErrorCode_USER_OFFLINE {
-		t.Fatalf("expected USER_OFFLINE, got %v", got)
+	if len(publisher.deliveries) != 1 || publisher.deliveries[0].delivery.GetEvent().GetEventType() != callpb.CallEventType_OUTGOING_CALL {
+		t.Fatalf("expected outgoing call acknowledgement, got %+v", publisher.deliveries)
+	}
+	if len(publisher.pushes) != 1 || publisher.pushes[0].GetVoipCall().GetCalleeUserId() != 2 {
+		t.Fatalf("expected VoIP push request, got %+v", publisher.pushes)
+	}
+	firstCallID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
+	if err := service.HandlePushResult(context.Background(), &pushpb.VoIPPushResult{
+		CallId: firstCallID, CallerUserId: 1, CalleeUserId: 2, Accepted: false, Reason: "no_active_voip_token", Required: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent().GetEventType() != callpb.CallEventType_CALL_ENDED {
+		t.Fatal("expected failed push to end the outgoing call")
 	}
 
 	store.topics[2] = "df-b"
@@ -223,6 +242,29 @@ func TestOfflineAndUnauthorizedRequestsReturnErrors(t *testing.T) {
 	}
 	if got := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent().GetErrorCode(); got != callpb.CallErrorCode_FORBIDDEN {
 		t.Fatalf("expected FORBIDDEN, got %v", got)
+	}
+}
+
+func TestResumeCallReturnsPendingOfferAfterPushWake(t *testing.T) {
+	store := newMemoryStore()
+	store.topics[1] = "df-a"
+	publisher := &memoryPublisher{}
+	service := NewService(store, publisher, testICE{}, time.Minute)
+
+	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatal(err)
+	}
+	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
+	store.topics[2] = "df-b"
+	resume := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_ResumeCall{ResumeCall: &callpb.ResumeCall{CallId: callID}},
+	}}
+	if err := service.Handle(context.Background(), resume); err != nil {
+		t.Fatal(err)
+	}
+	event := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
+	if event.GetEventType() != callpb.CallEventType_INCOMING_CALL || event.GetSessionDescription().GetSdp() != "offer-sdp" {
+		t.Fatalf("unexpected resumed call event: %+v", event)
 	}
 }
 

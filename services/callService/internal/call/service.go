@@ -10,6 +10,7 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
+	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/logger"
 )
 
@@ -51,6 +52,8 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 		err = s.hangup(ctx, request, payload.Hangup)
 	case *callpb.ClientRequest_IceCandidate:
 		err = s.forwardICE(ctx, request, payload.IceCandidate)
+	case *callpb.ClientRequest_ResumeCall:
+		err = s.resumeCall(ctx, request, payload.ResumeCall)
 	default:
 		err = ErrInvalidInput
 	}
@@ -99,9 +102,10 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		return ErrInvalidInput
 	}
 
-	calleeTopic, err := s.store.UserTopic(ctx, payload.GetCalleeUserId())
-	if err != nil {
-		return err
+	calleeTopic, routeErr := s.store.UserTopic(ctx, payload.GetCalleeUserId())
+	calleeOnline := routeErr == nil
+	if routeErr != nil && !errors.Is(routeErr, ErrUserOffline) {
+		return routeErr
 	}
 	now := s.now().UTC()
 	session := Session{
@@ -127,17 +131,76 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		return nil
 	}
 
-	calleeEvent := s.sessionEvent(callpb.CallEventType_INCOMING_CALL, session, session.CallerUserID)
-	calleeEvent.SessionDescription = descriptionToProto(session.Offer)
-	calleeEvent.IceServers = s.ice.Servers(session.CalleeUserID, now)
-	if err := s.publishToTopic(ctx, calleeTopic, session.CalleeUserID, calleeEvent); err != nil {
-		logger.Sugar().Warnf("来电事件投递失败，取消通话: call_id=%s error=%v", session.ID, err)
-		ended, endErr := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "callee delivery failed")
+	if calleeOnline {
+		calleeEvent := s.incomingEvent(session, now)
+		if err := s.publishToTopic(ctx, calleeTopic, session.CalleeUserID, calleeEvent); err != nil {
+			logger.Sugar().Warnf("来电事件投递失败，取消通话: call_id=%s error=%v", session.ID, err)
+			ended, endErr := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "callee delivery failed")
+			if endErr == nil {
+				s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
+			}
+			return nil
+		}
+	}
+
+	pushRequest := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_VoipCall{VoipCall: &pushpb.VoIPCallRequest{
+		CallId: session.ID, CallerUserId: session.CallerUserID, CalleeUserId: session.CalleeUserID,
+		CallType: callTypeName(session.CallType), ResultKafkaTopic: "call-service",
+		ExpiresAt: session.RingDeadline.UTC().Format(time.RFC3339Nano), Required: !calleeOnline,
+	}}}
+	if err := s.publisher.PublishPush(ctx, "push-service", pushRequest); err != nil {
+		if calleeOnline {
+			logger.Sugar().Warnf("在线通话的冗余VoIP Push请求失败: call_id=%s error=%v", session.ID, err)
+			return nil
+		}
+		logger.Sugar().Warnf("发布VoIP Push请求失败，取消通话: call_id=%s error=%v", session.ID, err)
+		ended, endErr := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "push request failed")
 		if endErr == nil {
 			s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
 		}
+	}
+	return nil
+}
+
+func (s *Service) resumeCall(ctx context.Context, request *callpb.InternalRequest, payload *callpb.ResumeCall) error {
+	if payload == nil || strings.TrimSpace(payload.GetCallId()) == "" {
+		return ErrInvalidInput
+	}
+	session, err := s.store.GetSession(ctx, payload.GetCallId())
+	if err != nil {
+		return err
+	}
+	if session.CalleeUserID != request.GetUserId() {
+		return ErrForbidden
+	}
+	if session.State != StateRinging || !s.now().Before(session.RingDeadline) {
+		return ErrInvalidState
+	}
+	return s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, s.incomingEvent(session, s.now().UTC()))
+}
+
+func (s *Service) HandlePushResult(ctx context.Context, result *pushpb.VoIPPushResult) error {
+	if result == nil || strings.TrimSpace(result.GetCallId()) == "" {
+		return ErrInvalidInput
+	}
+	if result.GetAccepted() || !result.GetRequired() {
 		return nil
 	}
+	session, err := s.store.GetSession(ctx, result.GetCallId())
+	if errors.Is(err, ErrCallNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if session.CallerUserID != result.GetCallerUserId() || session.CalleeUserID != result.GetCalleeUserId() || session.State != StateRinging {
+		return nil
+	}
+	ended, err := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, result.GetReason())
+	if err != nil {
+		return err
+	}
+	s.publishBestEffortToUser(ctx, session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
 	return nil
 }
 
@@ -220,6 +283,13 @@ func (s *Service) publishTerminal(ctx context.Context, requesterTopic string, re
 	peerEvent := s.sessionEvent(eventType, session, requesterID)
 	s.publishBestEffortToUser(ctx, peerID, peerEvent)
 	return nil
+}
+
+func (s *Service) incomingEvent(session Session, now time.Time) *callpb.CallEvent {
+	event := s.sessionEvent(callpb.CallEventType_INCOMING_CALL, session, session.CallerUserID)
+	event.SessionDescription = descriptionToProto(session.Offer)
+	event.IceServers = s.ice.Servers(session.CalleeUserID, now)
+	return event
 }
 
 func (s *Service) publishBestEffortToTopic(ctx context.Context, topic string, userID int64, event *callpb.CallEvent) {
@@ -316,6 +386,13 @@ func stateToProto(state string) callpb.CallState {
 	}
 }
 
+func callTypeName(callType callpb.CallType) string {
+	if callType == callpb.CallType_VIDEO {
+		return "video"
+	}
+	return "audio"
+}
+
 func requestCallID(request *callpb.ClientRequest) string {
 	switch payload := request.Payload.(type) {
 	case *callpb.ClientRequest_Accept:
@@ -326,6 +403,8 @@ func requestCallID(request *callpb.ClientRequest) string {
 		return payload.Hangup.GetCallId()
 	case *callpb.ClientRequest_IceCandidate:
 		return payload.IceCandidate.GetCallId()
+	case *callpb.ClientRequest_ResumeCall:
+		return payload.ResumeCall.GetCallId()
 	default:
 		return ""
 	}

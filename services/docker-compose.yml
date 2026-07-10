@@ -278,6 +278,34 @@ services:
       - redis
       - kafka1
       - kafka2
+      - push_service
+    networks:
+      - backend
+
+  push_service:
+    build:
+      context: ..
+      dockerfile: services/pushService/Dockerfile
+    container_name: pushService
+    environment:
+      HTTP_PORT: ${PUSH_HTTP_PORT:-8086}
+      PGSQL_DSN: ${PGSQL_DSN}
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_PUSH_TOPIC: push-service
+      KAFKA_CONSUMER_GROUP: push-service-group
+      APNS_KEY_ID: ${APNS_KEY_ID:-C6D5695Q4Y}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-8R5Q4A3RC7}
+      APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-com.Voltline.Betterfly2}
+      APNS_PRIVATE_KEY_BASE64: ${APNS_PRIVATE_KEY_BASE64:-}
+      APNS_PRIVATE_KEY_PATH: /run/secrets/apns_key.p8
+      LOG_LEVEL: debug
+    ports:
+      - "${PUSH_HTTP_PORT:-8086}:${PUSH_HTTP_PORT:-8086}"
+    depends_on:
+      - kafka1
+      - kafka2
+    volumes:
+      - "${APNS_PRIVATE_KEY_HOST_PATH:-/dev/null}:/run/secrets/apns_key.p8:ro"
     networks:
       - backend
 

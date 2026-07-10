@@ -3,6 +3,7 @@ package handlers
 import (
 	callpb "Betterfly2/proto/call"
 	pb "Betterfly2/proto/data_forwarding"
+	pushpb "Betterfly2/proto/push"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,18 @@ func TestCallRequestRejectsMissingJWT(t *testing.T) {
 	_, err := authenticatedPayload(1001, request, "操作通话", "call_request", (*pb.RequestMessage).GetCallRequest)
 	if err == nil || !strings.Contains(err.Error(), "用户未携带有效JWT") {
 		t.Fatalf("expected unauthenticated call request to be rejected, got %v", err)
+	}
+}
+
+func TestPushRequestRejectsMissingJWT(t *testing.T) {
+	request := &pb.RequestMessage{
+		Payload: &pb.RequestMessage_PushRequest{PushRequest: &pushpb.ClientRequest{
+			Payload: &pushpb.ClientRequest_RegisterVoipToken{RegisterVoipToken: &pushpb.RegisterVoIPToken{}},
+		}},
+	}
+	_, err := authenticatedPayload(1001, request, "管理推送设备", "push_request", (*pb.RequestMessage).GetPushRequest)
+	if err == nil || !strings.Contains(err.Error(), "用户未携带有效JWT") {
+		t.Fatalf("expected unauthenticated push request to be rejected, got %v", err)
 	}
 }
 

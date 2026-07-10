@@ -74,3 +74,22 @@ func TestExpiredCallCleanupDoesNotDeleteNewCallIndex(t *testing.T) {
 		t.Fatalf("old timeout removed replacement index: got %q want %q", got, newSession.ID)
 	}
 }
+
+func TestUserTopicRequiresLiveRouteLease(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	store := NewRedisStore(client, time.Minute, time.Hour)
+	ctx := context.Background()
+	if err := client.HSet(ctx, "ws_connection_mapping", "42", "df-a").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UserTopic(ctx, 42); !errors.Is(err, ErrUserOffline) {
+		t.Fatalf("stale route without lease must be offline, got %v", err)
+	}
+	if err := client.Set(ctx, "ws_route_lease:42", "df-a", time.Minute).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if topic, err := store.UserTopic(ctx, 42); err != nil || topic != "df-a" {
+		t.Fatalf("expected live df-a route, topic=%q err=%v", topic, err)
+	}
+}

@@ -16,6 +16,8 @@ enum MessageType {
   TEXT = 9;           // 纯文本消息，如降级方案
   CALL_REQUEST = 10;
   CALL_RESPONSE = 11;
+  PUSH_REQUEST = 12;
+  PUSH_RESPONSE = 13;
 }
 
 message Envelope {

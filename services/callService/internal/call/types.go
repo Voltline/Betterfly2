@@ -6,6 +6,7 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
+	pushpb "Betterfly2/proto/push"
 )
 
 const (
@@ -68,6 +69,7 @@ type Store interface {
 
 type Publisher interface {
 	Publish(context.Context, string, *callpb.Delivery) error
+	PublishPush(context.Context, string, *pushpb.RequestMessage) error
 }
 
 type ICEProvider interface {

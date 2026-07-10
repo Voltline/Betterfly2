@@ -23,3 +23,6 @@ data:
   TURN_PUBLIC_HOST: localhost
   TURN_REALM: betterfly.local
   TURN_EXTERNAL_IP: 127.0.0.1
+  APNS_KEY_ID: C6D5695Q4Y
+  APNS_TEAM_ID: 8R5Q4A3RC7
+  APNS_BUNDLE_ID: com.Voltline.Betterfly2

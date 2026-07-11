@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,16 +69,19 @@ func main() {
 		}
 	}()
 
-	// 启动metrics HTTP服务器
-	go func() {
-		metricsPort := "9091"
-		sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
-		http.Handle("/metrics", promhttp.Handler())
-		err := http.ListenAndServe(":"+metricsPort, nil)
-		if err != nil {
-			sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
-		}
-	}()
+	if envBool("METRICS_ENABLED", true) {
+		go func() {
+			metricsPort := "9091"
+			sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
+			http.Handle("/metrics", promhttp.Handler())
+			err := http.ListenAndServe(":"+metricsPort, nil)
+			if err != nil {
+				sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
+			}
+		}()
+	} else {
+		sugar.Info("metrics HTTP服务器已禁用")
+	}
 
 	// 5. 启动 Kafka 消费者（后台运行，跟随主上下文退出）
 	sugar.Infoln("启动 Kafka 消费者...")
@@ -124,6 +128,19 @@ func main() {
 	}
 
 	sugar.Infoln("存储服务正常退出")
+}
+
+func envBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 // initCache 初始化缓存系统

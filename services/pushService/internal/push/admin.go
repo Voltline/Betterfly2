@@ -132,6 +132,21 @@ func (s *Service) AdminSendMessage(ctx context.Context, request AdminMessageRequ
 		}
 		return DeliveryReport{}, fmt.Errorf("no active compatible APNs token found")
 	}
+	presentation, err := s.store.MessagePresentation(ctx, request.SenderUserID, request.ConversationID, request.IsGroup)
+	if err != nil {
+		return DeliveryReport{}, err
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		title = presentation.Title
+	}
+	body := strings.TrimSpace(request.Body)
+	if body == "" {
+		body = defaultMessagePreview(request.MessageType)
+		if request.IsGroup && presentation.SenderName != "" {
+			body = presentation.SenderName + "：" + body
+		}
+	}
 	now := s.now().UTC()
 	report := s.sendAdmin(ctx, "message", tokens, func(token db.PushDeviceToken) Notification {
 		return Notification{
@@ -139,7 +154,9 @@ func (s *Service) AdminSendMessage(ctx context.Context, request AdminMessageRequ
 			SenderUserID: request.SenderUserID, TargetUserID: token.UserID,
 			ConversationID: request.ConversationID, IsGroup: request.IsGroup,
 			MessageType: strings.TrimSpace(request.MessageType), SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
-			Title: strings.TrimSpace(request.Title), Body: strings.TrimSpace(request.Body), CustomData: request.CustomData,
+			Title: title, Body: body, CustomData: request.CustomData,
+			SenderName: presentation.SenderName, GroupName: presentation.GroupName,
+			Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
 		}
 	})
 	report.Skipped = skipped

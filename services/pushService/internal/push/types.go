@@ -45,6 +45,10 @@ type Notification struct {
 	Title          string
 	Body           string
 	CustomData     map[string]any
+	SenderName     string
+	GroupName      string
+	Avatar         string
+	AvatarIsGroup  bool
 }
 
 type SendResult struct {
@@ -78,6 +82,7 @@ type Store interface {
 	UnregisterToken(context.Context, int64, string, string, string) (bool, error)
 	ListActiveTokens(context.Context, int64, string) ([]db.PushDeviceToken, error)
 	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)
+	MessagePresentation(context.Context, int64, int64, bool) (MessagePresentation, error)
 	FindTokens(context.Context, TokenFilter) ([]db.PushDeviceToken, error)
 	GetToken(context.Context, int64) (db.PushDeviceToken, error)
 	CreateDebugAudit(context.Context, *db.PushDebugAudit) error
@@ -102,6 +107,14 @@ type TokenSummary struct {
 	VoIP       int64 `json:"voip"`
 	Sandbox    int64 `json:"sandbox"`
 	Production int64 `json:"production"`
+}
+
+type MessagePresentation struct {
+	Title         string
+	SenderName    string
+	GroupName     string
+	Avatar        string
+	AvatarIsGroup bool
 }
 
 type Sender interface {

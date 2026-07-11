@@ -137,12 +137,15 @@ export PGSQL_DSN="host=your_host user=your_user password=your_password dbname=be
 export RUSTFS_ACCESS_KEY="your_access_key"
 export RUSTFS_SECRET_KEY="your_secret_key"
 
-# 3. 启动所有服务
-docker-compose up -d
+# 3. 启动完整业务功能（不包含监控、Kafka UI 和冗余 Pod）
+./deploy_docker_compose.sh standard
 
 # 4. 查看服务状态
-docker-compose ps
+docker compose ps
 ```
+
+低配、标准、全量部署以及按能力组合的说明见
+[可裁剪部署文档](./services/DEPLOYMENT_PROFILES.md)。直接执行 `docker compose up -d` 只启动核心聊天链路。
 
 ### 编译单个服务 / Build Individual Service
 

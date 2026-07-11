@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e  # 让脚本在任意命令失败时立即退出
+set -euo pipefail
 
-./../common/ws_ssl/generate_self_signed_cert.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-make -C ../proto
-sudo docker compose up -d --build --remove-orphans --force-recreate
+# 保持历史脚本的全量重建语义；新部署请直接使用 deploy_docker_compose.sh。
+exec "$SCRIPT_DIR/deploy_docker_compose.sh" full --cert --proto --force-recreate "$@"

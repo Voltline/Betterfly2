@@ -11,10 +11,21 @@ import (
 )
 
 type memoryStore struct {
-	tokens      []db.PushDeviceToken
-	deactivated []int64
-	notify      map[int64]bool
-	audits      []db.PushDebugAudit
+	tokens       []db.PushDeviceToken
+	deactivated  []int64
+	notify       map[int64]bool
+	audits       []db.PushDebugAudit
+	presentation MessagePresentation
+}
+
+func (s *memoryStore) MessagePresentation(_ context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
+	if s.presentation.Title != "" {
+		return s.presentation, nil
+	}
+	if isGroup {
+		return MessagePresentation{Title: "测试群", SenderName: "测试用户", GroupName: "测试群", Avatar: "group-avatar", AvatarIsGroup: true}, nil
+	}
+	return MessagePresentation{Title: "测试用户", SenderName: "测试用户", Avatar: "user-avatar"}, nil
 }
 
 func (s *memoryStore) FindTokens(_ context.Context, filter TokenFilter) ([]db.PushDeviceToken, error) {
@@ -250,6 +261,49 @@ func TestDirectMessagePushHonorsNotificationPreference(t *testing.T) {
 	}
 	if len(sender.sent) != 0 {
 		t.Fatalf("disabled direct message notifications should not be sent: %+v", sender.sent)
+	}
+}
+
+func TestBusinessGroupMessagePushUsesGroupPresentationAndPreview(t *testing.T) {
+	store := &memoryStore{
+		tokens:       []db.PushDeviceToken{{ID: 1, UserID: 2, Token: "001122", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true}},
+		presentation: MessagePresentation{Title: "开发群", SenderName: "Alice", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true},
+	}
+	sender := &memorySender{}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 88, IsGroup: true,
+		MessageType: "text", Preview: "今晚八点开会",
+	}}}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("expected one push, got %d", len(sender.sent))
+	}
+	notification := sender.sent[0].notification
+	if notification.Title != "开发群" || notification.Body != "Alice：今晚八点开会" || notification.Avatar != "group-avatar-hash" || !notification.AvatarIsGroup {
+		t.Fatalf("unexpected communication notification: %+v", notification)
+	}
+}
+
+func TestBusinessDirectMessagePushUsesSenderPresentation(t *testing.T) {
+	store := &memoryStore{
+		tokens:       []db.PushDeviceToken{{ID: 1, UserID: 2, Token: "001122", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true}},
+		presentation: MessagePresentation{Title: "Alice", SenderName: "Alice", Avatar: "alice-avatar-hash"},
+	}
+	sender := &memorySender{}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1,
+		MessageType: "text", Preview: "你好",
+	}}}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	notification := sender.sent[0].notification
+	if notification.Title != "Alice" || notification.Body != "你好" || notification.Avatar != "alice-avatar-hash" || notification.AvatarIsGroup {
+		t.Fatalf("unexpected direct communication notification: %+v", notification)
 	}
 }
 

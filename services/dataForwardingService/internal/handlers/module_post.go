@@ -240,7 +240,43 @@ func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post) *pushpb.Re
 		IsGroup:        payload.GetIsGroup(),
 		MessageType:    payload.GetMsgType(),
 		SentAt:         payload.GetTimestamp(),
+		Preview:        messagePushPreview(payload),
 	}}}
+}
+
+func messagePushPreview(payload *pb.Post) string {
+	if payload == nil {
+		return "发来一条消息"
+	}
+	var preview string
+	switch strings.ToLower(strings.TrimSpace(payload.GetMsgType())) {
+	case "text", "link":
+		preview = strings.TrimSpace(payload.GetMsg())
+	case "image":
+		preview = "发送了一张图片"
+	case "gif":
+		preview = "发送了一个 GIF"
+	case "file":
+		if name := strings.TrimSpace(payload.GetRealFileName()); name != "" {
+			preview = "发送了文件：" + name
+		} else {
+			preview = "发送了一个文件"
+		}
+	case "audio":
+		preview = "发送了一条语音"
+	case "video":
+		preview = "发送了一段视频"
+	default:
+		preview = "发来一条消息"
+	}
+	if preview == "" {
+		preview = "发来一条消息"
+	}
+	runes := []rune(preview)
+	if len(runes) > 180 {
+		preview = string(runes[:180]) + "…"
+	}
+	return preview
 }
 
 func membersWithoutSender(memberIDs []int64, senderID int64) []int64 {

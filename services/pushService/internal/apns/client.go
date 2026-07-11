@@ -300,12 +300,18 @@ func marshalMessagePayload(notification pushservice.Notification) ([]byte, error
 	payload := map[string]any{
 		"aps": map[string]any{
 			"alert": map[string]string{"title": title, "body": body},
-			"sound": "default", "content-available": 1, "thread-id": threadID,
+			"sound": "default", "content-available": 1, "mutable-content": 1,
+			"thread-id": threadID, "category": "MESSAGE",
 		},
 		"event": "new_message", "sender_user_id": notification.SenderUserID,
 		"conversation_id": notification.ConversationID, "is_group": notification.IsGroup,
-		"message_type": strings.TrimSpace(notification.MessageType),
-		"sent_at":      notification.SentAt.UTC().Format(time.RFC3339Nano),
+		"message_type":               strings.TrimSpace(notification.MessageType),
+		"sent_at":                    notification.SentAt.UTC().Format(time.RFC3339Nano),
+		"sender_name":                strings.TrimSpace(notification.SenderName),
+		"group_name":                 strings.TrimSpace(notification.GroupName),
+		"avatar":                     strings.TrimSpace(notification.Avatar),
+		"avatar_is_group":            notification.AvatarIsGroup,
+		"communication_notification": true,
 	}
 	if len(notification.CustomData) > 0 {
 		payload["debug_data"] = notification.CustomData

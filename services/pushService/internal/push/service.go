@@ -155,6 +155,18 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 	if err != nil {
 		sentAt = s.now().UTC()
 	}
+	presentation, err := s.store.MessagePresentation(ctx, request.GetSenderUserId(), request.GetConversationId(), request.GetIsGroup())
+	if err != nil {
+		return err
+	}
+	preview := strings.TrimSpace(request.GetPreview())
+	if preview == "" {
+		preview = defaultMessagePreview(request.GetMessageType())
+	}
+	body := preview
+	if request.GetIsGroup() && strings.TrimSpace(presentation.SenderName) != "" {
+		body = presentation.SenderName + "：" + preview
+	}
 	seen := make(map[int64]struct{}, len(request.GetTargetUserIds()))
 	for _, targetUserID := range request.GetTargetUserIds() {
 		if targetUserID <= 0 || targetUserID == request.GetSenderUserId() {
@@ -182,6 +194,8 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 				ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
 				MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
 				ExpiresAt: sentAt.Add(24 * time.Hour),
+				Title:     presentation.Title, Body: body, SenderName: presentation.SenderName,
+				GroupName: presentation.GroupName, Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
 			})
 			if sendErr == nil {
 				continue
@@ -196,6 +210,23 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 		}
 	}
 	return nil
+}
+
+func defaultMessagePreview(messageType string) string {
+	switch strings.ToLower(strings.TrimSpace(messageType)) {
+	case "image":
+		return "发送了一张图片"
+	case "gif":
+		return "发送了一个 GIF"
+	case "file":
+		return "发送了一个文件"
+	case "audio":
+		return "发送了一条语音"
+	case "video":
+		return "发送了一段视频"
+	default:
+		return "发来一条消息"
+	}
 }
 
 func (s *Service) publishVoIPResult(ctx context.Context, request *pushpb.VoIPCallRequest, accepted bool, reason string) error {

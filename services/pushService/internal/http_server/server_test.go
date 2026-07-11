@@ -36,6 +36,9 @@ func (s *httpTestStore) ListActiveTokens(_ context.Context, userID int64, pushTy
 func (s *httpTestStore) MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error) {
 	return true, nil
 }
+func (s *httpTestStore) MessagePresentation(context.Context, int64, int64, bool) (pushservice.MessagePresentation, error) {
+	return pushservice.MessagePresentation{Title: "Alice", SenderName: "Alice", Avatar: "avatar-hash"}, nil
+}
 func (s *httpTestStore) FindTokens(context.Context, pushservice.TokenFilter) ([]db.PushDeviceToken, error) {
 	return s.tokens, nil
 }

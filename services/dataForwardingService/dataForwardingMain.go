@@ -7,6 +7,8 @@ import (
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -46,16 +48,19 @@ func main() {
 
 	go ConsumerRoutine()
 
-	// 启动metrics HTTP服务器
-	go func() {
-		metricsPort := "9090"
-		sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
-		http.Handle("/metrics", promhttp.Handler())
-		err := http.ListenAndServe(":"+metricsPort, nil)
-		if err != nil {
-			sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
-		}
-	}()
+	if envBool("METRICS_ENABLED", true) {
+		go func() {
+			metricsPort := "9090"
+			sugar.Infof("启动metrics HTTP服务器，端口: %s", metricsPort)
+			http.Handle("/metrics", promhttp.Handler())
+			err := http.ListenAndServe(":"+metricsPort, nil)
+			if err != nil {
+				sugar.Errorf("metrics HTTP服务器启动失败: %v", err)
+			}
+		}()
+	} else {
+		sugar.Info("metrics HTTP服务器已禁用")
+	}
 
 	// 初始化 gRPC 客户端
 	_, err = grpcClient.GetAuthClient()
@@ -71,4 +76,17 @@ func main() {
 	if err != nil {
 		sugar.Fatalln("启动 WebSocket 服务器失败: ", err)
 	}
+}
+
+func envBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

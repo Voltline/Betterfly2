@@ -83,6 +83,7 @@ message MessagePushRequest {
   bool is_group = 4;
   string message_type = 5;
   string sent_at = 6;
+  string preview = 7;
 }
 
 message RequestMessage {

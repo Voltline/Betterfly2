@@ -38,7 +38,7 @@ Aliases:
   push                   -> push_service
 
 Options:
-  --all          Rebuild all services, similar to the old full rebuild flow.
+  --all          Rebuild all services and enable every Compose profile.
   --proto        Run make -C ../proto before rebuilding.
   --cert         Regenerate WebSocket self-signed cert before rebuilding.
   --with-deps    Let docker compose recreate dependencies too. Default is --no-deps.
@@ -202,6 +202,10 @@ if [[ "$USE_SUDO" -eq 1 ]]; then
 fi
 
 COMPOSE_CMD=("${DOCKER_CMD[@]}" compose up -d --build)
+
+if [[ "$ALL_SERVICES" -eq 1 ]]; then
+  COMPOSE_CMD=("${DOCKER_CMD[@]}" compose --profile "*" up -d --build)
+fi
 
 if [[ "$FORCE_RECREATE" -eq 1 ]]; then
   COMPOSE_CMD+=(--force-recreate)

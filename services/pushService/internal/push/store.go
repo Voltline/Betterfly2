@@ -3,6 +3,8 @@ package push
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"time"
 
 	"Betterfly2/shared/db"
@@ -11,6 +13,39 @@ import (
 
 type GormStore struct {
 	db *gorm.DB
+}
+
+func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
+	var sender db.User
+	senderErr := s.db.WithContext(ctx).Select("id", "name", "avatar").First(&sender, senderUserID).Error
+	if senderErr != nil && !errors.Is(senderErr, gorm.ErrRecordNotFound) {
+		return MessagePresentation{}, senderErr
+	}
+	senderName := strings.TrimSpace(sender.Name)
+	if senderName == "" {
+		senderName = "用户 " + strconv.FormatInt(senderUserID, 10)
+	}
+	presentation := MessagePresentation{Title: senderName, SenderName: senderName, Avatar: sender.Avatar}
+	if !isGroup {
+		return presentation, nil
+	}
+	var group db.Group
+	groupErr := s.db.WithContext(ctx).
+		Select("group_id", "name", "avatar").
+		Where("group_id = ? AND is_delete = ?", conversationID, false).
+		First(&group).Error
+	if groupErr != nil && !errors.Is(groupErr, gorm.ErrRecordNotFound) {
+		return MessagePresentation{}, groupErr
+	}
+	groupName := strings.TrimSpace(group.Name)
+	if groupName == "" {
+		groupName = "群聊 " + strconv.FormatInt(conversationID, 10)
+	}
+	presentation.Title = groupName
+	presentation.GroupName = groupName
+	presentation.Avatar = group.Avatar
+	presentation.AvatarIsGroup = true
+	return presentation, nil
 }
 
 func NewGormStore() *GormStore {

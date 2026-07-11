@@ -37,6 +37,12 @@ spec:
                 secretKeyRef:
                   name: betterfly2-secret
                   key: APNS_PRIVATE_KEY_BASE64
+            - name: PUSH_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PUSH_ADMIN_TOKEN
+                  optional: true
           ports:
             - name: health
               containerPort: 8086

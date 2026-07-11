@@ -3,6 +3,7 @@ package handlers
 import (
 	pb "Betterfly2/proto/data_forwarding"
 	envelope "Betterfly2/proto/envelope"
+	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
 	sharedDB "Betterfly2/shared/db"
 	"Betterfly2/shared/dispatch"
@@ -82,6 +83,7 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	if payload.GetIsGroup() {
 		return routeGroupMessage(fromID, payload, message, currentContainerID)
 	}
+	publishMessagePushBestEffort([]int64{payload.GetToId()}, payload)
 
 	if targetTopic == "" {
 		// 用户不在线，只保存消息（已保存），不进行转发
@@ -181,6 +183,7 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 		targetUserIDs = append(targetUserIDs, targetUserID)
 		memberIDByUserID[targetUserID] = memberID
 	}
+	publishMessagePushBestEffort(membersWithoutSender(memberIDs, fromID), payload)
 	containerByUserID := redisClient.GetContainersByConnections(targetUserIDs)
 
 	delivered := 0
@@ -214,6 +217,40 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 
 	logger.Sugar().Debugf("群消息处理完成: group_id=%d, delivered=%d", payload.GetToId(), delivered)
 	return nil
+}
+
+func publishMessagePushBestEffort(targetUserIDs []int64, payload *pb.Post) {
+	if len(targetUserIDs) == 0 || payload == nil {
+		return
+	}
+	if err := publishPushRequest(buildMessagePushRequest(targetUserIDs, payload)); err != nil {
+		logger.Sugar().Warnf("发布普通消息APNs请求失败: sender_user_id=%d conversation_id=%d targets=%d error=%v", payload.GetFromId(), payload.GetToId(), len(targetUserIDs), err)
+	}
+}
+
+func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post) *pushpb.RequestMessage {
+	conversationID := payload.GetFromId()
+	if payload.GetIsGroup() {
+		conversationID = payload.GetToId()
+	}
+	return &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds:  targetUserIDs,
+		SenderUserId:   payload.GetFromId(),
+		ConversationId: conversationID,
+		IsGroup:        payload.GetIsGroup(),
+		MessageType:    payload.GetMsgType(),
+		SentAt:         payload.GetTimestamp(),
+	}}}
+}
+
+func membersWithoutSender(memberIDs []int64, senderID int64) []int64 {
+	targets := make([]int64, 0, len(memberIDs))
+	for _, memberID := range memberIDs {
+		if memberID != senderID {
+			targets = append(targets, memberID)
+		}
+	}
+	return targets
 }
 
 func routeGroupPostCrossContainer(targetContainerID string, targetUserID int64, payload *pb.Post) error {

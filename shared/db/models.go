@@ -103,9 +103,21 @@ type PushDeviceToken struct {
 	DeviceID    string `gorm:"type:varchar(128);uniqueIndex:uidx_push_user_device_env_type,priority:2;comment:客户端稳定设备ID"`
 	Token       string `gorm:"type:varchar(256);uniqueIndex:uidx_push_token_env_type,priority:1;comment:APNs设备token"`
 	Environment string `gorm:"type:varchar(20);uniqueIndex:uidx_push_user_device_env_type,priority:3;uniqueIndex:uidx_push_token_env_type,priority:2;comment:sandbox或production"`
-	PushType    string `gorm:"type:varchar(20);uniqueIndex:uidx_push_user_device_env_type,priority:4;uniqueIndex:uidx_push_token_env_type,priority:3;comment:推送类型，例如voip"`
+	PushType    string `gorm:"type:varchar(20);uniqueIndex:uidx_push_user_device_env_type,priority:4;uniqueIndex:uidx_push_token_env_type,priority:3;comment:推送类型，例如voip或apns"`
 	BundleID    string `gorm:"type:varchar(255);comment:应用Bundle ID"`
 	IsActive    bool   `gorm:"default:true;index:idx_push_user_active,priority:2;comment:token是否有效"`
 	CreatedAt   string `gorm:"type:varchar(35);comment:创建时间"`
 	UpdatedAt   string `gorm:"type:varchar(35);comment:更新时间"`
+}
+
+type PushDebugAudit struct {
+	ID            int64  `gorm:"primaryKey;autoIncrement;comment:调试推送审计ID"`
+	Kind          string `gorm:"type:varchar(20);index;comment:推送类型message或voip"`
+	Operator      string `gorm:"type:varchar(100);comment:调试操作人标识"`
+	TargetSummary string `gorm:"type:varchar(500);comment:脱敏后的目标摘要"`
+	AcceptedCount int    `gorm:"comment:APNs接受数量"`
+	FailedCount   int    `gorm:"comment:失败数量"`
+	Status        string `gorm:"type:varchar(20);index;comment:success、partial或failed"`
+	DetailsJSON   string `gorm:"type:text;comment:脱敏投递详情JSON"`
+	CreatedAt     string `gorm:"type:varchar(35);index;comment:创建时间"`
 }

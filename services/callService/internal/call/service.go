@@ -270,7 +270,15 @@ func (s *Service) forwardICE(ctx context.Context, request *callpb.InternalReques
 	}
 	event := s.sessionEvent(callpb.CallEventType_ICE_CANDIDATE_RECEIVED, session, request.GetUserId())
 	event.IceCandidate = payload.GetCandidate()
-	return s.publishToUser(ctx, peerID, "", event)
+	err = s.publishToUser(ctx, peerID, "", event)
+	if errors.Is(err, ErrUserOffline) && session.State == StateRinging {
+		logger.Sugar().Debugf(
+			"对端仍在等待VoIP Push唤醒，忽略暂时无法投递的ICE: call_id=%s sender_user_id=%d peer_user_id=%d session_state=%s",
+			session.ID, request.GetUserId(), peerID, session.State,
+		)
+		return nil
+	}
+	return err
 }
 
 func (s *Service) publishTerminal(ctx context.Context, requesterTopic string, requesterID int64, session Session, eventType callpb.CallEventType) error {

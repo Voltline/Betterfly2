@@ -94,7 +94,7 @@
 | **Friend Service** | 54401 | 好友关系和联系人管理 |
 | **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
 | **Call Service** | 8085 (HTTP health) | WebRTC语音/视频通话信令、状态与ICE配置 |
-| **Push Service** | 8086 (HTTP health) | PushKit VoIP token与APNs双环境推送 |
+| **Push Service** | 8086 (HTTP health) | PushKit VoIP来电与普通消息APNs双环境推送 |
 
 ### 基础设施服务 / Infrastructure Services
 

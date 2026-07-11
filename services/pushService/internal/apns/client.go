@@ -29,6 +29,7 @@ const (
 	sandboxEndpoint    = "https://api.sandbox.push.apple.com"
 	productionEndpoint = "https://api.push.apple.com"
 	maxVoIPPayloadSize = 5120
+	maxAPNsPayloadSize = 4096
 )
 
 type Config struct {
@@ -124,7 +125,7 @@ func (c *Client) Send(ctx context.Context, notification pushservice.Notification
 }
 
 func (c *Client) sendOnce(ctx context.Context, notification pushservice.Notification) (pushservice.SendResult, error) {
-	if strings.TrimSpace(notification.Token) == "" || strings.TrimSpace(notification.CallID) == "" || notification.CallerUserID <= 0 || notification.CalleeUserID <= 0 {
+	if strings.TrimSpace(notification.Token) == "" || !validNotification(notification) {
 		return pushservice.SendResult{}, pushservice.ErrInvalidRequest
 	}
 	endpoint, err := c.endpoint(notification.Environment)
@@ -146,11 +147,14 @@ func (c *Client) sendOnce(ctx context.Context, notification pushservice.Notifica
 		return pushservice.SendResult{}, err
 	}
 	request.Header.Set("authorization", "bearer "+providerToken)
-	request.Header.Set("apns-push-type", "voip")
-	request.Header.Set("apns-topic", c.bundleID+".voip")
+	pushType, topic, collapseID := c.requestMetadata(notification)
+	request.Header.Set("apns-push-type", pushType)
+	request.Header.Set("apns-topic", topic)
 	request.Header.Set("apns-priority", "10")
 	request.Header.Set("apns-expiration", strconv.FormatInt(notification.ExpiresAt.Unix(), 10))
-	request.Header.Set("apns-collapse-id", notification.CallID)
+	if collapseID != "" {
+		request.Header.Set("apns-collapse-id", collapseID)
+	}
 	request.Header.Set("content-type", "application/json")
 
 	response, err := c.httpClient.Do(request)
@@ -168,6 +172,24 @@ func (c *Client) sendOnce(ctx context.Context, notification pushservice.Notifica
 	}
 	_ = json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&responseBody)
 	return pushservice.SendResult{}, &pushservice.APNSError{StatusCode: response.StatusCode, Reason: responseBody.Reason, APNSID: apnsID}
+}
+
+func validNotification(notification pushservice.Notification) bool {
+	switch notification.Kind {
+	case pushservice.NotificationVoIP:
+		return strings.TrimSpace(notification.CallID) != "" && notification.CallerUserID > 0 && notification.CalleeUserID > 0 && notification.ExpiresAt.After(time.Unix(0, 0))
+	case pushservice.NotificationMessage:
+		return notification.SenderUserID > 0 && notification.TargetUserID > 0 && notification.ConversationID > 0 && strings.TrimSpace(notification.MessageType) != "" && notification.ExpiresAt.After(time.Unix(0, 0))
+	default:
+		return false
+	}
+}
+
+func (c *Client) requestMetadata(notification pushservice.Notification) (pushType, topic, collapseID string) {
+	if notification.Kind == pushservice.NotificationVoIP {
+		return "voip", c.bundleID + ".voip", notification.CallID
+	}
+	return "alert", c.bundleID, ""
 }
 
 func (c *Client) endpoint(environment pushpb.PushEnvironment) (string, error) {
@@ -235,6 +257,9 @@ func parsePrivateKey(data []byte) (*ecdsa.PrivateKey, error) {
 }
 
 func marshalPayload(notification pushservice.Notification) ([]byte, error) {
+	if notification.Kind == pushservice.NotificationMessage {
+		return marshalMessagePayload(notification)
+	}
 	callType := strings.ToLower(strings.TrimSpace(notification.CallType))
 	payload := map[string]any{
 		"aps":            map[string]any{"content-available": 1},
@@ -252,6 +277,45 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 	}
 	if len(data) > maxVoIPPayloadSize {
 		return nil, fmt.Errorf("VoIP payload exceeds %d bytes", maxVoIPPayloadSize)
+	}
+	return data, nil
+}
+
+func marshalMessagePayload(notification pushservice.Notification) ([]byte, error) {
+	title := strings.TrimSpace(notification.Title)
+	if title == "" {
+		title = "Betterfly"
+	}
+	body := "你收到一条新消息"
+	if notification.IsGroup {
+		body = "你收到一条群聊消息"
+	}
+	if customBody := strings.TrimSpace(notification.Body); customBody != "" {
+		body = customBody
+	}
+	threadID := "user:" + strconv.FormatInt(notification.SenderUserID, 10)
+	if notification.IsGroup {
+		threadID = "group:" + strconv.FormatInt(notification.ConversationID, 10)
+	}
+	payload := map[string]any{
+		"aps": map[string]any{
+			"alert": map[string]string{"title": title, "body": body},
+			"sound": "default", "content-available": 1, "thread-id": threadID,
+		},
+		"event": "new_message", "sender_user_id": notification.SenderUserID,
+		"conversation_id": notification.ConversationID, "is_group": notification.IsGroup,
+		"message_type": strings.TrimSpace(notification.MessageType),
+		"sent_at":      notification.SentAt.UTC().Format(time.RFC3339Nano),
+	}
+	if len(notification.CustomData) > 0 {
+		payload["debug_data"] = notification.CustomData
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAPNsPayloadSize {
+		return nil, fmt.Errorf("APNs payload exceeds %d bytes", maxAPNsPayloadSize)
 	}
 	return data, nil
 }

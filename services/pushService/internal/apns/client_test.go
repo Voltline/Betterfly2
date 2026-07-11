@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -57,7 +56,7 @@ func TestClientSendsVoIPHeadersAndPayloadToSelectedEnvironment(t *testing.T) {
 	client.productionEndpoint = production.URL
 	client.sandboxEndpoint = sandbox.URL
 	result, err := client.Send(context.Background(), pushservice.Notification{
-		Token: strings.Repeat("ab", 32), Environment: pushpb.PushEnvironment_PRODUCTION,
+		Kind: pushservice.NotificationVoIP, Token: strings.Repeat("ab", 32), Environment: pushpb.PushEnvironment_PRODUCTION,
 		CallID: "00112233445566778899aabbccddeeff", CallerUserID: 1, CalleeUserID: 2,
 		CallType: "video", ExpiresAt: time.Now().Add(time.Minute),
 	})
@@ -67,11 +66,47 @@ func TestClientSendsVoIPHeadersAndPayloadToSelectedEnvironment(t *testing.T) {
 	if productionHits != 1 || sandboxHits != 0 || result.APNSID != "apns-1" || !strings.HasPrefix(authorization, "bearer ") {
 		t.Fatalf("unexpected APNs delivery: production=%d sandbox=%d result=%+v authorization=%q", productionHits, sandboxHits, result, authorization)
 	}
-	fmt.Println(pushservice.Notification{
-		Token: strings.Repeat("ab", 32), Environment: pushpb.PushEnvironment_PRODUCTION,
-		CallID: "00112233445566778899aabbccddeeff", CallerUserID: 1, CalleeUserID: 2,
-		CallType: "video", ExpiresAt: time.Now().Add(time.Minute),
+}
+
+func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("apns-push-type") != "alert" || r.Header.Get("apns-topic") != "com.Voltline.Betterfly2" || r.Header.Get("apns-collapse-id") != "" {
+			t.Errorf("unexpected message APNs headers: %+v", r.Header)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["event"] != "new_message" || payload["conversation_id"] != float64(88) || payload["is_group"] != true || payload["message_type"] != "image" {
+			t.Errorf("unexpected message payload: %+v", payload)
+		}
+		aps := payload["aps"].(map[string]any)
+		alert := aps["alert"].(map[string]any)
+		if alert["title"] != "调试标题" || alert["body"] != "调试正文" || payload["debug_data"].(map[string]any)["scenario"] != "smoke" {
+			t.Errorf("custom message payload missing: %+v", payload)
+		}
+		if aps["thread-id"] != "group:88" || aps["content-available"] != float64(1) {
+			t.Errorf("unexpected aps payload: %+v", aps)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	client := newTestClient(t)
+	client.httpClient = server.Client()
+	client.sandboxEndpoint = server.URL
+	now := time.Date(2026, 7, 11, 3, 0, 0, 0, time.UTC)
+	_, err := client.Send(context.Background(), pushservice.Notification{
+		Kind: pushservice.NotificationMessage, Token: strings.Repeat("ef", 32), Environment: pushpb.PushEnvironment_SANDBOX,
+		SenderUserID: 1, TargetUserID: 2, ConversationID: 88, IsGroup: true,
+		MessageType: "image", SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
+		Title: "调试标题", Body: "调试正文", CustomData: map[string]any{"scenario": "smoke"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestClientMapsUnregisteredResponse(t *testing.T) {
@@ -84,7 +119,7 @@ func TestClientMapsUnregisteredResponse(t *testing.T) {
 	client.httpClient = server.Client()
 	client.sandboxEndpoint = server.URL
 	_, err := client.Send(context.Background(), pushservice.Notification{
-		Token: strings.Repeat("cd", 32), Environment: pushpb.PushEnvironment_SANDBOX,
+		Kind: pushservice.NotificationVoIP, Token: strings.Repeat("cd", 32), Environment: pushpb.PushEnvironment_SANDBOX,
 		CallID: "call", CallerUserID: 1, CalleeUserID: 2, CallType: "audio", ExpiresAt: time.Now().Add(time.Minute),
 	})
 	apnsErr, ok := err.(*pushservice.APNSError)
@@ -130,20 +165,27 @@ func TestAPNSCredentialIntegration(t *testing.T) {
 	}
 	for _, environment := range []pushpb.PushEnvironment{pushpb.PushEnvironment_SANDBOX, pushpb.PushEnvironment_PRODUCTION} {
 		t.Run(environment.String(), func(t *testing.T) {
-			_, sendErr := client.Send(context.Background(), pushservice.Notification{
-				Token: strings.Repeat("00", 32), Environment: environment,
+			notifications := []pushservice.Notification{{
+				Kind: pushservice.NotificationVoIP, Token: strings.Repeat("00", 32), Environment: environment,
 				CallID: "00112233445566778899aabbccddeeff", CallerUserID: 1, CalleeUserID: 2,
 				CallType: "audio", ExpiresAt: time.Now().Add(time.Minute),
-			})
-			if sendErr == nil {
-				t.Fatal("APNs unexpectedly accepted a synthetic device token")
-			}
-			apnsErr, ok := sendErr.(*pushservice.APNSError)
-			if !ok {
-				t.Fatalf("expected APNs protocol response, got %T: %v", sendErr, sendErr)
-			}
-			if apnsErr.Reason == "InvalidProviderToken" || apnsErr.Reason == "ExpiredProviderToken" || apnsErr.Reason == "TopicDisallowed" {
-				t.Fatalf("APNs credential or topic rejected: %s", apnsErr.Reason)
+			}, {
+				Kind: pushservice.NotificationMessage, Token: strings.Repeat("00", 32), Environment: environment,
+				SenderUserID: 1, TargetUserID: 2, ConversationID: 1, MessageType: "text",
+				SentAt: time.Now(), ExpiresAt: time.Now().Add(24 * time.Hour),
+			}}
+			for _, notification := range notifications {
+				_, sendErr := client.Send(context.Background(), notification)
+				if sendErr == nil {
+					t.Fatal("APNs unexpectedly accepted a synthetic device token")
+				}
+				apnsErr, ok := sendErr.(*pushservice.APNSError)
+				if !ok {
+					t.Fatalf("expected APNs protocol response, got %T: %v", sendErr, sendErr)
+				}
+				if apnsErr.Reason == "InvalidProviderToken" || apnsErr.Reason == "ExpiredProviderToken" || apnsErr.Reason == "TopicDisallowed" {
+					t.Fatalf("APNs credential or topic rejected for %s: %s", notification.Kind, apnsErr.Reason)
+				}
 			}
 		})
 	}

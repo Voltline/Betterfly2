@@ -39,6 +39,8 @@ func (s *Service) Handle(ctx context.Context, request *pushpb.RequestMessage) er
 		return s.handleClientCommand(ctx, payload.ClientCommand)
 	case *pushpb.RequestMessage_VoipCall:
 		return s.handleVoIPCall(ctx, payload.VoipCall)
+	case *pushpb.RequestMessage_MessagePush:
+		return s.handleMessagePush(ctx, payload.MessagePush)
 	default:
 		return ErrInvalidRequest
 	}
@@ -51,9 +53,17 @@ func (s *Service) handleClientCommand(ctx context.Context, command *pushpb.Clien
 	var event *pushpb.ClientEvent
 	switch payload := command.GetRequest().Payload.(type) {
 	case *pushpb.ClientRequest_RegisterVoipToken:
-		event = s.register(ctx, command.GetUserId(), payload.RegisterVoipToken)
+		request := payload.RegisterVoipToken
+		event = s.registerToken(ctx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.RegisterVoIPToken) string { return v.GetDeviceId() }), valueOrEmpty(request, func(v *pushpb.RegisterVoIPToken) string { return v.GetToken() }), environmentOrUnknown(request), PushTypeVoIP, "register_voip_token")
 	case *pushpb.ClientRequest_UnregisterVoipToken:
-		event = s.unregister(ctx, command.GetUserId(), payload.UnregisterVoipToken)
+		request := payload.UnregisterVoipToken
+		event = s.unregisterToken(ctx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.UnregisterVoIPToken) string { return v.GetDeviceId() }), environmentOrUnknownUnregister(request), PushTypeVoIP, "unregister_voip_token")
+	case *pushpb.ClientRequest_RegisterApnsToken:
+		request := payload.RegisterApnsToken
+		event = s.registerToken(ctx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.RegisterAPNsToken) string { return v.GetDeviceId() }), valueOrEmpty(request, func(v *pushpb.RegisterAPNsToken) string { return v.GetToken() }), environmentOrUnknownAPNs(request), PushTypeAPNs, "register_apns_token")
+	case *pushpb.ClientRequest_UnregisterApnsToken:
+		request := payload.UnregisterApnsToken
+		event = s.unregisterToken(ctx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.UnregisterAPNsToken) string { return v.GetDeviceId() }), environmentOrUnknownUnregisterAPNs(request), PushTypeAPNs, "unregister_apns_token")
 	default:
 		event = clientEvent("unknown", pushpb.PushResult_INVALID_ARGUMENT, "", pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED, ErrInvalidRequest.Error(), s.now())
 	}
@@ -64,34 +74,33 @@ func (s *Service) handleClientCommand(ctx context.Context, command *pushpb.Clien
 	})
 }
 
-func (s *Service) register(ctx context.Context, userID int64, request *pushpb.RegisterVoIPToken) *pushpb.ClientEvent {
-	if request == nil || !validDeviceID(request.GetDeviceId()) || !validToken(request.GetToken()) || !validEnvironment(request.GetEnvironment()) {
-		return clientEvent("register_voip_token", pushpb.PushResult_INVALID_ARGUMENT, valueOrEmpty(request, func(v *pushpb.RegisterVoIPToken) string { return v.GetDeviceId() }), environmentOrUnknown(request), ErrInvalidRequest.Error(), s.now())
+func (s *Service) registerToken(ctx context.Context, userID int64, rawDeviceID, rawToken string, environment pushpb.PushEnvironment, pushType, operation string) *pushpb.ClientEvent {
+	if !validDeviceID(rawDeviceID) || !validToken(rawToken) || !validEnvironment(environment) {
+		return clientEvent(operation, pushpb.PushResult_INVALID_ARGUMENT, strings.TrimSpace(rawDeviceID), environment, ErrInvalidRequest.Error(), s.now())
 	}
-	deviceID := strings.TrimSpace(request.GetDeviceId())
-	token := strings.ToLower(strings.TrimSpace(request.GetToken()))
-	environment := environmentName(request.GetEnvironment())
-	if err := s.store.RegisterVoIPToken(ctx, userID, deviceID, token, environment, s.bundleID); err != nil {
-		logger.Sugar().Errorf("注册VoIP token失败: user_id=%d device_id=%s error=%v", userID, deviceID, err)
-		return clientEvent("register_voip_token", pushpb.PushResult_PUSH_INTERNAL_ERROR, deviceID, request.GetEnvironment(), "register token failed", s.now())
+	deviceID := strings.TrimSpace(rawDeviceID)
+	token := strings.ToLower(strings.TrimSpace(rawToken))
+	if err := s.store.RegisterToken(ctx, userID, deviceID, token, environmentName(environment), pushType, s.bundleID); err != nil {
+		logger.Sugar().Errorf("注册APNs token失败: user_id=%d device_id=%s push_type=%s error=%v", userID, deviceID, pushType, err)
+		return clientEvent(operation, pushpb.PushResult_PUSH_INTERNAL_ERROR, deviceID, environment, "register token failed", s.now())
 	}
-	return clientEvent("register_voip_token", pushpb.PushResult_PUSH_OK, deviceID, request.GetEnvironment(), "registered", s.now())
+	return clientEvent(operation, pushpb.PushResult_PUSH_OK, deviceID, environment, "registered", s.now())
 }
 
-func (s *Service) unregister(ctx context.Context, userID int64, request *pushpb.UnregisterVoIPToken) *pushpb.ClientEvent {
-	if request == nil || !validDeviceID(request.GetDeviceId()) || !validEnvironment(request.GetEnvironment()) {
-		return clientEvent("unregister_voip_token", pushpb.PushResult_INVALID_ARGUMENT, valueOrEmpty(request, func(v *pushpb.UnregisterVoIPToken) string { return v.GetDeviceId() }), environmentOrUnknownUnregister(request), ErrInvalidRequest.Error(), s.now())
+func (s *Service) unregisterToken(ctx context.Context, userID int64, rawDeviceID string, environment pushpb.PushEnvironment, pushType, operation string) *pushpb.ClientEvent {
+	if !validDeviceID(rawDeviceID) || !validEnvironment(environment) {
+		return clientEvent(operation, pushpb.PushResult_INVALID_ARGUMENT, strings.TrimSpace(rawDeviceID), environment, ErrInvalidRequest.Error(), s.now())
 	}
-	deviceID := strings.TrimSpace(request.GetDeviceId())
-	found, err := s.store.UnregisterVoIPToken(ctx, userID, deviceID, environmentName(request.GetEnvironment()))
+	deviceID := strings.TrimSpace(rawDeviceID)
+	found, err := s.store.UnregisterToken(ctx, userID, deviceID, environmentName(environment), pushType)
 	if err != nil {
-		logger.Sugar().Errorf("删除VoIP token失败: user_id=%d device_id=%s error=%v", userID, deviceID, err)
-		return clientEvent("unregister_voip_token", pushpb.PushResult_PUSH_INTERNAL_ERROR, deviceID, request.GetEnvironment(), "unregister token failed", s.now())
+		logger.Sugar().Errorf("删除APNs token失败: user_id=%d device_id=%s push_type=%s error=%v", userID, deviceID, pushType, err)
+		return clientEvent(operation, pushpb.PushResult_PUSH_INTERNAL_ERROR, deviceID, environment, "unregister token failed", s.now())
 	}
 	if !found {
-		return clientEvent("unregister_voip_token", pushpb.PushResult_TOKEN_NOT_FOUND, deviceID, request.GetEnvironment(), ErrTokenNotFound.Error(), s.now())
+		return clientEvent(operation, pushpb.PushResult_TOKEN_NOT_FOUND, deviceID, environment, ErrTokenNotFound.Error(), s.now())
 	}
-	return clientEvent("unregister_voip_token", pushpb.PushResult_PUSH_OK, deviceID, request.GetEnvironment(), "unregistered", s.now())
+	return clientEvent(operation, pushpb.PushResult_PUSH_OK, deviceID, environment, "unregistered", s.now())
 }
 
 func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRequest) error {
@@ -102,7 +111,7 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 	if err != nil || !expiresAt.After(s.now()) {
 		return s.publishVoIPResult(ctx, request, false, "call_expired")
 	}
-	tokens, err := s.store.ListActiveVoIPTokens(ctx, request.GetCalleeUserId())
+	tokens, err := s.store.ListActiveTokens(ctx, request.GetCalleeUserId(), PushTypeVoIP)
 	if err != nil {
 		return s.publishVoIPResult(ctx, request, false, "token_query_failed")
 	}
@@ -115,7 +124,7 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 	for _, token := range tokens {
 		environment := parseEnvironment(token.Environment)
 		_, sendErr := s.sender.Send(ctx, Notification{
-			Token: token.Token, Environment: environment, CallID: request.GetCallId(),
+			Kind: NotificationVoIP, Token: token.Token, Environment: environment, CallID: request.GetCallId(),
 			CallerUserID: request.GetCallerUserId(), CalleeUserID: request.GetCalleeUserId(),
 			CallType: request.GetCallType(), ExpiresAt: expiresAt,
 		})
@@ -136,6 +145,57 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 		lastReason = "accepted_by_apns"
 	}
 	return s.publishVoIPResult(ctx, request, accepted, lastReason)
+}
+
+func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.MessagePushRequest) error {
+	if request == nil || request.GetSenderUserId() <= 0 || request.GetConversationId() <= 0 || strings.TrimSpace(request.GetMessageType()) == "" || len(request.GetTargetUserIds()) == 0 {
+		return ErrInvalidRequest
+	}
+	sentAt, err := time.Parse(time.RFC3339Nano, request.GetSentAt())
+	if err != nil {
+		sentAt = s.now().UTC()
+	}
+	seen := make(map[int64]struct{}, len(request.GetTargetUserIds()))
+	for _, targetUserID := range request.GetTargetUserIds() {
+		if targetUserID <= 0 || targetUserID == request.GetSenderUserId() {
+			continue
+		}
+		if _, exists := seen[targetUserID]; exists {
+			continue
+		}
+		seen[targetUserID] = struct{}{}
+		enabled, policyErr := s.store.MessageNotificationsEnabled(ctx, targetUserID, request.GetSenderUserId(), request.GetIsGroup())
+		if policyErr != nil {
+			return policyErr
+		}
+		if !enabled {
+			continue
+		}
+		tokens, queryErr := s.store.ListActiveTokens(ctx, targetUserID, PushTypeAPNs)
+		if queryErr != nil {
+			return queryErr
+		}
+		for _, token := range tokens {
+			_, sendErr := s.sender.Send(ctx, Notification{
+				Kind: NotificationMessage, Token: token.Token, Environment: parseEnvironment(token.Environment),
+				SenderUserID: request.GetSenderUserId(), TargetUserID: targetUserID,
+				ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
+				MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
+				ExpiresAt: sentAt.Add(24 * time.Hour),
+			})
+			if sendErr == nil {
+				continue
+			}
+			var apnsErr *APNSError
+			if errors.As(sendErr, &apnsErr) && apnsErr.InvalidatesToken() {
+				if deactivateErr := s.store.DeactivateToken(ctx, token.ID); deactivateErr != nil {
+					logger.Sugar().Warnf("停用无效APNs token失败: token_id=%d error=%v", token.ID, deactivateErr)
+				}
+			}
+			logger.Sugar().Warnf("消息APNs推送失败: sender_user_id=%d target_user_id=%d conversation_id=%d token_id=%d error=%v", request.GetSenderUserId(), targetUserID, request.GetConversationId(), token.ID, sendErr)
+		}
+	}
+	return nil
 }
 
 func (s *Service) publishVoIPResult(ctx context.Context, request *pushpb.VoIPCallRequest, accepted bool, reason string) error {
@@ -198,6 +258,20 @@ func environmentOrUnknown(value *pushpb.RegisterVoIPToken) pushpb.PushEnvironmen
 }
 
 func environmentOrUnknownUnregister(value *pushpb.UnregisterVoIPToken) pushpb.PushEnvironment {
+	if value == nil {
+		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
+	}
+	return value.GetEnvironment()
+}
+
+func environmentOrUnknownAPNs(value *pushpb.RegisterAPNsToken) pushpb.PushEnvironment {
+	if value == nil {
+		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
+	}
+	return value.GetEnvironment()
+}
+
+func environmentOrUnknownUnregisterAPNs(value *pushpb.UnregisterAPNsToken) pushpb.PushEnvironment {
 	if value == nil {
 		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
 	}

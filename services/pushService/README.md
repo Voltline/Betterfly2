@@ -1,6 +1,6 @@
 # Push Service
 
-PushService 是 Betterfly2 的统一推送控制面。当前一期实现 iOS PushKit VoIP Push，用于在 App 被系统终止或没有活跃 WebSocket 时唤醒客户端并通过 CallKit 展示来电。
+PushService 是 Betterfly2 的统一推送控制面，支持 iOS PushKit VoIP Push 与普通 APNs 消息通知。两类 token 独立注册和存储，避免将普通 APNs device token 错用于 `.voip` topic。
 
 ## 数据流
 
@@ -20,6 +20,10 @@ offline incoming call
   -> app reconnects WebSocket and sends resume_call(call_id)
   -> callService returns SDP offer and ICE servers
 ```
+
+普通消息发送时，原始 DataForwarding Pod 会并行发布一条消息推送请求。PushService 使用应用 Bundle topic 向目标用户的所有普通 APNs token 发送 `alert` 通知；WebSocket 在线状态不会阻止推送，因此同一账号的其他离线设备仍能收到通知。客户端在前台时应通过 `UNUserNotificationCenterDelegate` 决定是否展示横幅。
+
+普通通知只包含 `sender_user_id`、`conversation_id`、`is_group`、`message_type` 和 `sent_at`，不包含消息正文。客户端被唤醒后继续通过现有消息同步接口获取完整内容；私聊通知会遵循接收方好友关系中的 `is_notify` 设置。
 
 APNs payload 只包含 `call_id`、`call_uuid`、`caller_user_id`、`call_type`、`has_video` 和过期时间，不包含 SDP。这样 payload 始终低于 Apple 对 VoIP Push 的 5 KB 限制，SDP 仍通过认证后的 Protobuf 链路传输。
 
@@ -60,7 +64,12 @@ APNS_PRIVATE_KEY_BASE64=<上一步的输出>
 - Debug/development entitlement 使用 `SANDBOX`。
 - TestFlight/App Store/ad-hoc production entitlement 使用 `PRODUCTION`。
 
-PushService 将两类 token 分开保存，并分别请求 `api.sandbox.push.apple.com` 和 `api.push.apple.com`。两种请求都使用 topic `com.Voltline.Betterfly2.voip`、`apns-push-type: voip` 和 `apns-priority: 10`。同一枚 `.p8` provider key 可用于两个 endpoint。
+客户端通过认证后的 `push_request` 注册：
+
+- `register_voip_token` / `unregister_voip_token`: PushKit token。
+- `register_apns_token` / `unregister_apns_token`: `didRegisterForRemoteNotificationsWithDeviceToken` 返回的普通 APNs token。
+
+PushService 分别请求 `api.sandbox.push.apple.com` 和 `api.push.apple.com`。VoIP 使用 topic `com.Voltline.Betterfly2.voip` 与 `apns-push-type: voip`；消息通知使用 topic `com.Voltline.Betterfly2` 与 `apns-push-type: alert`。两者优先级均为 10，同一枚 `.p8` provider key 可用于两个 endpoint。
 
 ## 健康检查
 
@@ -68,3 +77,19 @@ PushService 将两类 token 分开保存，并分别请求 `api.sandbox.push.app
 - `GET /ready`: PostgreSQL 可用并且 APNs 私钥配置有效。
 
 默认 HTTP 端口为 `8086`，只需内网开放。服务器必须能够访问 APNs `443/tcp`，也可以按网络策略使用 Apple 支持的 `2197/tcp`。
+
+## 内网调试控制台
+
+配置 `PUSH_ADMIN_TOKEN` 后访问 `http://hostname:8086/push/admin`。未配置时页面及全部管理 API 返回 `404`，不会默认暴露调试能力。
+
+控制台支持：
+
+- 按用户批量发送普通 APNs 通知，或按脱敏的 token 记录 ID 定向发送。
+- 自定义标题、正文和最多 2 KB 的字符串字典；调试字典位于 payload 的 `debug_data`。
+- 发送 sandbox/production 普通通知与 PushKit 通道测试。
+- 查询普通 APNs/VoIP token、环境和有效状态，完整 token 永不返回浏览器。
+- 持久化记录操作人、脱敏目标、APNs ID、成功数和失败原因。
+
+管理 API 使用 `Authorization: Bearer <PUSH_ADMIN_TOKEN>` 或 `X-Admin-Token`。页面将 token 仅保存到当前标签页的 `sessionStorage`。可通过 `X-Admin-Operator` 标记操作人。
+
+PushKit 调试请求只验证 APNs 与 PushKit 通道，不会创建 CallService session，因此不能替代完整通话测试。普通消息调试默认遵循私聊 `is_notify` 设置，页面可显式选择仅本次忽略。

@@ -27,10 +27,23 @@ message UnregisterVoIPToken {
   PushEnvironment environment = 2;
 }
 
+message RegisterAPNsToken {
+  string device_id = 1;
+  string token = 2;
+  PushEnvironment environment = 3;
+}
+
+message UnregisterAPNsToken {
+  string device_id = 1;
+  PushEnvironment environment = 2;
+}
+
 message ClientRequest {
   oneof payload {
     RegisterVoIPToken register_voip_token = 1;
     UnregisterVoIPToken unregister_voip_token = 2;
+    RegisterAPNsToken register_apns_token = 3;
+    UnregisterAPNsToken unregister_apns_token = 4;
   }
 }
 
@@ -61,10 +74,22 @@ message VoIPCallRequest {
   bool required = 7;
 }
 
+// MessagePushRequest is emitted once by the originating data forwarding pod.
+// Full message content remains in StorageService and is not sent to APNs.
+message MessagePushRequest {
+  repeated int64 target_user_ids = 1;
+  int64 sender_user_id = 2;
+  int64 conversation_id = 3;
+  bool is_group = 4;
+  string message_type = 5;
+  string sent_at = 6;
+}
+
 message RequestMessage {
   oneof payload {
     ClientCommand client_command = 1;
     VoIPCallRequest voip_call = 2;
+    MessagePushRequest message_push = 3;
   }
 }
 

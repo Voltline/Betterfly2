@@ -2,6 +2,7 @@ package push
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"Betterfly2/shared/db"
@@ -13,8 +14,79 @@ type GormStore struct {
 }
 
 func NewGormStore() *GormStore {
-	database := db.DB(&db.PushDeviceToken{})
+	database := db.DB(&db.PushDeviceToken{}, &db.PushDebugAudit{})
 	return &GormStore{db: database}
+}
+
+func (s *GormStore) FindTokens(ctx context.Context, filter TokenFilter) ([]db.PushDeviceToken, error) {
+	query := s.db.WithContext(ctx).Model(&db.PushDeviceToken{})
+	if filter.UserID > 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.DeviceID != "" {
+		query = query.Where("device_id ILIKE ?", "%"+filter.DeviceID+"%")
+	}
+	if filter.Environment != "" {
+		query = query.Where("environment = ?", filter.Environment)
+	}
+	if filter.PushType != "" {
+		query = query.Where("push_type = ?", filter.PushType)
+	}
+	if filter.ActiveOnly {
+		query = query.Where("is_active = ?", true)
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	var tokens []db.PushDeviceToken
+	err := query.Order("updated_at DESC").Limit(limit).Find(&tokens).Error
+	return tokens, err
+}
+
+func (s *GormStore) GetToken(ctx context.Context, id int64) (db.PushDeviceToken, error) {
+	var token db.PushDeviceToken
+	err := s.db.WithContext(ctx).First(&token, id).Error
+	return token, err
+}
+
+func (s *GormStore) CreateDebugAudit(ctx context.Context, audit *db.PushDebugAudit) error {
+	return s.db.WithContext(ctx).Create(audit).Error
+}
+
+func (s *GormStore) ListDebugAudits(ctx context.Context, limit int) ([]db.PushDebugAudit, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var audits []db.PushDebugAudit
+	err := s.db.WithContext(ctx).Order("id DESC").Limit(limit).Find(&audits).Error
+	return audits, err
+}
+
+func (s *GormStore) TokenSummary(ctx context.Context) (TokenSummary, error) {
+	var summary TokenSummary
+	queries := []struct {
+		field *int64
+		where string
+		value any
+	}{
+		{&summary.Total, "", nil},
+		{&summary.Active, "is_active = ?", true},
+		{&summary.APNs, "push_type = ?", PushTypeAPNs},
+		{&summary.VoIP, "push_type = ?", PushTypeVoIP},
+		{&summary.Sandbox, "environment = ?", "sandbox"},
+		{&summary.Production, "environment = ?", "production"},
+	}
+	for _, item := range queries {
+		query := s.db.WithContext(ctx).Model(&db.PushDeviceToken{})
+		if item.where != "" {
+			query = query.Where(item.where, item.value)
+		}
+		if err := query.Count(item.field).Error; err != nil {
+			return TokenSummary{}, err
+		}
+	}
+	return summary, nil
 }
 
 func (s *GormStore) Ping(ctx context.Context) error {
@@ -25,37 +97,55 @@ func (s *GormStore) Ping(ctx context.Context) error {
 	return sqlDB.PingContext(ctx)
 }
 
-func (s *GormStore) RegisterVoIPToken(ctx context.Context, userID int64, deviceID, token, environment, bundleID string) error {
+func (s *GormStore) RegisterToken(ctx context.Context, userID int64, deviceID, token, environment, pushType, bundleID string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where(
 			"(environment = ? AND push_type = ? AND token = ?) OR (user_id = ? AND device_id = ? AND environment = ? AND push_type = ?)",
-			environment, PushTypeVoIP, token, userID, deviceID, environment, PushTypeVoIP,
+			environment, pushType, token, userID, deviceID, environment, pushType,
 		).Delete(&db.PushDeviceToken{}).Error; err != nil {
 			return err
 		}
 		return tx.Create(&db.PushDeviceToken{
 			UserID: userID, DeviceID: deviceID, Token: token, Environment: environment,
-			PushType: PushTypeVoIP, BundleID: bundleID, IsActive: true,
+			PushType: pushType, BundleID: bundleID, IsActive: true,
 			CreatedAt: now, UpdatedAt: now,
 		}).Error
 	})
 }
 
-func (s *GormStore) UnregisterVoIPToken(ctx context.Context, userID int64, deviceID, environment string) (bool, error) {
+func (s *GormStore) UnregisterToken(ctx context.Context, userID int64, deviceID, environment, pushType string) (bool, error) {
 	result := s.db.WithContext(ctx).
-		Where("user_id = ? AND device_id = ? AND environment = ? AND push_type = ?", userID, deviceID, environment, PushTypeVoIP).
+		Where("user_id = ? AND device_id = ? AND environment = ? AND push_type = ?", userID, deviceID, environment, pushType).
 		Delete(&db.PushDeviceToken{})
 	return result.RowsAffected > 0, result.Error
 }
 
-func (s *GormStore) ListActiveVoIPTokens(ctx context.Context, userID int64) ([]db.PushDeviceToken, error) {
+func (s *GormStore) ListActiveTokens(ctx context.Context, userID int64, pushType string) ([]db.PushDeviceToken, error) {
 	var tokens []db.PushDeviceToken
 	err := s.db.WithContext(ctx).
-		Where("user_id = ? AND push_type = ? AND is_active = ?", userID, PushTypeVoIP, true).
+		Where("user_id = ? AND push_type = ? AND is_active = ?", userID, pushType, true).
 		Order("updated_at DESC").
 		Find(&tokens).Error
 	return tokens, err
+}
+
+func (s *GormStore) MessageNotificationsEnabled(ctx context.Context, targetUserID, senderUserID int64, isGroup bool) (bool, error) {
+	if isGroup {
+		return true, nil
+	}
+	var friend db.Friend
+	err := s.db.WithContext(ctx).
+		Select("is_notify").
+		Where("user_id = ? AND friend_id = ? AND is_delete = ?", targetUserID, senderUserID, false).
+		First(&friend).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return friend.IsNotify, nil
 }
 
 func (s *GormStore) DeactivateToken(ctx context.Context, id int64) error {

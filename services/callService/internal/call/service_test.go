@@ -268,6 +268,125 @@ func TestResumeCallReturnsPendingOfferAfterPushWake(t *testing.T) {
 	}
 }
 
+func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
+	store := newMemoryStore()
+	store.topics[1] = "df-a"
+	publisher := &memoryPublisher{}
+	service := NewService(store, publisher, testICE{}, time.Minute)
+	ctx := context.Background()
+
+	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatalf("initiate offline call: %v", err)
+	}
+	if countEvents(publisher, callpb.CallEventType_OUTGOING_CALL) != 1 || len(publisher.pushes) != 1 {
+		t.Fatalf("expected outgoing call and VoIP push: deliveries=%+v pushes=%+v", publisher.deliveries, publisher.pushes)
+	}
+	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
+	session, err := store.GetSession(ctx, callID)
+	if err != nil || session.State != StateRinging {
+		t.Fatalf("expected ringing session, session=%+v err=%v", session, err)
+	}
+
+	deliveryCount := len(publisher.deliveries)
+	ice := &callpb.InternalRequest{FromKafkaTopic: "df-a", UserId: 1, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_IceCandidate{IceCandidate: &callpb.SendIceCandidate{
+			CallId: callID, Candidate: &callpb.IceCandidate{Candidate: "candidate:early"},
+		}},
+	}}
+	if err := service.Handle(ctx, ice); err != nil {
+		t.Fatalf("early ICE should be temporarily tolerated: %v", err)
+	}
+	if len(publisher.deliveries) != deliveryCount || countEvents(publisher, callpb.CallEventType_CALL_ERROR) != 0 || countEvents(publisher, callpb.CallEventType_CALL_ENDED) != 0 {
+		t.Fatalf("early ICE generated a terminal/error event: %+v", publisher.deliveries)
+	}
+	session, _ = store.GetSession(ctx, callID)
+	if session.State != StateRinging {
+		t.Fatalf("early ICE changed session state: %s", session.State)
+	}
+
+	store.topics[2] = "df-b"
+	resume := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_ResumeCall{ResumeCall: &callpb.ResumeCall{CallId: callID}},
+	}}
+	if err := service.Handle(ctx, resume); err != nil {
+		t.Fatalf("resume call: %v", err)
+	}
+	incoming := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
+	if incoming.GetEventType() != callpb.CallEventType_INCOMING_CALL || incoming.GetSessionDescription().GetSdp() != "offer-sdp" {
+		t.Fatalf("unexpected resumed incoming call: %+v", incoming)
+	}
+	session, _ = store.GetSession(ctx, callID)
+	if session.State != StateRinging {
+		t.Fatalf("resume should keep session ringing, got %s", session.State)
+	}
+
+	accept := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
+			CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
+		}},
+	}}
+	if err := service.Handle(ctx, accept); err != nil {
+		t.Fatalf("accept resumed call: %v", err)
+	}
+	session, _ = store.GetSession(ctx, callID)
+	if session.State != StateActive {
+		t.Fatalf("expected active session, got %s", session.State)
+	}
+	accepted := findLastEventForUser(publisher, callpb.CallEventType_CALL_ACCEPTED, 1)
+	if accepted == nil || accepted.GetSessionDescription().GetSdp() != "answer-sdp" {
+		t.Fatalf("caller did not receive answer: %+v", accepted)
+	}
+
+	hangup := &callpb.InternalRequest{FromKafkaTopic: "df-a", UserId: 1, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_Hangup{Hangup: &callpb.HangupCall{CallId: callID}},
+	}}
+	if err := service.Handle(ctx, hangup); err != nil {
+		t.Fatalf("hangup call: %v", err)
+	}
+	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatalf("redial after hangup: %v", err)
+	}
+	last := publisher.deliveries[len(publisher.deliveries)-2].delivery.GetEvent()
+	if last.GetEventType() != callpb.CallEventType_OUTGOING_CALL || last.GetErrorCode() == callpb.CallErrorCode_USER_BUSY || last.GetCallId() == callID {
+		t.Fatalf("redial should create a new outgoing call: %+v", last)
+	}
+}
+
+func TestActiveICEToOfflinePeerStillReturnsCallError(t *testing.T) {
+	store := newMemoryStore()
+	store.topics[1] = "df-a"
+	store.topics[2] = "df-b"
+	publisher := &memoryPublisher{}
+	service := NewService(store, publisher, testICE{}, time.Minute)
+	ctx := context.Background()
+
+	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatal(err)
+	}
+	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
+	accept := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
+			CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
+		}},
+	}}
+	if err := service.Handle(ctx, accept); err != nil {
+		t.Fatal(err)
+	}
+	delete(store.topics, 2)
+	ice := &callpb.InternalRequest{FromKafkaTopic: "df-a", UserId: 1, Request: &callpb.ClientRequest{
+		Payload: &callpb.ClientRequest_IceCandidate{IceCandidate: &callpb.SendIceCandidate{
+			CallId: callID, Candidate: &callpb.IceCandidate{Candidate: "candidate:active"},
+		}},
+	}}
+	if err := service.Handle(ctx, ice); err != nil {
+		t.Fatal(err)
+	}
+	last := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
+	if last.GetEventType() != callpb.CallEventType_CALL_ERROR || last.GetErrorCode() != callpb.CallErrorCode_USER_OFFLINE {
+		t.Fatalf("active ICE offline error was incorrectly swallowed: %+v", last)
+	}
+}
+
 func TestSweepExpiredNotifiesBothUsers(t *testing.T) {
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
@@ -333,4 +452,24 @@ func initiateRequest(callerID, calleeID int64, topic string) *callpb.InternalReq
 			Offer:        &callpb.SessionDescription{Type: "offer", Sdp: "offer-sdp"},
 		}}},
 	}
+}
+
+func countEvents(publisher *memoryPublisher, eventType callpb.CallEventType) int {
+	count := 0
+	for _, delivery := range publisher.deliveries {
+		if delivery.delivery.GetEvent().GetEventType() == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+func findLastEventForUser(publisher *memoryPublisher, eventType callpb.CallEventType, userID int64) *callpb.CallEvent {
+	for index := len(publisher.deliveries) - 1; index >= 0; index-- {
+		delivery := publisher.deliveries[index].delivery
+		if delivery.GetTargetUserId() == userID && delivery.GetEvent().GetEventType() == eventType {
+			return delivery.GetEvent()
+		}
+	}
+	return nil
 }

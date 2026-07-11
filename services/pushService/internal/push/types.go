@@ -9,7 +9,17 @@ import (
 	"Betterfly2/shared/db"
 )
 
-const PushTypeVoIP = "voip"
+const (
+	PushTypeVoIP = "voip"
+	PushTypeAPNs = "apns"
+)
+
+type NotificationKind string
+
+const (
+	NotificationVoIP    NotificationKind = "voip"
+	NotificationMessage NotificationKind = "message"
+)
 
 var (
 	ErrInvalidRequest  = errors.New("invalid push request")
@@ -18,13 +28,23 @@ var (
 )
 
 type Notification struct {
-	Token        string
-	Environment  pushpb.PushEnvironment
-	CallID       string
-	CallerUserID int64
-	CalleeUserID int64
-	CallType     string
-	ExpiresAt    time.Time
+	Kind           NotificationKind
+	Token          string
+	Environment    pushpb.PushEnvironment
+	CallID         string
+	CallerUserID   int64
+	CalleeUserID   int64
+	CallType       string
+	ExpiresAt      time.Time
+	SenderUserID   int64
+	TargetUserID   int64
+	ConversationID int64
+	IsGroup        bool
+	MessageType    string
+	SentAt         time.Time
+	Title          string
+	Body           string
+	CustomData     map[string]any
 }
 
 type SendResult struct {
@@ -54,10 +74,34 @@ func (e *APNSError) Retryable() bool {
 
 type Store interface {
 	Ping(context.Context) error
-	RegisterVoIPToken(context.Context, int64, string, string, string, string) error
-	UnregisterVoIPToken(context.Context, int64, string, string) (bool, error)
-	ListActiveVoIPTokens(context.Context, int64) ([]db.PushDeviceToken, error)
+	RegisterToken(context.Context, int64, string, string, string, string, string) error
+	UnregisterToken(context.Context, int64, string, string, string) (bool, error)
+	ListActiveTokens(context.Context, int64, string) ([]db.PushDeviceToken, error)
+	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)
+	FindTokens(context.Context, TokenFilter) ([]db.PushDeviceToken, error)
+	GetToken(context.Context, int64) (db.PushDeviceToken, error)
+	CreateDebugAudit(context.Context, *db.PushDebugAudit) error
+	ListDebugAudits(context.Context, int) ([]db.PushDebugAudit, error)
+	TokenSummary(context.Context) (TokenSummary, error)
 	DeactivateToken(context.Context, int64) error
+}
+
+type TokenFilter struct {
+	UserID      int64
+	DeviceID    string
+	Environment string
+	PushType    string
+	ActiveOnly  bool
+	Limit       int
+}
+
+type TokenSummary struct {
+	Total      int64 `json:"total"`
+	Active     int64 `json:"active"`
+	APNs       int64 `json:"apns"`
+	VoIP       int64 `json:"voip"`
+	Sandbox    int64 `json:"sandbox"`
+	Production int64 `json:"production"`
 }
 
 type Sender interface {

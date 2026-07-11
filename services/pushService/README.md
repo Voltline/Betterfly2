@@ -25,7 +25,7 @@ offline incoming call
 
 普通通知会使用数据库中的发送者或群聊资料生成展示内容：私聊标题为发送者名称，群聊标题为群名称，正文为安全的消息预览。文本与链接最多携带 180 个字符；图片、GIF、语音和视频使用类型文案；文件只显示原始文件名，不会把对象存储哈希发送给 APNs。私聊通知仍遵循接收方好友关系中的 `is_notify` 设置。
 
-payload 设置 `mutable-content: 1` 与 `category: MESSAGE`，并携带 `sender_name`、`group_name`、`avatar`、`avatar_is_group` 等 Communication Notification 元数据。`avatar` 保留数据库中的头像标识；当前使用文件哈希时，Notification Service Extension 需要通过存储服务解析并下载图片。iOS 系统不会仅凭 APNs payload 替换通知左侧的 App 图标；客户端需要 Notification Service Extension，并通过 `INSendMessageIntent` 更新通知内容后，才能显示发送者或群聊头像。
+payload 设置 `mutable-content: 1` 与 `category: MESSAGE`。身份字段被明确拆分为 `sender_name/sender_avatar`（真实发送者）和 `conversation_name/conversation_avatar`（通知展示主体）；群聊的展示主体是群，私聊的展示主体是发送者。旧的 `group_name/avatar/avatar_is_group` 继续保留兼容。头像字段保存数据库中的头像标识，使用文件哈希时由 Notification Service Extension 通过存储服务解析并下载。
 
 APNs payload 只包含 `call_id`、`call_uuid`、`caller_user_id`、`call_type`、`has_video` 和过期时间，不包含 SDP。这样 payload 始终低于 Apple 对 VoIP Push 的 5 KB 限制，SDP 仍通过认证后的 Protobuf 链路传输。
 

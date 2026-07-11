@@ -4,6 +4,7 @@ import (
 	"Betterfly2/shared/db"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -296,6 +297,40 @@ func TestResolveRustFSExternalEndpoint_UsesExplicitConfigWhenPresent(t *testing.
 
 	if got := resolveRustFSExternalEndpoint(req); got != "https://files.example.com" {
 		t.Fatalf("unexpected endpoint: %s", got)
+	}
+}
+
+func TestResolveRustFSExternalEndpoint_FromRequestAndProxyHeaders(t *testing.T) {
+	tests := []struct {
+		name         string
+		host         string
+		proto        string
+		tls          bool
+		externalHost string
+		externalPort string
+		want         string
+	}{
+		{name: "forwarded HTTPS", host: "chat.example.com:8080", proto: "https, http", want: "https://chat.example.com:9000"},
+		{name: "request TLS", host: "files.example.com", tls: true, want: "https://files.example.com:9000"},
+		{name: "IPv6 request", host: "[2001:db8::1]:8080", want: "http://[2001:db8::1]:9000"},
+		{name: "configured host and port", host: "ignored.example.com", externalHost: "cdn.example.com", externalPort: "9443", want: "http://cdn.example.com:9443"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RUSTFS_EXTERNAL_ENDPOINT_URL", "")
+			t.Setenv("RUSTFS_EXTERNAL_SCHEME", "")
+			t.Setenv("RUSTFS_EXTERNAL_HOST", tt.externalHost)
+			t.Setenv("RUSTFS_EXTERNAL_PORT", tt.externalPort)
+			req := httptest.NewRequest(http.MethodGet, "/storage_service/upload", nil)
+			req.Host = tt.host
+			req.Header.Set("X-Forwarded-Proto", tt.proto)
+			if tt.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			if got := resolveRustFSExternalEndpoint(req); got != tt.want {
+				t.Fatalf("endpoint=%q want %q", got, tt.want)
+			}
+		})
 	}
 }
 

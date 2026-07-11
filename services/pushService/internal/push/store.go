@@ -25,7 +25,10 @@ func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conve
 	if senderName == "" {
 		senderName = "用户 " + strconv.FormatInt(senderUserID, 10)
 	}
-	presentation := MessagePresentation{Title: senderName, SenderName: senderName, Avatar: sender.Avatar}
+	presentation := MessagePresentation{
+		Title: senderName, SenderName: senderName, SenderAvatar: sender.Avatar,
+		Avatar: sender.Avatar, ConversationName: senderName, ConversationAvatar: sender.Avatar,
+	}
 	if !isGroup {
 		return presentation, nil
 	}
@@ -45,6 +48,8 @@ func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conve
 	presentation.GroupName = groupName
 	presentation.Avatar = group.Avatar
 	presentation.AvatarIsGroup = true
+	presentation.ConversationName = groupName
+	presentation.ConversationAvatar = group.Avatar
 	return presentation, nil
 }
 

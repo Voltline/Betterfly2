@@ -601,55 +601,6 @@ func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payl
 		}, nil
 	}
 
-	group, err := db.GetGroupByID(payload.GetGroupId())
-	if err != nil {
-		return nil, err
-	}
-	if group == nil {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_RECORD_NOT_EXIST,
-			TargetUserId: req.TargetUserId,
-			Payload: &friend.ResponseMessage_GroupOperationRsp{
-				GroupOperationRsp: &friend.GroupOperationRsp{
-					Operation: "remove_group_member",
-					GroupId:   payload.GetGroupId(),
-					UserId:    payload.GetUserId(),
-				},
-			},
-		}, nil
-	}
-	if group.OwnerUserID == payload.GetUserId() {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_INVALID_ARGUMENT,
-			TargetUserId: req.TargetUserId,
-			Payload: &friend.ResponseMessage_GroupOperationRsp{
-				GroupOperationRsp: &friend.GroupOperationRsp{
-					Operation: "remove_group_member",
-					GroupId:   payload.GetGroupId(),
-					UserId:    payload.GetUserId(),
-				},
-			},
-		}, nil
-	}
-
-	isMember, err := db.IsActiveGroupMember(payload.GetGroupId(), payload.GetRequestUserId())
-	if err != nil {
-		return nil, err
-	}
-	if !isMember {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_RECORD_NOT_EXIST,
-			TargetUserId: req.TargetUserId,
-			Payload: &friend.ResponseMessage_GroupOperationRsp{
-				GroupOperationRsp: &friend.GroupOperationRsp{
-					Operation: "remove_group_member",
-					GroupId:   payload.GetGroupId(),
-					UserId:    payload.GetUserId(),
-				},
-			},
-		}, nil
-	}
-
 	groupExists, removed, updateTime, err := db.RemoveUserFromGroup(payload.GetGroupId(), payload.GetUserId())
 	if err != nil {
 		return nil, err

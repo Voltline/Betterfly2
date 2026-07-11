@@ -194,8 +194,9 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 				ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
 				MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
 				ExpiresAt: sentAt.Add(24 * time.Hour),
-				Title:     presentation.Title, Body: body, SenderName: presentation.SenderName,
+				Title:     presentation.Title, Body: body, SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar,
 				GroupName: presentation.GroupName, Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
+				ConversationName: presentation.ConversationName, ConversationAvatar: presentation.ConversationAvatar,
 			})
 			if sendErr == nil {
 				continue

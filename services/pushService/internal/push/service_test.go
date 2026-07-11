@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,9 +24,9 @@ func (s *memoryStore) MessagePresentation(_ context.Context, senderUserID, conve
 		return s.presentation, nil
 	}
 	if isGroup {
-		return MessagePresentation{Title: "测试群", SenderName: "测试用户", GroupName: "测试群", Avatar: "group-avatar", AvatarIsGroup: true}, nil
+		return MessagePresentation{Title: "测试群", SenderName: "测试用户", SenderAvatar: "user-avatar", GroupName: "测试群", Avatar: "group-avatar", AvatarIsGroup: true, ConversationName: "测试群", ConversationAvatar: "group-avatar"}, nil
 	}
-	return MessagePresentation{Title: "测试用户", SenderName: "测试用户", Avatar: "user-avatar"}, nil
+	return MessagePresentation{Title: "测试用户", SenderName: "测试用户", SenderAvatar: "user-avatar", Avatar: "user-avatar", ConversationName: "测试用户", ConversationAvatar: "user-avatar"}, nil
 }
 
 func (s *memoryStore) FindTokens(_ context.Context, filter TokenFilter) ([]db.PushDeviceToken, error) {
@@ -267,7 +268,7 @@ func TestDirectMessagePushHonorsNotificationPreference(t *testing.T) {
 func TestBusinessGroupMessagePushUsesGroupPresentationAndPreview(t *testing.T) {
 	store := &memoryStore{
 		tokens:       []db.PushDeviceToken{{ID: 1, UserID: 2, Token: "001122", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true}},
-		presentation: MessagePresentation{Title: "开发群", SenderName: "Alice", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true},
+		presentation: MessagePresentation{Title: "开发群", SenderName: "Alice", SenderAvatar: "alice-avatar-hash", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true, ConversationName: "开发群", ConversationAvatar: "group-avatar-hash"},
 	}
 	sender := &memorySender{}
 	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
@@ -282,7 +283,7 @@ func TestBusinessGroupMessagePushUsesGroupPresentationAndPreview(t *testing.T) {
 		t.Fatalf("expected one push, got %d", len(sender.sent))
 	}
 	notification := sender.sent[0].notification
-	if notification.Title != "开发群" || notification.Body != "Alice：今晚八点开会" || notification.Avatar != "group-avatar-hash" || !notification.AvatarIsGroup {
+	if notification.Title != "开发群" || notification.Body != "Alice：今晚八点开会" || notification.SenderAvatar != "alice-avatar-hash" || notification.ConversationName != "开发群" || notification.ConversationAvatar != "group-avatar-hash" || !notification.AvatarIsGroup {
 		t.Fatalf("unexpected communication notification: %+v", notification)
 	}
 }
@@ -290,7 +291,7 @@ func TestBusinessGroupMessagePushUsesGroupPresentationAndPreview(t *testing.T) {
 func TestBusinessDirectMessagePushUsesSenderPresentation(t *testing.T) {
 	store := &memoryStore{
 		tokens:       []db.PushDeviceToken{{ID: 1, UserID: 2, Token: "001122", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true}},
-		presentation: MessagePresentation{Title: "Alice", SenderName: "Alice", Avatar: "alice-avatar-hash"},
+		presentation: MessagePresentation{Title: "Alice", SenderName: "Alice", SenderAvatar: "alice-avatar-hash", Avatar: "alice-avatar-hash", ConversationName: "Alice", ConversationAvatar: "alice-avatar-hash"},
 	}
 	sender := &memorySender{}
 	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
@@ -302,7 +303,7 @@ func TestBusinessDirectMessagePushUsesSenderPresentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	notification := sender.sent[0].notification
-	if notification.Title != "Alice" || notification.Body != "你好" || notification.Avatar != "alice-avatar-hash" || notification.AvatarIsGroup {
+	if notification.Title != "Alice" || notification.Body != "你好" || notification.SenderAvatar != "alice-avatar-hash" || notification.ConversationName != "Alice" || notification.ConversationAvatar != "alice-avatar-hash" || notification.AvatarIsGroup {
 		t.Fatalf("unexpected direct communication notification: %+v", notification)
 	}
 }
@@ -342,5 +343,38 @@ func TestAdminVoIPCanTargetRegisteredToken(t *testing.T) {
 	}
 	if report.Accepted != 1 || len(sender.sent) != 1 || sender.sent[0].notification.CallID == "" || sender.sent[0].notification.Kind != NotificationVoIP {
 		t.Fatalf("unexpected VoIP debug push: report=%+v sent=%+v", report, sender.sent)
+	}
+}
+
+func TestDefaultMessagePreviewCoversSupportedMediaTypes(t *testing.T) {
+	tests := map[string]string{
+		"image":  "发送了一张图片",
+		"gif":    "发送了一个 GIF",
+		"file":   "发送了一个文件",
+		"audio":  "发送了一条语音",
+		"video":  "发送了一段视频",
+		"link":   "发来一条消息",
+		" text ": "发来一条消息",
+	}
+	for messageType, want := range tests {
+		if got := defaultMessagePreview(messageType); got != want {
+			t.Errorf("defaultMessagePreview(%q)=%q want %q", messageType, got, want)
+		}
+	}
+}
+
+func TestPushValidationHelpers(t *testing.T) {
+	valid := "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+	if !validToken(valid) || validToken("abc") || validToken(strings.Repeat("z", 64)) {
+		t.Fatal("token validation returned an unexpected result")
+	}
+	if !validDeviceID("iphone") || validDeviceID(" ") || validDeviceID(strings.Repeat("x", 129)) {
+		t.Fatal("device ID validation returned an unexpected result")
+	}
+	if !validEnvironment(pushpb.PushEnvironment_SANDBOX) || !validEnvironment(pushpb.PushEnvironment_PRODUCTION) || validEnvironment(pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED) {
+		t.Fatal("environment validation returned an unexpected result")
+	}
+	if parseEnvironment("PRODUCTION") != pushpb.PushEnvironment_PRODUCTION || parseEnvironment("unknown") != pushpb.PushEnvironment_SANDBOX {
+		t.Fatal("environment parsing returned an unexpected result")
 	}
 }

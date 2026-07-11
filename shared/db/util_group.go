@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type GroupMemberContact struct {
@@ -179,19 +180,78 @@ func GetJoinedGroups(userID int64) ([]JoinedGroupContact, error) {
 
 func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
 	now := utils.NowTime()
-	group, err := GetGroupByID(groupID)
-	if err != nil {
-		return false, false, "", err
-	}
-	if group == nil {
-		return false, false, "", nil
-	}
+	groupExists := false
+	removed := false
 
-	result := DB().Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{})
-	if result.Error != nil {
-		return true, false, "", result.Error
+	err := DB().Transaction(func(tx *gorm.DB) error {
+		var group Group
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND is_delete = ?", groupID, false).
+			First(&group).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		groupExists = true
+
+		var member GroupMember
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND user_id = ?", groupID, userID).
+			First(&member).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		if group.OwnerUserID == userID {
+			var successor GroupMember
+			err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("group_id = ? AND user_id <> ?", groupID, userID).
+				Order("update_time ASC").
+				Order("user_id ASC").
+				First(&successor).Error
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				if err := tx.Model(&Group{}).
+					Where("group_id = ? AND is_delete = ?", groupID, false).
+					Updates(map[string]interface{}{"is_delete": true, "update_time": now}).Error; err != nil {
+					return err
+				}
+			case err != nil:
+				return err
+			default:
+				if err := tx.Model(&Group{}).
+					Where("group_id = ? AND is_delete = ?", groupID, false).
+					Updates(map[string]interface{}{"owner_user_id": successor.UserID, "update_time": now}).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&GroupMember{}).
+					Where("group_id = ? AND user_id = ?", groupID, successor.UserID).
+					Updates(map[string]interface{}{"role": "owner", "update_time": now}).Error; err != nil {
+					return err
+				}
+			}
+		} else if err := tx.Model(&Group{}).
+			Where("group_id = ? AND is_delete = ?", groupID, false).
+			Update("update_time", now).Error; err != nil {
+			return err
+		}
+
+		result := tx.Where("group_id = ? AND user_id = ?", groupID, userID).Delete(&GroupMember{})
+		if result.Error != nil {
+			return result.Error
+		}
+		removed = result.RowsAffected > 0
+		return nil
+	})
+	if err != nil {
+		return groupExists, false, "", err
 	}
-	return true, result.RowsAffected > 0, now, nil
+	return groupExists, removed, now, nil
 }
 
 func UpdateGroupAvatar(groupID int64, avatar string) (bool, string, error) {

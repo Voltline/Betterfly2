@@ -426,7 +426,7 @@ func normalizeCreateExperiment(req *CreateExperimentRequest) error {
 	}
 	req.Status = normalizeStatus(req.Status)
 	if req.Status == "" {
-		req.Status = StatusDraft
+		return errors.New("invalid status")
 	}
 	if req.Status == StatusRolledOut {
 		return errors.New("rolled_out status requires push_full group")
@@ -443,6 +443,8 @@ func normalizeCreateExperiment(req *CreateExperimentRequest) error {
 	}
 	if req.EndTime == "" {
 		req.EndTime = start.Add(time.Duration(req.DurationSeconds) * time.Second).UTC().Format(time.RFC3339)
+	} else if _, err := time.Parse(time.RFC3339, req.EndTime); err != nil {
+		return fmt.Errorf("invalid end_time: %w", err)
 	}
 	if req.Salt == "" {
 		req.Salt = req.ExperimentKey

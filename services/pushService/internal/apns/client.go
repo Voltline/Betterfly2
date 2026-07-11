@@ -308,9 +308,12 @@ func marshalMessagePayload(notification pushservice.Notification) ([]byte, error
 		"message_type":               strings.TrimSpace(notification.MessageType),
 		"sent_at":                    notification.SentAt.UTC().Format(time.RFC3339Nano),
 		"sender_name":                strings.TrimSpace(notification.SenderName),
+		"sender_avatar":              strings.TrimSpace(notification.SenderAvatar),
 		"group_name":                 strings.TrimSpace(notification.GroupName),
 		"avatar":                     strings.TrimSpace(notification.Avatar),
 		"avatar_is_group":            notification.AvatarIsGroup,
+		"conversation_name":          strings.TrimSpace(notification.ConversationName),
+		"conversation_avatar":        strings.TrimSpace(notification.ConversationAvatar),
 		"communication_notification": true,
 	}
 	if len(notification.CustomData) > 0 {

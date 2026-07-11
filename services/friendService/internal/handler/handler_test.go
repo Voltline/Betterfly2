@@ -141,3 +141,171 @@ func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
 		t.Fatalf("返回的群列表顺序或内容不符合预期: %+v", groupList.GetGroups())
 	}
 }
+
+func TestHandleRemoveGroupMember_LastOwnerLeavesAndClosesGroup(t *testing.T) {
+	mock := useMockDB(t)
+
+	handler := &FriendHandler{}
+	req := removeGroupMemberRequest(1001, 3001)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "groups" WHERE group_id = \$1 AND is_delete = \$2 ORDER BY "groups"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), false, 1).
+		WillReturnRows(groupRows().AddRow(3001, "solo", "", 1001, false, "2026-07-11T01:00:00Z"))
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), int64(1001), 1).
+		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), int64(1001), 1).
+		WillReturnRows(groupMemberRows())
+	mock.ExpectExec(`UPDATE "groups" SET "is_delete"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND is_delete = \$4`).
+		WithArgs(true, sqlmock.AnyArg(), int64(3001), false).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
+		WithArgs(int64(3001), int64(1001)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := handler.handleRemoveGroupMember(req, req.GetRemoveGroupMember())
+	if err != nil {
+		t.Fatalf("handleRemoveGroupMember 返回错误: %v", err)
+	}
+	if resp.GetResult() != friend.FriendResult_FRIEND_OK {
+		t.Fatalf("期望最后一名群主可以退出，实际结果为 %v", resp.GetResult())
+	}
+}
+
+func TestHandleRemoveGroupMember_OwnerTransfersBeforeLeaving(t *testing.T) {
+	mock := useMockDB(t)
+
+	handler := &FriendHandler{}
+	req := removeGroupMemberRequest(1001, 3001)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "groups" WHERE group_id = \$1 AND is_delete = \$2 ORDER BY "groups"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), false, 1).
+		WillReturnRows(groupRows().AddRow(3001, "team", "", 1001, false, "2026-07-11T01:00:00Z"))
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), int64(1001), 1).
+		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+		WithArgs(int64(3001), int64(1001), 1).
+		WillReturnRows(groupMemberRows().AddRow(3001, 1002, "member", "2026-07-11T02:00:00Z"))
+	mock.ExpectExec(`UPDATE "groups" SET "owner_user_id"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND is_delete = \$4`).
+		WithArgs(int64(1002), sqlmock.AnyArg(), int64(3001), false).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "group_members" SET "role"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND user_id = \$4`).
+		WithArgs("owner", sqlmock.AnyArg(), int64(3001), int64(1002)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
+		WithArgs(int64(3001), int64(1001)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := handler.handleRemoveGroupMember(req, req.GetRemoveGroupMember())
+	if err != nil {
+		t.Fatalf("handleRemoveGroupMember 返回错误: %v", err)
+	}
+	if resp.GetResult() != friend.FriendResult_FRIEND_OK {
+		t.Fatalf("期望群主转交后可以退出，实际结果为 %v", resp.GetResult())
+	}
+}
+
+func removeGroupMemberRequest(userID, groupID int64) *friend.RequestMessage {
+	return &friend.RequestMessage{
+		TargetUserId: userID,
+		Payload: &friend.RequestMessage_RemoveGroupMember{
+			RemoveGroupMember: &friend.RemoveGroupMember{
+				RequestUserId: userID,
+				GroupId:       groupID,
+				UserId:        userID,
+			},
+		},
+	}
+}
+
+func groupRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"group_id", "name", "avatar", "owner_user_id", "is_delete", "update_time"})
+}
+
+func groupMemberRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"group_id", "user_id", "role", "update_time"})
+}
+
+func TestFriendHandlersRejectInvalidArgumentsWithoutDatabaseAccess(t *testing.T) {
+	handler := &FriendHandler{}
+	req := &friend.RequestMessage{TargetUserId: 1001}
+	tests := []struct {
+		name string
+		call func() (*friend.ResponseMessage, error)
+	}{
+		{name: "query friend list", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleQueryFriendList(req, &friend.QueryFriendList{})
+		}},
+		{name: "remove self as friend", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleRemoveDirectFriend(req, &friend.RemoveDirectFriend{UserId: 1, FriendId: 1})
+		}},
+		{name: "update alias missing friend", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleUpdateFriendAlias(req, &friend.UpdateFriendAlias{UserId: 1})
+		}},
+		{name: "update notify missing user", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleUpdateFriendNotify(req, &friend.UpdateFriendNotify{FriendId: 2})
+		}},
+		{name: "add self as friend", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleAddDirectFriend(req, &friend.AddDirectFriend{UserId: 1, FriendId: 1})
+		}},
+		{name: "create unnamed group", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleCreateGroup(req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2})
+		}},
+		{name: "add invalid group member", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleAddGroupMember(req, &friend.AddGroupMember{UserId: 1})
+		}},
+		{name: "empty group avatar", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleUpdateGroupAvatar(req, &friend.UpdateGroupAvatar{RequestUserId: 1, GroupId: 2})
+		}},
+		{name: "query invalid group members", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleQueryGroupMembers(req, &friend.QueryGroupMembers{RequestUserId: 1})
+		}},
+		{name: "query joined groups without user", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleQueryJoinedGroups(req, &friend.QueryJoinedGroups{})
+		}},
+		{name: "remove a different user", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleRemoveGroupMember(req, &friend.RemoveGroupMember{RequestUserId: 1, GroupId: 2, UserId: 3})
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := tt.call()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.GetResult() != friend.FriendResult_INVALID_ARGUMENT {
+				t.Fatalf("expected INVALID_ARGUMENT, got %v", resp.GetResult())
+			}
+		})
+	}
+}
+
+func TestHandleQueryFriendListMapsDatabaseContacts(t *testing.T) {
+	mock := useMockDB(t)
+	mock.ExpectQuery(`SELECT friends\.friend_id AS user_id, users\.account, users\.name, users\.avatar, friends\.alias, friends\.is_notify, friends\.update_time FROM "friends" JOIN users ON users\.id = friends\.friend_id WHERE friends\.user_id = \$1 AND friends\.is_delete = \$2 ORDER BY friends\.update_time DESC`).
+		WithArgs(int64(1001), false).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "account", "name", "avatar", "alias", "is_notify", "update_time"}).
+			AddRow(1002, "alice", "Alice", "avatar-hash", "同学", true, "2026-07-11T12:00:00Z"))
+
+	handler := &FriendHandler{}
+	req := &friend.RequestMessage{TargetUserId: 1001}
+	resp, err := handler.handleQueryFriendList(req, &friend.QueryFriendList{UserId: 1001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contacts := resp.GetFriendListRsp().GetContacts()
+	if resp.GetResult() != friend.FriendResult_FRIEND_OK || len(contacts) != 1 {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	contact := contacts[0]
+	if contact.GetUserId() != 1002 || contact.GetAccount() != "alice" || contact.GetAlias() != "同学" || !contact.GetIsNotify() {
+		t.Fatalf("contact mapping mismatch: %+v", contact)
+	}
+}

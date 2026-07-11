@@ -28,27 +28,30 @@ var (
 )
 
 type Notification struct {
-	Kind           NotificationKind
-	Token          string
-	Environment    pushpb.PushEnvironment
-	CallID         string
-	CallerUserID   int64
-	CalleeUserID   int64
-	CallType       string
-	ExpiresAt      time.Time
-	SenderUserID   int64
-	TargetUserID   int64
-	ConversationID int64
-	IsGroup        bool
-	MessageType    string
-	SentAt         time.Time
-	Title          string
-	Body           string
-	CustomData     map[string]any
-	SenderName     string
-	GroupName      string
-	Avatar         string
-	AvatarIsGroup  bool
+	Kind               NotificationKind
+	Token              string
+	Environment        pushpb.PushEnvironment
+	CallID             string
+	CallerUserID       int64
+	CalleeUserID       int64
+	CallType           string
+	ExpiresAt          time.Time
+	SenderUserID       int64
+	TargetUserID       int64
+	ConversationID     int64
+	IsGroup            bool
+	MessageType        string
+	SentAt             time.Time
+	Title              string
+	Body               string
+	CustomData         map[string]any
+	SenderName         string
+	SenderAvatar       string
+	GroupName          string
+	Avatar             string
+	AvatarIsGroup      bool
+	ConversationName   string
+	ConversationAvatar string
 }
 
 type SendResult struct {
@@ -110,11 +113,14 @@ type TokenSummary struct {
 }
 
 type MessagePresentation struct {
-	Title         string
-	SenderName    string
-	GroupName     string
-	Avatar        string
-	AvatarIsGroup bool
+	Title              string
+	SenderName         string
+	SenderAvatar       string
+	GroupName          string
+	Avatar             string
+	AvatarIsGroup      bool
+	ConversationName   string
+	ConversationAvatar string
 }
 
 type Sender interface {

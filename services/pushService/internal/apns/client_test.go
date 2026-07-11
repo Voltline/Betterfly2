@@ -88,8 +88,11 @@ func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
 		if aps["thread-id"] != "group:88" || aps["content-available"] != float64(1) || aps["mutable-content"] != float64(1) || aps["category"] != "MESSAGE" {
 			t.Errorf("unexpected aps payload: %+v", aps)
 		}
-		if payload["sender_name"] != "Alice" || payload["group_name"] != "开发群" || payload["avatar"] != "group-avatar-hash" || payload["avatar_is_group"] != true {
+		if payload["sender_name"] != "Alice" || payload["sender_avatar"] != "alice-avatar-hash" || payload["group_name"] != "开发群" || payload["avatar"] != "group-avatar-hash" || payload["avatar_is_group"] != true || payload["conversation_name"] != "开发群" || payload["conversation_avatar"] != "group-avatar-hash" {
 			t.Errorf("communication metadata missing: %+v", payload)
+		}
+		if payload["communication_notification"] != true {
+			t.Errorf("group message must remain a communication notification: %+v", payload)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -106,7 +109,8 @@ func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
 		SenderUserID: 1, TargetUserID: 2, ConversationID: 88, IsGroup: true,
 		MessageType: "image", SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
 		Title: "调试标题", Body: "调试正文", CustomData: map[string]any{"scenario": "smoke"},
-		SenderName: "Alice", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true,
+		SenderName: "Alice", SenderAvatar: "alice-avatar-hash", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true,
+		ConversationName: "开发群", ConversationAvatar: "group-avatar-hash",
 	})
 	if err != nil {
 		t.Fatal(err)

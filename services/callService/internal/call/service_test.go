@@ -2,6 +2,8 @@ package call
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -472,4 +474,70 @@ func findLastEventForUser(publisher *memoryPublisher, eventType callpb.CallEvent
 		}
 	}
 	return nil
+}
+
+func TestCallDomainHelpers(t *testing.T) {
+	session := Session{CallerUserID: 1, CalleeUserID: 2}
+	if peer, err := session.Peer(1); err != nil || peer != 2 {
+		t.Fatalf("caller peer mismatch: peer=%d err=%v", peer, err)
+	}
+	if peer, err := session.Peer(2); err != nil || peer != 1 {
+		t.Fatalf("callee peer mismatch: peer=%d err=%v", peer, err)
+	}
+	if _, err := session.Peer(3); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected non-participant rejection, got %v", err)
+	}
+
+	if !validDescription(&callpb.SessionDescription{Type: " OFFER ", Sdp: "sdp"}, "offer") {
+		t.Fatal("expected case-insensitive trimmed offer to be valid")
+	}
+	invalidDescriptions := []*callpb.SessionDescription{
+		nil,
+		{Type: "answer", Sdp: "sdp"},
+		{Type: "offer", Sdp: " "},
+	}
+	for _, description := range invalidDescriptions {
+		if validDescription(description, "offer") {
+			t.Fatalf("expected invalid description: %+v", description)
+		}
+	}
+
+	if got := splitCSV(" stun:a, ,turn:b "); !reflect.DeepEqual(got, []string{"stun:a", "turn:b"}) {
+		t.Fatalf("unexpected CSV parsing: %#v", got)
+	}
+}
+
+func TestCallErrorAndStateMappings(t *testing.T) {
+	errorTests := []struct {
+		err  error
+		want callpb.CallErrorCode
+	}{
+		{ErrInvalidInput, callpb.CallErrorCode_INVALID_ARGUMENT},
+		{ErrUserOffline, callpb.CallErrorCode_USER_OFFLINE},
+		{ErrUserBusy, callpb.CallErrorCode_USER_BUSY},
+		{ErrCallNotFound, callpb.CallErrorCode_CALL_NOT_FOUND},
+		{ErrInvalidState, callpb.CallErrorCode_INVALID_STATE},
+		{ErrForbidden, callpb.CallErrorCode_FORBIDDEN},
+		{errors.New("database unavailable"), callpb.CallErrorCode_INTERNAL_ERROR},
+	}
+	for _, tt := range errorTests {
+		if got := errorCode(tt.err); got != tt.want {
+			t.Errorf("errorCode(%v)=%v want %v", tt.err, got, tt.want)
+		}
+	}
+
+	stateTests := map[string]callpb.CallState{
+		StateRinging: callpb.CallState_RINGING,
+		StateActive:  callpb.CallState_ACTIVE,
+		StateEnded:   callpb.CallState_ENDED,
+		"unknown":    callpb.CallState_CALL_STATE_UNSPECIFIED,
+	}
+	for state, want := range stateTests {
+		if got := stateToProto(state); got != want {
+			t.Errorf("stateToProto(%q)=%v want %v", state, got, want)
+		}
+	}
+	if callTypeName(callpb.CallType_VIDEO) != "video" || callTypeName(callpb.CallType_AUDIO) != "audio" {
+		t.Fatal("call type names are inconsistent")
+	}
 }

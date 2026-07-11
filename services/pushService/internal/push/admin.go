@@ -155,8 +155,9 @@ func (s *Service) AdminSendMessage(ctx context.Context, request AdminMessageRequ
 			ConversationID: request.ConversationID, IsGroup: request.IsGroup,
 			MessageType: strings.TrimSpace(request.MessageType), SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
 			Title: title, Body: body, CustomData: request.CustomData,
-			SenderName: presentation.SenderName, GroupName: presentation.GroupName,
+			SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar, GroupName: presentation.GroupName,
 			Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
+			ConversationName: presentation.ConversationName, ConversationAvatar: presentation.ConversationAvatar,
 		}
 	})
 	report.Skipped = skipped

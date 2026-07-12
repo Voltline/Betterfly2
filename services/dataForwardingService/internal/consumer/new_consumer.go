@@ -250,7 +250,7 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 	case friend.FriendResult_FRIEND_OK:
 		switch payload := friendResp.Payload.(type) {
 		case *friend.ResponseMessage_FriendListRsp:
-			dfResp = buildContactListResponse(payload.FriendListRsp)
+			dfResp = buildContactListResponse(payload.FriendListRsp, friendResp.GetTargetUserId())
 		case *friend.ResponseMessage_FriendOperationRsp:
 			dfResp = buildFriendOperationResponse(payload.FriendOperationRsp, "操作成功")
 		case *friend.ResponseMessage_GroupInfoRsp:
@@ -336,7 +336,7 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		}
 	default:
 		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendListRsp); ok {
-			dfResp = buildContactListResponse(payload.FriendListRsp)
+			dfResp = buildContactListResponse(payload.FriendListRsp, friendResp.GetTargetUserId())
 			break
 		}
 		if payload, ok := friendResp.Payload.(*friend.ResponseMessage_FriendOperationRsp); ok {
@@ -437,7 +437,7 @@ func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.Respons
 	}
 }
 
-func buildContactListResponse(friendList *friend.FriendListRsp) *pb.ResponseMessage {
+func buildContactListResponse(friendList *friend.FriendListRsp, targetUserID int64) *pb.ResponseMessage {
 	var contacts []*pb.ContactInfo
 	for _, contact := range friendList.GetContacts() {
 		contacts = append(contacts, &pb.ContactInfo{
@@ -450,6 +450,7 @@ func buildContactListResponse(friendList *friend.FriendListRsp) *pb.ResponseMess
 			UpdateTime: contact.GetUpdateTime(),
 		})
 	}
+	contacts = handlers.DecorateMonitorContacts(targetUserID, contacts)
 	return &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_ContactListRsp{
 			ContactListRsp: &pb.ContactListRsp{

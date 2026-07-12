@@ -26,3 +26,11 @@ data:
   APNS_KEY_ID: C6D5695Q4Y
   APNS_TEAM_ID: 8R5Q4A3RC7
   APNS_BUNDLE_ID: com.Voltline.Betterfly2
+  MONITOR_USER_ID: "900000000000000001"
+  MONITOR_NAME: Betterfly Monitor
+  MONITOR_AUTH_ADDR: auth-service:50051
+  MONITOR_FRIEND_READY_URL: http://friend-service:54401/ready
+  MONITOR_STORAGE_READY_URL: http://storage-service:8081/ready
+  MONITOR_ABTEST_READY_URL: http://abtest-service:8082/ready
+  MONITOR_CALL_READY_URL: http://call-service:8085/ready
+  MONITOR_PUSH_READY_URL: http://push-service:8086/ready

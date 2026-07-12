@@ -6,7 +6,7 @@
 
 当前好友与群聊主链路的端到端测试位于：
 
-- [friend_service_e2e_test.go](Betterfly2/services/dataForwardingService/integration/friend_service_e2e_test.go)
+- [friend_service_e2e_test.go](services/dataForwardingService/integration/friend_service_e2e_test.go)
 
 ### 覆盖范围
 
@@ -29,24 +29,23 @@
 
 ### 前置条件
 
-1. 已正确配置 [services/.env](Betterfly2/services/.env)，尤其是：
-   - `PGSQL_DSN`
-2. 已启动本地 `docker-compose` 环境：
+1. 已正确配置本地 `services/.env`，尤其是 `PGSQL_DSN`。该文件包含私密配置且被 Git 忽略，不应提交。
+2. 已启动包含 Storage Service 和第二个 DataForwarding Pod 的本地环境：
 
 ```bash
-cd ./Betterfly2/services
-docker compose up -d
+cd services
+./deploy_docker_compose.sh standard --enable redundancy
 ```
 
 如果最近改过 `auth_service`、`df`、`df2`、`friend_service` 或共享代码，建议先重建：
 
 ```bash
-docker compose up -d --build auth_service df df2 friend_service
+./rebuild_docker_compose.sh auth df-all friend storage
 ```
 
 ### 运行命令
 
-在 [services/dataForwardingService](Betterfly2/services/dataForwardingService) 目录执行：
+在 [services/dataForwardingService](services/dataForwardingService) 目录执行：
 
 ```bash
 env BETTERFLY_E2E=1 \
@@ -62,22 +61,12 @@ go test -v ./integration
 - 测试会自动生成测试账号和群 ID，避免和日常联调数据冲突。
 - 如果当前数据库环境较脏，导致注册链路异常返回 `ACCOUNT_EXIST`，测试会记录这一现象，并在必要时为后续登录链路预置测试用户，以保证后半段 friend/group 主流程仍能完成验证。
 
-### 最近一次验证结果
-
-在本地 `docker-compose` 环境下，以下命令已实际跑通：
-
-```bash
-env BETTERFLY_E2E=1 \
-GOPROXY=https://proxy.golang.org,direct \
-GOCACHE=/tmp/betterfly-go-cache-dataforwarding \
-GOMODCACHE=/tmp/betterfly-go-mod-dataforwarding \
-go test -v ./integration
-```
-
-结果：
+### 预期结果
 
 ```text
---- PASS: TestFriendServiceEndToEnd (7.86s)
+--- PASS: TestFriendServiceEndToEnd
 PASS
-ok  	data_forwarding_service/integration	8.145s
+ok  	data_forwarding_service/integration
 ```
+
+具体耗时取决于镜像状态、Kafka 就绪速度和数据库网络，不在文档中固化某次运行结果。

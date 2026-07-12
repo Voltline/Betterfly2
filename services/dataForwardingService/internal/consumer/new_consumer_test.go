@@ -54,7 +54,7 @@ func TestBuildFriendResponsesPreserveClientFields(t *testing.T) {
 	t.Run("contacts", func(t *testing.T) {
 		resp := buildContactListResponse(&friend.FriendListRsp{Contacts: []*friend.FriendContact{{
 			UserId: 2, Account: "alice", Name: "Alice", Avatar: "avatar", Alias: "同学", IsNotify: false, UpdateTime: "2026-07-11T12:00:00Z",
-		}}})
+		}}}, 1001)
 		contacts := resp.GetContactListRsp().GetContacts()
 		if len(contacts) != 1 || contacts[0].GetAlias() != "同学" || contacts[0].GetIsNotify() || contacts[0].GetUpdateTime() == "" {
 			t.Fatalf("contact mapping mismatch: %+v", contacts)

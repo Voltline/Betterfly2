@@ -25,6 +25,8 @@ Not production-ready yet:
 - PostgreSQL is expected to be external through `PGSQL_DSN`.
 - RustFS is single-replica in this base.
 - Ingress host and TLS settings are placeholders.
+- ABTest Service、Prometheus、Grafana 与 Kafka UI 尚未包含在这套 base manifests 中。
+- 这些清单是单集群验证基线，不提供多地域数据复制或跨集群服务发现。
 
 ## Build Local Images
 

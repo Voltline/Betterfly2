@@ -9,6 +9,7 @@ import (
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
+	"data_forwarding_service/internal/monitor"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
 	"errors"
@@ -65,6 +66,9 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	payload.FromId = fromID
 	if err := validatePostPayload(payload); err != nil {
 		return err
+	}
+	if monitor.IsMonitorID(payload.GetToId()) {
+		return handleMonitorPost(fromID, payload)
 	}
 
 	targetUserID := strconv.FormatInt(payload.GetToId(), 10)

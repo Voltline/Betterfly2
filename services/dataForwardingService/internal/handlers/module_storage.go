@@ -5,6 +5,7 @@ import (
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
+	"data_forwarding_service/internal/monitor"
 )
 
 func init() {
@@ -98,6 +99,9 @@ func handleQueryUser(fromID int64, message *pb.RequestMessage) error {
 	payload, err := authenticatedPayload(fromID, message, "查询用户信息", "query_user", (*pb.RequestMessage).GetQueryUser)
 	if err != nil {
 		return err
+	}
+	if monitor.IsMonitorID(payload.GetToQueryUserId()) {
+		return handleMonitorQueryUser(fromID)
 	}
 
 	currentContainerID := currentContainerTopic()

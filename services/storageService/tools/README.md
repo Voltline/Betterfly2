@@ -63,11 +63,11 @@ docker exec -it storageService sh -c "cd /app && go run calculate_file_hash.go -
 文件元数据:
   文件路径: /path/to/test.txt
   文件大小: 1024 字节
-  SHA512哈希: abc123def456...
+  SHA512哈希: <128位十六进制SHA-512>
 
 用于Postman测试的JSON:
 {
-  "file_hash": "abc123def456...",
+  "file_hash": "<128位十六进制SHA-512>",
   "file_size": 1024
 }
 ```

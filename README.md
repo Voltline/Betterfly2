@@ -1,264 +1,156 @@
 <div align="center">
-  <img src=others/betterfly-logo.jpg alt="Betterfly2 Logo">
+  <img src="others/betterfly-logo.jpg" alt="Betterfly2 Logo">
 </div>
 
 # Betterfly2
-> 现代化即时通信平台 / Modern Instant Messaging Platform
->
-> *本项目是 [Betterfly](https://github.com/Voltline/Betterfly-Server-Python) 项目的延续，使用 Go 语言，基于微服务架构完全重新构建*
->
-> *A continuation of [Betterfly](https://github.com/Voltline/Betterfly-Server-Python) project, completely rebuilt with Go and modern microservices architecture*
+
+Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服务重构版本，提供即时消息、好友与群组、消息同步、文件传输、客户端实验、WebRTC 通话和 iOS APNs 推送能力。
 
 ![License](https://img.shields.io/github/license/Voltline/Betterfly2)
 ![Issues](https://img.shields.io/github/issues/Voltline/Betterfly2)
 ![Stars](https://img.shields.io/github/stars/Voltline/Betterfly2)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Voltline/Betterfly2)
 
----
+## 当前能力
 
-## 📖 目录 / Table of Contents
+- WebSocket + Protobuf 客户端长连接，Redis 保存跨 DataForwarding Pod 的路由状态。
+- Kafka 解耦消息存储、好友与群组、通话信令及推送任务。
+- PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
+- Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
+- RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。
+- 一对一 WebRTC 语音/视频通话，支持 Coturn 中继与 PushKit 离线唤醒。
+- APNs sandbox/production 双环境、普通消息通知和受保护的内网调试后台。
+- 基于设备或其他主体稳定分流的 AB 实验，以及实验推全、撤回和例外分组。
+- Docker Compose Profiles 可裁剪部署，以及面向单集群验证的 Kubernetes 清单。
 
-- [成员 / Collaborators](#-成员-collaborators)
-- [项目概况 / Project Overview](#-项目概况-project-overview)
-- [核心特性 / Key Features](#-核心特性-key-features)
-- [架构设计 / Architecture](#-架构设计-architecture)
-- [微服务组件 / Microservices](#-微服务组件-microservices)
-- [快速开始 / Quick Start](#-快速开始-quick-start)
-- [技术栈 / Tech Stack](#-技术栈-tech-stack)
-- [项目结构 / Project Structure](#-项目结构-project-structure)
-- [API 文档 / API Documentation](#-api-文档-api-documentation)
-- [开源协议 / License](#-开源协议-license)
+## 架构与数据流
 
----
-
-## 👥 成员 / Collaborators
-* [Voltline](https://github.com/Voltline)
-* [D_S_O_](https://github.com/DissipativeStructureObject)
-
----
-
-## 📋 项目概况 / Project Overview
-
-| 项目信息 / Info | 详情 / Details |
-|---------------|----------------|
-| 项目启动时间 / Start Date | 2025 年 3 月 1 日 / March 1, 2025 |
-| 开源协议 / License | MIT License |
-| 语言 / Language | Go 1.23.0+ (toolchain go1.24.1+) |
-| 架构 / Architecture | 微服务 / Microservices |
-
----
-
-## ✨ 核心特性 / Key Features
-
-- 🔐 **安全认证** - JWT Token 认证与 bcrypt 密码加密
-- 📡 **实时通信** - 基于 WebSocket 的双向实时消息传输
-- 🔄 **高可用** - 分布式会话管理，支持多实例水平扩展
-- 📦 **消息队列** - Kafka 消息队列实现异步处理与解耦
-- 💾 **多级缓存** - L1 (Ristretto) + L2 (Redis) 缓存策略
-- 🗄️ **对象存储** - RustFS (S3 兼容) 文件存储服务
-- 📊 **可观测性** - Prometheus + Grafana 监控方案
-- 🐳 **容器化部署** - Docker Compose 一键部署
-
----
-
-## 🏗️ 架构设计 / Architecture
-
-![Architecture Diagram](others/Betterfly2-architecture.jpg)
-
-### 数据转发服务分层架构 / Data Forwarding Service Layers
-
-数据中转服务已被划分为三层，以更好地完成数据中转任务：
-
-| 层级 / Layer | 职责 / Responsibility |
-|-------------|----------------------|
-| **连接层 / Connection Layer** | 管理 WebSocket 连接生命周期 |
-| **会话层 / Session Layer** | 分布式会话状态管理 (Redis) |
-| **路由层 / Router Layer** | 消息路由与转发决策 |
-
-> Data-Forwarding service has been divided into three layers: Connection Layer, Session Layer and Router Layer to better accomplish the data-forwarding tasks.
-
-### ⚠️ 免责声明 / Disclaimer
-> 图中所使用的所有第三方 Logo（如 gRPC、Kafka、Redis、Nginx、GORM、PostgreSQL、RustFS、Traefik 等）均为其各自版权所有者的注册商标，仅用于技术架构说明用途。我们不拥有这些 Logo 的任何权利，也不代表与相关方有任何官方合作。如有使用不当请联系我们删除。
->
-> The logos of third-party technologies used in the diagram (such as gRPC, Kafka, Redis, Nginx, GORM, PostgreSQL, RustFS, Traefik, etc.) are trademarks or registered trademarks of their respective owners. They are included solely for illustrating the system architecture and do not imply any affiliation or endorsement. Please contact us if you believe any usage is inappropriate.
-
----
-
-## 🔧 微服务组件 / Microservices
-
-| 服务 / Service | 端口 / Port | 描述 / Description |
-|---------------|-------------|-------------------|
-| **Data Forwarding Service** | 54342, 54343 | WebSocket 网关，负责客户端连接管理和消息路由 |
-| **Auth Service** | 50051 (gRPC) | 用户认证、JWT Token 管理和授权服务 |
-| **Storage Service** | 8081 (HTTP) | 消息存储、文件管理，支持多级缓存 |
-| **Friend Service** | 54401 | 好友关系和联系人管理 |
-| **ABTest Service** | 8082 (HTTP) | 客户端/服务端实验配置与稳定分流 |
-| **Call Service** | 8085 (HTTP health) | WebRTC语音/视频通话信令、状态与ICE配置 |
-| **Push Service** | 8086 (HTTP health) | PushKit VoIP来电与普通消息APNs双环境推送 |
-
-### 基础设施服务 / Infrastructure Services
-
-| 服务 / Service | 端口 / Port | 描述 / Description |
-|---------------|-------------|-------------------|
-| **Redis** | 6379 | 缓存与分布式会话存储 |
-| **Kafka** | 9092, 9094 | 消息队列（双节点集群） |
-| **Kafka UI** | 8080 | Kafka 管理控制台 |
-| **RustFS** | 9000, 9001 | S3 兼容对象存储 |
-| **Coturn** | 3478, 49160-49200/UDP | WebRTC STUN/TURN 与媒体中继 |
-| **PostgreSQL** | 5432 | 关系型数据库 |
-| **Prometheus** | 9090 | 指标采集 |
-| **Grafana** | 3000 | 监控仪表板 |
-
----
-
-## 🚀 快速开始 / Quick Start
-
-### 前置要求 / Prerequisites
-
-- Go 1.23.0+ (推荐 toolchain go1.24.1+)
-- Docker & Docker Compose
-- Protobuf 编译器和 Go 插件
-
-```bash
-# 安装 Protobuf Go 插件
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+```mermaid
+flowchart LR
+    Client["iOS client"] -->|"WSS + Protobuf"| DF["DataForwarding Service"]
+    Client -->|"HTTP"| Storage["Storage Service"]
+    Client -->|"HTTP"| AB["ABTest Service"]
+    DF -->|"gRPC"| Auth["Auth Service"]
+    DF <--> Redis[(Redis)]
+    DF <--> Kafka[(Kafka)]
+    Kafka <--> Storage
+    Kafka <--> Friend["Friend Service"]
+    Kafka <--> Call["Call Service"]
+    Kafka <--> Push["Push Service"]
+    Storage <--> Redis
+    Storage <--> PG[(PostgreSQL)]
+    Storage <--> RustFS[(RustFS)]
+    Friend <--> PG
+    AB <--> PG
+    Push <--> PG
+    Push --> APNs["Apple APNs"]
+    Call <--> Redis
+    Call --> Push
+    Client <-->|"WebRTC media"| Peer["Peer client"]
+    Client <-->|"TURN relay"| Coturn["Coturn"]
 ```
 
-### 启动服务 / Start Services
+客户端业务请求首先进入 DataForwarding Service。认证走 Auth gRPC；异步业务封装为 Protobuf Envelope 后进入固定 Kafka topic，由任一对应 Service Pod 消费，再根据请求中的 DataForwarding Pod topic 返回响应。客户端之间的实时消息最终仍由目标用户在 Redis 中登记的 Pod 路由送达。
+
+文件上传和下载是例外：Storage Service 只签发 URL、维护元数据并校验哈希，文件内容由客户端直接与 RustFS 传输。WebRTC 媒体也不经过 Call Service，Call Service 只维护信令和通话状态。
+
+## 服务清单
+
+| 服务 | 客户端或内部入口 | 作用 |
+| --- | --- | --- |
+| DataForwarding Service | `wss://host:54342/ws` | WebSocket 会话、协议分发和跨 Pod 路由；`redundancy` profile 增加 `54343` 实例 |
+| Auth Service | 内网 gRPC `50051` | 注册、登录、JWT 校验和登出失效 |
+| Storage Service | Kafka `storage-service`；HTTP `8081` | 消息与资料持久化、同步查询、文件控制面 |
+| Friend Service | Kafka `friend-service`；HTTP `54401` | 好友关系、群组和群成员维护；HTTP 仅提供内网探针 |
+| ABTest Service | HTTP `8082` | 实验配置获取、服务端求值和管理后台 |
+| Call Service | Kafka `call-service`；HTTP `8085` | 一对一通话信令与状态；HTTP 仅提供探针 |
+| Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
+
+主要基础设施端口：Redis `6379`、Kafka `9092/9094`、RustFS S3 `9000`、RustFS Console `9001`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Kafka UI `8080`、Prometheus `9090` 和 Grafana `3000` 只在相应可选 profile 中启动。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
+
+## 快速开始
+
+### 前置条件
+
+- Go 1.24 toolchain。个别基础模块声明了更低版本，但当前服务模块统一使用 Go 1.24。
+- Docker 与 Docker Compose v2。
+- 可用的 PostgreSQL 数据库。
+- 仅在修改 Protobuf 时需要 `protoc`、`protoc-gen-go` 和 `protoc-gen-go-grpc`。
+
+### 启动标准环境
 
 ```bash
-# 1. 克隆项目
 git clone https://github.com/Voltline/Betterfly2.git
 cd Betterfly2/services
 
-# 2. 配置环境变量
 export PGSQL_DSN="host=your_host user=your_user password=your_password dbname=betterfly port=5432 sslmode=disable"
 export RUSTFS_ACCESS_KEY="your_access_key"
 export RUSTFS_SECRET_KEY="your_secret_key"
 
-# 3. 启动完整业务功能（不包含监控、Kafka UI 和冗余 Pod）
-./deploy_docker_compose.sh standard
-
-# 4. 查看服务状态
+./deploy_docker_compose.sh standard --cert
 docker compose ps
 ```
 
-低配、标准、全量部署以及按能力组合的说明见
-[可裁剪部署文档](./services/DEPLOYMENT_PROFILES.md)。直接执行 `docker compose up -d` 只启动核心聊天链路。
+`standard` 启动当前全部业务能力，但不启动 Prometheus、Grafana、Kafka UI 和第二个 DataForwarding 实例。首次部署或证书地址发生变化时使用 `--cert`；修改协议后追加 `--proto`。
 
-### 编译单个服务 / Build Individual Service
+低资源环境可以使用 `minimal`，但它只包含认证、连接以及好友/群组控制面，不包含 Storage Service，因此不是完整的消息发送环境。完整 profile 语义见[可裁剪部署](services/DEPLOYMENT_PROFILES.md)。
 
-```bash
-cd services/authService
-go build -o authService .
-```
-
-### 生成 Protobuf 代码 / Generate Protobuf Code
+### 增量重建
 
 ```bash
-cd proto
-make
+cd services
+./rebuild_docker_compose.sh df
+./rebuild_docker_compose.sh --proto storage friend
+./rebuild_docker_compose.sh --list
 ```
 
----
+`build_docker_compose.sh` 保留历史上的全量重建语义；日常开发优先使用 `rebuild_docker_compose.sh`，避免每次重建全部镜像。
 
-## 🛠️ 技术栈 / Tech Stack
+### 生成协议与运行测试
 
-### 语言 & 框架 / Language & Framework
-| 类别 / Category | 技术 / Technology | 链接 / Link |
-|----------------|------------------|-------------|
-| 语言 / Language | Go 1.23.0+ | [golang.org](https://golang.org) |
+```bash
+make -C proto
 
-### 核心库 / Core Libraries
-| 类别 / Category | 技术 / Technology | 链接 / Link |
-|----------------|------------------|-------------|
-| 日志 / Logging | uber-zap | [go.uber.org/zap](https://go.uber.org/zap) |
-| ORM | GORM | [gorm.io](https://gorm.io/gorm) |
-| PostgreSQL 驱动 | gorm/postgres | [gorm.io/driver/postgres](https://gorm.io/driver/postgres) |
-| Redis 客户端 | go-redis | [github.com/redis/go-redis](https://github.com/redis/go-redis) |
-| Kafka 客户端 | Sarama | [github.com/IBM/sarama](https://github.com/IBM/sarama) |
-| WebSocket | Gorilla WebSocket | [github.com/gorilla/websocket](https://github.com/gorilla/websocket) |
-| gRPC | grpc-go | [google.golang.org/grpc](https://google.golang.org/grpc) |
-| Protobuf | protobuf | [google.golang.org/protobuf](https://google.golang.org/protobuf) |
-| 加密 / Crypto | bcrypt | [golang.org/x/crypto/bcrypt](https://golang.org/x/crypto/bcrypt) |
-| 内存缓存 / In-Memory Cache | Ristretto | [github.com/dgraph-io/ristretto](https://github.com/dgraph-io/ristretto) |
-
-### 中间件 & 基础设施 / Middleware & Infrastructure
-| 类别 / Category | 技术 / Technology | 链接 / Link |
-|----------------|------------------|-------------|
-| 消息队列 / MQ | Apache Kafka | [kafka.apache.org](https://kafka.apache.org/) |
-| 缓存 / Cache | Redis | [redis.io](https://redis.io/) |
-| 数据库 / Database | PostgreSQL | [postgresql.org](https://www.postgresql.org/) |
-| 对象存储 / Object Storage | RustFS | [rustfs.com](https://rustfs.com/) |
-| 容器化 / Containerization | Docker & Docker Compose | [docker.com](https://www.docker.com/) |
-| 监控 / Monitoring | Prometheus & Grafana | [prometheus.io](https://prometheus.io/) |
-
----
-
-## 📁 项目结构 / Project Structure
-
+cd services/dataForwardingService
+go test ./...
 ```
+
+仓库由多个 Go module 组成，没有可在根目录覆盖所有服务的单一 `go test ./...`。请在改动涉及的服务、`shared` 或具体 `proto` module 内分别运行测试；跨服务回归入口见[回归测试文档](REGRESSION_TESTING.md)。
+
+## 项目结构
+
+```text
 Betterfly2/
-├── common/                    # 公共配置与脚本
-│   ├── kafka/                 # Kafka Docker 配置
-│   ├── pgsql/                 # PostgreSQL 工具脚本
-│   ├── redis/                 # Redis Docker 配置
-│   └── ws_ssl/                # WebSocket SSL 证书生成
-├── proto/                     # Protocol Buffer 定义
-│   ├── data_forwarding/       # 客户端-服务器通信协议
-│   ├── call/                  # WebRTC通话控制协议
-│   ├── push/                  # APNs与客户端推送协议
-│   ├── envelope/              # 消息信封定义
-│   ├── server_rpc/            # 服务间 gRPC 定义
-│   └── storage/               # 存储服务协议
-├── services/                  # 微服务实现
-│   ├── authService/           # 认证服务
-│   ├── dataForwardingService/ # 数据转发服务
-│   ├── friendService/         # 好友服务
-│   ├── storageService/        # 存储服务
-│   ├── abTestService/         # 实验配置服务
-│   ├── callService/           # WebRTC通话信令服务
-│   ├── pushService/           # APNs统一推送服务
-│   └── monitoring/            # 监控配置 (Prometheus/Grafana)
-├── shared/                    # 共享组件
-│   ├── db/                    # 数据库连接与模型
-│   ├── logger/                # 日志工具
-│   ├── metrics/               # 指标采集
-│   └── utils/                 # 通用工具函数
-└── tool/                      # 开发工具
-    └── bin/                   # protoc 编译器 (Linux/macOS)
+├── common/                    # Kafka/Redis 辅助配置与 WebSocket 证书脚本
+├── deploy/k8s/                # 单集群验证用 Kubernetes manifests
+├── proto/                     # DataForwarding、Storage、Friend、Call、Push 协议
+├── services/                  # 七个业务服务、Compose 与部署脚本
+├── shared/                    # 数据库、日志、指标、MQ 和通用分发器
+├── tool/                      # Protobuf 编译工具
+├── API_DOCUMENTATION.md       # 当前 HTTP、Kafka 与 Protobuf 接口说明
+├── INTERFACE_DEVELOPMENT.md   # 新增接口与模块自注册指南
+└── REGRESSION_TESTING.md      # 跨服务回归测试说明
 ```
 
----
+## 文档导航
 
-## 📚 API 文档 / API Documentation
+| 文档 | 内容 |
+| --- | --- |
+| [API 文档](API_DOCUMENTATION.md) | Storage、ABTest、Call、Push 的对外与内部协议 |
+| [接口新增指南](INTERFACE_DEVELOPMENT.md) | DataForwarding、Storage、Friend 模块自注册流程 |
+| [回归测试](REGRESSION_TESTING.md) | Docker Compose 跨 Pod 端到端测试 |
+| [可裁剪部署](services/DEPLOYMENT_PROFILES.md) | `minimal`、`standard`、`full` 与 profile 组合 |
+| [RustFS 配置](services/RUSTFS_SETUP.md) | 对象存储、外部预签名地址与故障排查 |
+| [Call Service](services/callService/README.md) | WebRTC、Coturn 和 PushKit 唤醒 |
+| [Push Service](services/pushService/README.md) | APNs 双环境、普通通知与内网调试后台 |
+| [Monitor 账号](services/dataForwardingService/MONITOR.md) | 仅用户 ID 1 可见的服务状态与管理指令 |
+| [Kubernetes](deploy/k8s/README.md) | 当前单集群验证清单的范围与限制 |
+| [协议生成](proto/docs/README.md) | Protobuf 依赖、生成命令和目录说明 |
 
-详细的 API 文档请参阅：
-- [API_DOCUMENTATION.md](API_DOCUMENTATION.md) - 存储服务 HTTP API 文档
-- [INTERFACE_DEVELOPMENT.md](INTERFACE_DEVELOPMENT.md) - 服务端接口新增与模块自注册指南
-- [RustFS 配置说明](services/RUSTFS_SETUP.md) - 对象存储配置指南
+## 项目成员
 
----
+- [Voltline](https://github.com/Voltline)
+- [D_S_O_](https://github.com/DissipativeStructureObject)
 
-## 📄 开源协议 / License
+## License
 
-本项目采用 [MIT License](LICENSE) 开源协议。
-
-```
-MIT License
-
-Copyright (c) 2025 Voltline
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software...
-```
-
----
-
-<div align="center">
-  <p>Made by <a href="https://github.com/Voltline">Voltline</a> & <a href="https://github.com/DissipativeStructureObject">D_S_O_</a></p>
-</div>
+Betterfly2 使用 [MIT License](LICENSE)。

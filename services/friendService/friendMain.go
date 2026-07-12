@@ -4,6 +4,7 @@ import (
 	"Betterfly2/shared/logger"
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"friendService/internal/consumer"
+	httpserver "friendService/internal/http_server"
 	"friendService/internal/publisher"
 
 	"github.com/IBM/sarama"
@@ -34,6 +36,15 @@ func main() {
 			_ = publisher.KafkaProducer.Close()
 		}
 	}()
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "54401"
+	}
+	healthServer := httpserver.New(":" + port)
+	healthErrCh := make(chan error, 1)
+	go func() {
+		healthErrCh <- healthServer.ListenAndServe()
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -53,9 +64,18 @@ func main() {
 		if err != nil {
 			sugar.Errorf("friend服务消费者异常退出: %v", err)
 		}
+	case err := <-healthErrCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			sugar.Errorf("friend服务健康检查异常退出: %v", err)
+		}
 	}
 
 	cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := healthServer.Shutdown(shutdownCtx); err != nil {
+		sugar.Warnf("关闭friend服务健康检查超时: %v", err)
+	}
+	shutdownCancel()
 	select {
 	case <-consumerErrCh:
 	case <-time.After(5 * time.Second):

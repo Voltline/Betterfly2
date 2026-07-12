@@ -16,9 +16,11 @@
    在对应 proto 文件中新增 request/response message，并把新的 payload 加入 `oneof`。
 
    常见位置：
-   - `proto/data_forwarding/common.proto`
-   - `proto/storage/storage.proto`
-   - `proto/friend/friend.proto`
+   - `proto/data_forwarding/df_interface.proto`、`request.proto`、`response.proto`
+   - `proto/storage/storage_interface.proto`、`request.proto`、`response.proto`
+   - `proto/friend/friend_interface.proto`
+   - `proto/call/call_interface.proto`
+   - `proto/push/push_interface.proto`
 
 2. 重新生成 Protobuf 代码。
 
@@ -195,4 +197,4 @@ go test ./dispatch ./mq
 - 同一个 payload 类型只能注册一次，否则 `dispatch.Register` 会按共享分发器的规则报错或覆盖风险。
 - 新增 payload 后，未更新 Protobuf 生成代码会导致 Go 编译失败。
 - 如果新增接口需要客户端收到异步响应，确认 `TargetUserId` 与 `FromKafkaTopic` 能把响应路由回发起请求的 dataForwarding pod。
-- 如果新增接口要穿过 Kafka，请确认 topic 命名与现有约定一致，例如 `storage-service`、`friend-service`。
+- 如果新增接口要穿过 Kafka，请确认 topic 命名与现有约定一致：`storage-service`、`friend-service`、`call-service`、`push-service`。

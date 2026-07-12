@@ -1,123 +1,42 @@
-# CLAUDE.md
+# Repository Guidance
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Betterfly2 is a Go 1.24 microservice backend for an instant-messaging client. Treat the root [README](README.md) as the current architecture and documentation index; do not infer the active service list from the historical architecture image in `others/`.
 
-## Project Overview
+## Active services
 
-Betterfly2 is a modern instant messaging platform written in Go, featuring a microservices architecture with gRPC communication, Kafka message queuing, and Redis caching. The project is a complete rewrite of the original Betterfly project using modern backend architecture patterns.
+- `dataForwardingService`: TLS WebSocket gateway, authenticated dispatch and Kafka/Redis routing.
+- `authService`: synchronous gRPC registration, login and JWT lifecycle.
+- `storageService`: message/profile persistence, sync queries, cache and RustFS HTTP control plane.
+- `friendService`: Kafka worker for contacts, groups and memberships.
+- `abTestService`: HTTP experiment evaluation and protected administration UI.
+- `callService`: Kafka/Redis one-to-one WebRTC signaling state machine.
+- `pushService`: APNs/PushKit token storage, notification delivery and protected administration UI.
 
-## Architecture
+## Development
 
-The system follows a microservices architecture with the following key components:
+The repository contains multiple Go modules. Run tests from each affected module rather than expecting root `go test ./...` to cover the repository.
 
-- **Data Forwarding Service**: Handles WebSocket connections and message routing between clients and backend services
-- **Authentication Service**: Manages user authentication, JWT tokens, and authorization
-- **Friend Service**: Handles friend relationships and contact management
-- **Storage Service**: Manages message persistence with L1 (ristretto) and L2 (Redis) caching layers
-
-## Development Setup
-
-### Prerequisites
-- Go 1.23.0+ with toolchain go1.24.1+
-- Docker and Docker Compose for local development
-- Protobuf compiler and Go plugins:
-  ```bash
-  go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-  ```
-
-### Running Services
-Use Docker Compose to start all services and dependencies:
 ```bash
 cd services
-# Set PostgreSQL DSN environment variable
-export PGSQL_DSN="your_postgresql_connection_string"
-docker-compose up -d
+./deploy_docker_compose.sh standard --cert
+
+# Rebuild only changed services during development.
+./rebuild_docker_compose.sh --proto df storage
 ```
 
-This starts:
-- Redis (port 6379)
-- Kafka cluster with 2 brokers (ports 9092, 9094)
-- Kafka UI (port 8080)
-- All microservices (auth, friend, data forwarding, storage)
+`PGSQL_DSN` points to an external PostgreSQL instance. The standard Compose preset enables all product features; direct `docker compose up -d` or the `minimal` preset does not start Storage Service and therefore is not a complete messaging environment.
 
-### Building Individual Services
-Each service has its own Go module. Build from the service directory:
-```bash
-cd services/authService
-go build
-```
+## Communication boundaries
 
-## Code Structure
+- Clients send Protobuf requests over `/ws`; JWT is carried by the protocol request, not an HTTP Authorization header.
+- Auth calls are synchronous gRPC.
+- Storage, friend, call and push work is carried over Kafka topics named `storage-service`, `friend-service`, `call-service` and `push-service`.
+- DataForwarding Pod topics route asynchronous responses back to the correct WebSocket owner.
+- Redis stores cross-pod routes, shared cache entries and active call state.
+- WebRTC media and RustFS object bytes bypass application services.
 
-### Key Directories
-- `services/` - Microservices implementation
-  - `authService/` - Authentication and user management
-  - `dataForwardingService/` - WebSocket gateway and message routing
-  - `friendService/` - Friend relationships and contacts
-  - `storageService/` - Message storage with caching layers
-- `proto/` - Protocol Buffer definitions and generated code
-  - `data_forwarding/` - Client-server communication protocol
-  - `server_rpc/` - Inter-service gRPC definitions
-- `shared/` - Common utilities and libraries
-  - `logger/` - Structured logging with zap
-  - `db/` - Database models and connection management
-  - `utils/` - Shared utility functions
+## Change workflow
 
-### Shared Components
-- **Logger**: Uses zap for structured logging, initialized via `shared/logger/logger.go`
-- **Database**: PostgreSQL with GORM ORM, connection pooling configured in `shared/db/db.go`
-- **Configuration**: Environment variables for service configuration
+For a new protocol endpoint, follow [INTERFACE_DEVELOPMENT.md](INTERFACE_DEVELOPMENT.md). Keep payload registration in the owning module, regenerate Protobuf with `make -C proto`, and add tests in the affected module. Cross-service friend/group flows are documented in [REGRESSION_TESTING.md](REGRESSION_TESTING.md).
 
-## Communication Patterns
-
-### Client-Server Protocol
-- WebSocket connections handled by Data Forwarding Service
-- Protocol Buffer messages defined in `proto/data_forwarding/`
-- JWT-based authentication with tokens passed in request headers
-
-### Inter-Service Communication
-- gRPC for synchronous service-to-service calls
-- Kafka for asynchronous message processing and event streaming
-- Service discovery through environment variables
-
-### Caching Strategy
-- **L1 Cache**: Ristretto (in-memory, per-pod)
-- **L2 Cache**: Redis (shared across pods)
-- Database fallback when both caches miss
-
-## Development Workflow
-
-### Adding New Features
-1. Define Protocol Buffer messages in `proto/` if needed
-2. Generate Go code: `cd proto && make`
-3. Implement service logic in respective service directory
-4. Update Docker Compose configuration if adding new services
-
-### Testing
-- Services are designed to run in Docker containers
-- Use the provided Docker Compose setup for integration testing
-- Individual services can be built and run locally for development
-
-### Environment Variables
-Key environment variables:
-- `PGSQL_DSN`: PostgreSQL connection string
-- `PORT`: Service port (defaults provided)
-- `REDIS_ADDR`: Redis connection address
-- `KAFKA_BROKER`: Kafka broker addresses
-
-## Dependencies
-
-### Core Libraries
-- **gRPC**: Service-to-service communication
-- **GORM**: Database ORM with PostgreSQL
-- **Redis**: Distributed caching
-- **Kafka (Sarama)**: Message queuing
-- **Zap**: Structured logging
-- **Gorilla WebSocket**: Client connections
-
-### Infrastructure
-- PostgreSQL for data persistence
-- Redis for caching and session storage
-- Apache Kafka for message queuing
-- Docker for containerization
+Never commit `.env`, APNs `.p8` keys, generated private keys or production credentials.

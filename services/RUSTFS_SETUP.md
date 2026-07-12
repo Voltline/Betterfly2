@@ -1,210 +1,91 @@
-# RustFS 配置说明
+# RustFS 配置
 
-本文档说明如何在 Betterfly2 项目中使用 RustFS 作为对象存储服务。
+Storage Service 使用 RustFS 作为 S3 兼容对象存储。服务端只负责预签名、元数据和 SHA-512 校验，文件内容由客户端直接上传或下载。
 
-## Docker Compose 配置
+## Compose 配置
 
-RustFS 服务已添加到 `docker-compose.yml` 中，配置如下：
-
-### RustFS 服务配置
-
-- **镜像**: `rustfs/rustfs:latest`
-- **容器名**: `rustfs`
-- **端口映射**:
-  - `9000:9000` - S3 API 端点
-  - `9001:9001` - 控制台端口
-- **数据卷**: `rustfs-data` (持久化存储)
-- **默认访问密钥**: 
-  - Access Key: `rustfsadmin`
-  - Secret Key: `rustfsadmin`
-
-### 环境变量配置
-
-可以通过 `.env` 文件或环境变量自定义以下配置：
+RustFS 和 Storage Service 位于 `storage` profile：
 
 ```bash
-# RustFS 访问密钥（生产环境请修改为强密码）
-RUSTFS_ACCESS_KEY=rustfsadmin
-RUSTFS_SECRET_KEY=rustfsadmin
+cd services
+./deploy_docker_compose.sh standard
 
-# RustFS 区域（可选，默认: cn-east-1）
+# 只在基础控制面上追加文件与消息存储
+./deploy_docker_compose.sh minimal --enable storage
+```
+
+默认端口和凭据：
+
+| 配置 | Compose 默认值 | 说明 |
+| --- | --- | --- |
+| RustFS S3 API | `9000` | 客户端使用预签名 URL 直传 |
+| RustFS Console | `9001` | 对象存储管理页面 |
+| Storage HTTP | `8081` | 文件控制面；进程脱离 Compose 运行时默认 `8080` |
+| Access key | `rustfsadmin` | 仅适合本地开发 |
+| Secret key | `rustfsadmin` | 生产环境必须替换 |
+| Bucket | `betterfly-files` | 服务启动时自动确认或创建 |
+
+推荐在被 Git 忽略的 `services/.env` 中配置：
+
+```env
+RUSTFS_ACCESS_KEY=replace-me
+RUSTFS_SECRET_KEY=replace-me
 RUSTFS_REGION=cn-east-1
-
-# RustFS 存储桶名称（可选，默认: betterfly-files）
 RUSTFS_BUCKET=betterfly-files
-
-# 存储服务 HTTP 端口（可选，默认: 8080）
-HTTP_PORT=8080
 ```
 
-### 存储服务环境变量
+Compose 内部固定通过 `http://rustfs:9000` 访问 RustFS，不应写成 `localhost:9000`。
 
-存储服务会自动从环境变量读取 RustFS 配置：
+## 预签名外部地址
 
-- `RUSTFS_REGION`: RustFS 区域
-- `RUSTFS_ACCESS_KEY_ID`: 访问密钥ID（与 RUSTFS_ACCESS_KEY 相同）
-- `RUSTFS_SECRET_ACCESS_KEY`: 秘密访问密钥（与 RUSTFS_SECRET_KEY 相同）
-- `RUSTFS_ENDPOINT_URL`: RustFS 端点URL（容器内使用 `http://localhost:9000`）
-- `RUSTFS_BUCKET`: 存储桶名称
+预签名 URL 的 host 必须能被客户端访问。生产环境推荐显式设置完整地址：
 
-## 启动服务
-
-### 1. 启动所有服务
-
-```bash
-cd services
-docker compose up -d
+```env
+RUSTFS_EXTERNAL_ENDPOINT_URL=https://files.example.com
 ```
 
-### 2. 仅启动 RustFS
+未设置完整地址时，Storage Service 按以下方式推导：
 
-```bash
-cd services
-docker compose up -d rustfs
+- 协议优先使用 `RUSTFS_EXTERNAL_SCHEME`，其次使用 `X-Forwarded-Proto` 或当前请求协议。
+- 主机优先使用 `RUSTFS_EXTERNAL_HOST`，其次使用当前 HTTP 请求的 host。
+- 端口使用 `RUSTFS_EXTERNAL_PORT`，默认 `9000`。
+
+例如直接通过公网 IP 联调：
+
+```env
+RUSTFS_EXTERNAL_SCHEME=http
+RUSTFS_EXTERNAL_HOST=203.0.113.10
+RUSTFS_EXTERNAL_PORT=9000
 ```
 
-### 3. 查看 RustFS 日志
+反向代理部署时应转发正确的 `Host` 和 `X-Forwarded-Proto`。不要把容器内地址 `http://rustfs:9000` 作为外部 endpoint，否则客户端无法使用返回的 URL。
+
+## 上传与校验
+
+1. 客户端计算完整的 128 位十六进制 SHA-512。
+2. 调用 `POST /storage_service/upload` 获取预签名 PUT URL。
+3. 客户端直接向 RustFS 上传原始字节。
+4. 调用 `POST /storage_service/upload/verify`。
+5. Storage Service 从 RustFS 读取对象并重新计算 SHA-512；匹配后才把元数据标记为已验证。
+
+对象 key 当前为 `{hash前2位}/{完整hash}`。未验证文件不会被下载接口或内部存在性查询视为可用文件。完整请求格式见根目录的 [API 文档](../API_DOCUMENTATION.md)。
+
+## 验证与排障
 
 ```bash
+docker compose --profile storage ps
 docker logs rustfs
+docker logs storageService
+curl http://localhost:9000/minio/health/live
+curl http://localhost:8081/health
+curl http://localhost:8081/ready
 ```
 
-### 4. 访问 RustFS 控制台
+`/health` 只表示 Storage Service 进程存活；`/ready` 会检查 PostgreSQL 和 RustFS bucket。常见故障：
 
-启动后，可以通过以下地址访问 RustFS 控制台：
+- URL 返回 `localhost:9000`：配置 `RUSTFS_EXTERNAL_ENDPOINT_URL` 或外部 scheme/host/port。
+- 上传后一直未验证：确认客户端在 PUT 成功后调用了 `/upload/verify`，并检查对象内容是否与声明哈希一致。
+- 容器无法连接 RustFS：确认内部 endpoint 为 `http://rustfs:9000`，并检查两个服务是否位于同一 Compose network。
+- 客户端无法上传：除 Storage HTTP 端口外，还必须让客户端能够访问预签名 URL 对应的 RustFS S3 端口。
 
-- **本地访问**: http://localhost:9001
-- **默认账号**: `rustfsadmin` / `rustfsadmin`
-
-## 验证部署
-
-### 1. 检查 RustFS 健康状态
-
-```bash
-# 检查容器状态
-docker ps | grep rustfs
-
-# 检查健康检查状态
-docker inspect rustfs | grep -A 10 Health
-```
-
-### 2. 测试 S3 API
-
-使用 `mc` (MinIO Client) 测试：
-
-```bash
-# 安装 mc（如果未安装）
-# macOS: brew install minio/stable/mc
-# Linux: wget https://dl.min.io/client/mc/release/linux-amd64/mc
-
-# 配置 RustFS 别名
-mc alias set rustfs http://localhost:9000 rustfsadmin rustfsadmin
-
-# 创建存储桶
-mc mb rustfs/betterfly-files
-
-# 列出存储桶
-mc ls rustfs
-
-# 测试上传
-echo "test" > test.txt
-mc cp test.txt rustfs/betterfly-files/
-
-# 测试下载
-mc cp rustfs/betterfly-files/test.txt downloaded.txt
-```
-
-### 3. 使用 curl 测试
-
-```bash
-# 检查健康状态
-curl http://localhost:9000/health
-
-# 列出存储桶（需要签名，这里仅作示例）
-curl -X GET http://localhost:9000/
-```
-
-## 生产环境建议
-
-### 1. 修改默认密钥
-
-**重要**: 生产环境必须修改默认访问密钥！
-
-在 `.env` 文件中设置：
-
-```bash
-RUSTFS_ACCESS_KEY=your_strong_access_key_here
-RUSTFS_SECRET_KEY=your_strong_secret_key_here
-```
-
-### 2. 启用 TLS/HTTPS
-
-参考 [RustFS TLS 配置文档](https://docs.rustfs.com.cn/integration/tls/) 配置 HTTPS。
-
-### 3. 数据备份
-
-定期备份 `rustfs-data` 数据卷：
-
-```bash
-# 备份数据卷
-docker run --rm -v rustfs-data:/data -v $(pwd):/backup ubuntu tar czf /backup/rustfs-backup-$(date +%Y%m%d).tar.gz /data
-
-# 恢复数据卷
-docker run --rm -v rustfs-data:/data -v $(pwd):/backup ubuntu tar xzf /backup/rustfs-backup-YYYYMMDD.tar.gz -C /
-```
-
-### 4. 监控和日志
-
-- 使用 Prometheus 和 Grafana 监控 RustFS 性能
-- 配置日志轮转策略
-- 设置告警规则
-
-### 5. 多节点部署
-
-对于生产环境，建议使用多节点多盘（MNMD）部署模式，参考 [RustFS 多机多盘安装文档](https://docs.rustfs.com.cn/installation/multi-node-multi-disk/)。
-
-## 故障排查
-
-### 问题1: 容器无法启动
-
-```bash
-# 查看容器日志
-docker logs rustfs
-
-# 检查端口占用
-lsof -i :9000
-lsof -i :9001
-```
-
-### 问题2: 存储服务无法连接 RustFS
-
-1. 检查 RustFS 容器是否运行：
-   ```bash
-   docker ps | grep rustfs
-   ```
-
-2. 检查网络连接：
-   ```bash
-   docker exec storageService ping rustfs
-   ```
-
-3. 检查环境变量：
-   ```bash
-   docker exec storageService env | grep RUSTFS
-   ```
-
-### 问题3: 文件上传失败
-
-1. 检查存储桶是否存在（会自动创建）
-2. 检查访问密钥是否正确
-3. 查看存储服务日志：
-   ```bash
-   docker logs storageService
-   ```
-
-## 参考文档
-
-- [RustFS 官方文档](https://docs.rustfs.com.cn/)
-- [RustFS Docker 安装指南](https://docs.rustfs.com.cn/installation/docker/)
-- [RustFS Golang SDK](https://docs.rustfs.com.cn/developer/sdk/go.html)
-
+生产环境还应使用强凭据、TLS、持久卷备份和适当的对象存储高可用方案。

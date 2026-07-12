@@ -5,6 +5,7 @@ import (
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
+	"data_forwarding_service/internal/monitor"
 	"errors"
 	"strings"
 )
@@ -74,6 +75,9 @@ func handleInsertContact(fromID int64, message *pb.RequestMessage) error {
 	}
 	if payload.GetToInsertUserId() == fromID {
 		return errors.New("不能添加自己为好友")
+	}
+	if monitor.IsMonitorID(payload.GetToInsertUserId()) {
+		return handleMonitorAddContact(fromID)
 	}
 
 	currentContainerID := currentContainerTopic()
@@ -356,6 +360,9 @@ func handleDeleteContact(fromID int64, message *pb.RequestMessage) error {
 	if err := requireNonSelfID("to_delete_user_id", payload.GetToDeleteUserId(), fromID); err != nil {
 		return err
 	}
+	if monitor.IsMonitorID(payload.GetToDeleteUserId()) {
+		return handleMonitorDeleteContact(fromID)
+	}
 
 	currentContainerID := currentContainerTopic()
 
@@ -386,6 +393,12 @@ func handleUpdateContactAlias(fromID int64, message *pb.RequestMessage) error {
 	}
 	if err := requirePositiveID("target_user_id", payload.GetTargetUserId()); err != nil {
 		return err
+	}
+	if monitor.IsMonitorID(payload.GetTargetUserId()) {
+		if fromID != monitor.AdminUserID {
+			return sendMonitorWarning(fromID, "目标用户不存在")
+		}
+		return sendMonitorWarning(fromID, "Monitor 虚拟联系人不支持修改备注")
 	}
 
 	currentContainerID := currentContainerTopic()
@@ -418,6 +431,12 @@ func handleUpdateContactNotify(fromID int64, message *pb.RequestMessage) error {
 	}
 	if err := requirePositiveID("target_user_id", payload.GetTargetUserId()); err != nil {
 		return err
+	}
+	if monitor.IsMonitorID(payload.GetTargetUserId()) {
+		if fromID != monitor.AdminUserID {
+			return sendMonitorWarning(fromID, "目标用户不存在")
+		}
+		return sendMonitorWarning(fromID, "Monitor 虚拟联系人不发送普通消息通知")
 	}
 
 	currentContainerID := currentContainerTopic()

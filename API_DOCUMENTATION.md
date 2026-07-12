@@ -2,29 +2,31 @@
 
 本文档描述了 Betterfly2 当前 HTTP API 与内部接口。
 
-**文档版本**: 1.3
-**最后更新**: 2026-07-10
+**文档版本**: 1.4
+**最后更新**: 2026-07-12
 
 ## 目录
 
-1. [HTTP API（对外接口）](#http-api对外接口)
-2. [Kafka MQ API（对内接口）](#kafka-mq-api对内接口)
-3. [Protobuf 消息定义](#protobuf消息定义)
-4. [ABTest Service API](#abtest-service-api)
-5. [Call Service API](#call-service-api)
-6. [Push Service API](#push-service-api)
+1. [Push Service API](#push-service-api)
+2. [Call Service API](#call-service-api)
+3. [ABTest Service API](#abtest-service-api)
+4. [Storage HTTP API](#http-api对外接口)
+5. [Storage Kafka API](#kafka-mq-api对内接口)
+6. [Storage Protobuf 定义](#protobuf消息定义)
 
 ---
 
 ## Push Service API
 
-PushService 通过现有 `/ws` Protobuf 连接管理 PushKit VoIP token，并在被叫离线时由 CallService 自动请求 APNs。协议定义位于 `proto/push/push_interface.proto`。
+PushService 通过现有 `/ws` Protobuf 连接管理普通 APNs 和 PushKit VoIP token，并在普通消息发送或来电时请求 APNs。协议定义位于 `proto/push/push_interface.proto`。
 
-### 注册与删除 VoIP token
+### 注册与删除推送 token
 
 客户端登录后发送 `df_interface.RequestMessage.push_request.register_voip_token`，携带客户端稳定 `device_id`、`PKPushCredentials.token` 的小写十六进制字符串，以及真实的 `SANDBOX` 或 `PRODUCTION` 环境。服务端返回 `df_interface.ResponseMessage.push_event`。
 
 同一设备的 token 更新会替换旧记录；同一个 APNs token 登录到新用户时会转移到新用户，避免把来电推给前一个账号。客户端退出账号或 PushKit token 失效时发送 `push_request.unregister_voip_token`，携带 `device_id` 和对应环境。
+
+普通远程通知使用 `register_apns_token` 和 `unregister_apns_token`，token 来自 `didRegisterForRemoteNotificationsWithDeviceToken`。普通 APNs token 与 PushKit token 独立保存，不能混用。
 
 ### PushKit 与 CallKit 恢复流程
 
@@ -49,9 +51,15 @@ VoIP Push payload 示例:
 
 ### APNs 环境
 
-PushService 根据每条 token 的 `environment` 自动选择 sandbox 或 production endpoint，不使用全局环境开关。APNs provider topic 固定为 `com.Voltline.Betterfly2.voip`，私钥通过 `APNS_PRIVATE_KEY_BASE64` 或 `APNS_PRIVATE_KEY_PATH` 注入。
+PushService 根据每条 token 的 `environment` 自动选择 sandbox 或 production endpoint，不使用全局环境开关。VoIP topic 为 `com.Voltline.Betterfly2.voip`，普通通知 topic 为 `com.Voltline.Betterfly2`；私钥通过 `APNS_PRIVATE_KEY_BASE64` 或 `APNS_PRIVATE_KEY_PATH` 注入。
 
 PushService 健康检查为 `GET /health` 和 `GET /ready`，默认端口 `8086`，不需要暴露到公网。
+
+### 普通消息通知与调试后台
+
+普通消息请求通过校验后，DataForwarding Service 会以 best-effort 方式向 `push-service` topic 发布推送任务。PushService 根据数据库资料生成标题和正文：私聊使用发送者资料，群聊使用群资料；通知同时携带客户端 Notification Service Extension 所需的通信通知元数据。WebSocket 在线不会阻止 APNs 投递，因为同一账号可能还有其他离线设备；前台是否展示横幅由客户端决定。
+
+配置 `PUSH_ADMIN_TOKEN` 后可访问 `GET /push/admin`，并通过受保护的管理 API 调试普通通知、VoIP Push 和全量普通通知。未配置令牌时，页面和管理 API 均返回 `404`。完整说明见 [PushService 文档](services/pushService/README.md)。
 
 ---
 
@@ -192,7 +200,7 @@ GET /abtest/v1/client/config?device_id=device-001&platform=ios&app_version=1.2.0
 GET /abtest/admin
 ```
 
-管理 API 默认受 `ABTEST_ADMIN_TOKEN` 保护；本地未设置该环境变量时开放。
+管理页面和管理 API 只有在配置 `ABTEST_ADMIN_TOKEN` 后才启用；未配置时统一返回 `404`。API 请求使用 `Authorization: Bearer <ABTEST_ADMIN_TOKEN>` 或 `X-Admin-Token`。
 
 常用接口:
 
@@ -332,7 +340,7 @@ Content-Type: application/json
    - Body (raw JSON):
      ```json
      {
-       "file_hash": "abc123def456...",
+       "file_hash": "<128位十六进制SHA-512>",
        "file_size": 1024
      }
      ```
@@ -360,7 +368,7 @@ Content-Type: application/json
 **请求体** (JSON):
 ```json
 {
-  "file_hash": "sha512哈希值",
+  "file_hash": "<128位十六进制SHA-512>",
   "file_size": 12345
 }
 ```
@@ -406,7 +414,7 @@ Content-Type: application/json
 **请求体** (JSON):
 ```json
 {
-  "file_hash": "sha512哈希值"
+  "file_hash": "<128位十六进制SHA-512>"
 }
 ```
 
@@ -447,7 +455,7 @@ X-User-ID: <USER_ID>
 ```
 
 **Query参数**:
-- `file_hash` (必需): 文件的SHA512哈希值
+- `file_hash` (必需): 文件的 128 位十六进制 SHA-512；服务端会规范化为小写
 
 **响应** (JSON):
 
@@ -850,7 +858,7 @@ message DownloadFileResponse {
 
 ### 存储服务环境变量
 
-- `HTTP_PORT`: HTTP服务端口（默认: 8080）
+- `HTTP_PORT`: HTTP服务端口（进程默认 `8080`；当前 Docker Compose 默认设置为 `8081`）
 - `PGSQL_DSN`: PostgreSQL数据库连接字符串
 - `REDIS_ADDR`: Redis地址（默认: localhost:6379）
 - `KAFKA_BROKER`: Kafka broker地址（逗号分隔）
@@ -865,6 +873,8 @@ message DownloadFileResponse {
 - `RUSTFS_SECRET_ACCESS_KEY`: RustFS秘密访问密钥（必需）
 - `RUSTFS_ENDPOINT_URL`: RustFS端点URL（必需）
 - `RUSTFS_EXTERNAL_ENDPOINT_URL`: 客户端可直接访问的RustFS外部地址（可选，推荐在生产环境显式配置）
+- `RUSTFS_EXTERNAL_SCHEME`: 未设置完整外部地址时使用的协议，例如 `https`
+- `RUSTFS_EXTERNAL_HOST`: 未设置完整外部地址时使用的客户端可访问主机；缺省时从 HTTP 请求推导
 - `RUSTFS_EXTERNAL_PORT`: 未显式配置外部地址时，基于当前HTTP请求推导RustFS地址所使用的端口（默认: 9000）
 - `RUSTFS_BUCKET`: RustFS存储桶名称（默认: betterfly-files）
 

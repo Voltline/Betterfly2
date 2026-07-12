@@ -83,6 +83,9 @@ services:
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
+      MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
+      MONITOR_AVATAR: ${MONITOR_AVATAR:-}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
     ports:
@@ -106,6 +109,9 @@ services:
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
+      MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
+      MONITOR_AVATAR: ${MONITOR_AVATAR:-}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
     ports:

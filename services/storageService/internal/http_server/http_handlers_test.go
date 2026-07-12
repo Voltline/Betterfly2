@@ -14,17 +14,25 @@ import (
 	"time"
 )
 
+var (
+	knownFileHash    = strings.Repeat("a", sha512HexLength)
+	newFileHash      = strings.Repeat("b", sha512HexLength)
+	missingFileHash  = strings.Repeat("c", sha512HexLength)
+	verifiedFileHash = strings.Repeat("d", sha512HexLength)
+	pendingFileHash  = strings.Repeat("e", sha512HexLength)
+)
+
 func TestHandleUploadRequest_ReturnsExistsWhenVerifiedFileAlreadyPresent(t *testing.T) {
 	handler := &UploadHandler{
 		fileExists: func(fileHash string) (bool, error) {
-			if fileHash != "known-hash" {
+			if fileHash != knownFileHash {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			return true, nil
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"known-hash","file_size":123}`))
+	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+knownFileHash+`","file_size":123}`))
 	rec := httptest.NewRecorder()
 
 	handler.HandleUploadRequest(rec, req)
@@ -54,13 +62,13 @@ func TestHandleUploadRequest_CreatesPendingMetadataAndReturnsUploadURL(t *testin
 		fileExists: func(string) (bool, error) { return false, nil },
 		upsertPendingFileMetadata: func(fileHash string, fileSize int64, storagePath string) error {
 			calledPending = true
-			if fileHash != "new-hash" || fileSize != 456 || storagePath != "ne/new-hash" {
+			if fileHash != newFileHash || fileSize != 456 || storagePath != "bb/"+newFileHash {
 				t.Fatalf("unexpected pending metadata: hash=%s size=%d path=%s", fileHash, fileSize, storagePath)
 			}
 			return nil
 		},
 		getPresignedUploadURLFor: func(ctx context.Context, fileHash string, expiresIn time.Duration, endpoint string) (string, error) {
-			if fileHash != "new-hash" {
+			if fileHash != newFileHash {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			if expiresIn != time.Hour {
@@ -73,7 +81,7 @@ func TestHandleUploadRequest_CreatesPendingMetadataAndReturnsUploadURL(t *testin
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"new-hash","file_size":456}`))
+	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+newFileHash+`","file_size":456}`))
 	req.Host = "storage.example.com:8081"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
@@ -106,20 +114,130 @@ func TestHandleUploadRequest_CreatesPendingMetadataAndReturnsUploadURL(t *testin
 	}
 }
 
+func TestFileHandlersPropagateRequestCancellation(t *testing.T) {
+	t.Run("upload URL", func(t *testing.T) {
+		seenCanceled := false
+		handler := &UploadHandler{
+			fileExists:                func(string) (bool, error) { return false, nil },
+			upsertPendingFileMetadata: func(string, int64, string) error { return nil },
+			getPresignedUploadURLFor: func(ctx context.Context, _ string, _ time.Duration, _ string) (string, error) {
+				seenCanceled = ctx.Err() == context.Canceled
+				return "", ctx.Err()
+			},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+newFileHash+`","file_size":10}`)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		handler.HandleUploadRequest(rec, req)
+		if !seenCanceled || rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request cancellation was not propagated: seen=%v status=%d", seenCanceled, rec.Code)
+		}
+	})
+
+	t.Run("upload verification", func(t *testing.T) {
+		seenCanceled := false
+		handler := &UploadHandler{fileExistsInStorage: func(ctx context.Context, _ string) (bool, error) {
+			seenCanceled = ctx.Err() == context.Canceled
+			return false, ctx.Err()
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"`+newFileHash+`"}`)).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		handler.HandleVerifyUpload(rec, req)
+		if !seenCanceled || rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request cancellation was not propagated: seen=%v status=%d", seenCanceled, rec.Code)
+		}
+	})
+
+	t.Run("download", func(t *testing.T) {
+		seenCanceled := false
+		handler := &DownloadHandler{
+			getFileMetadata: func(string) (*db.FileMetadata, error) {
+				return &db.FileMetadata{IsVerified: true}, nil
+			},
+			fileExistsInStorage: func(ctx context.Context, _ string) (bool, error) {
+				seenCanceled = ctx.Err() == context.Canceled
+				return false, ctx.Err()
+			},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash="+newFileHash, nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		handler.HandleDownloadRequest(rec, req)
+		if !seenCanceled || rec.Code != http.StatusInternalServerError {
+			t.Fatalf("request cancellation was not propagated: seen=%v status=%d", seenCanceled, rec.Code)
+		}
+	})
+}
+
+func TestFileHandlersRejectMalformedSHA512BeforeStorageAccess(t *testing.T) {
+	invalidHashes := []string{"", "short", "../escape", strings.Repeat("g", sha512HexLength), strings.Repeat("a", sha512HexLength+1)}
+	for _, fileHash := range invalidHashes {
+		t.Run(fileHash, func(t *testing.T) {
+			storageCalled := false
+			upload := &UploadHandler{fileExists: func(string) (bool, error) {
+				storageCalled = true
+				return false, nil
+			}}
+			uploadRequest := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+fileHash+`","file_size":10}`))
+			uploadResponse := httptest.NewRecorder()
+			upload.HandleUploadRequest(uploadResponse, uploadRequest)
+			if uploadResponse.Code != http.StatusBadRequest || storageCalled {
+				t.Fatalf("invalid hash reached storage: status=%d called=%v", uploadResponse.Code, storageCalled)
+			}
+
+			download := &DownloadHandler{getFileMetadata: func(string) (*db.FileMetadata, error) {
+				storageCalled = true
+				return nil, nil
+			}}
+			downloadRequest := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash="+fileHash, nil)
+			downloadResponse := httptest.NewRecorder()
+			download.HandleDownloadRequest(downloadResponse, downloadRequest)
+			if downloadResponse.Code != http.StatusBadRequest || storageCalled {
+				t.Fatalf("invalid hash reached metadata lookup: status=%d called=%v", downloadResponse.Code, storageCalled)
+			}
+		})
+	}
+}
+
+func TestNormalizeFileHashAcceptsUppercaseAndCanonicalizesIt(t *testing.T) {
+	upper := strings.Repeat("AB", sha512HexLength/2)
+	got, ok := normalizeFileHash(upper)
+	if !ok || got != strings.ToLower(upper) {
+		t.Fatalf("valid uppercase SHA-512 was not normalized: ok=%v hash=%q", ok, got)
+	}
+}
+
+func TestUploadRejectsOversizedRequestBody(t *testing.T) {
+	handler := &UploadHandler{fileExists: func(string) (bool, error) {
+		t.Fatal("oversized request must not reach storage")
+		return false, nil
+	}}
+	request := httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(strings.Repeat("x", maxStorageRequestBodyBytes+1)))
+	response := httptest.NewRecorder()
+	handler.HandleUploadRequest(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("oversized request was accepted: status=%d", response.Code)
+	}
+}
+
 func TestHandleVerifyUpload_RemovesPendingMetadataWhenObjectMissing(t *testing.T) {
 	deleted := false
 	handler := &UploadHandler{
 		fileExistsInStorage: func(context.Context, string) (bool, error) { return false, nil },
 		deleteFileMetadata: func(fileHash string) error {
 			deleted = true
-			if fileHash != "missing-hash" {
+			if fileHash != missingFileHash {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			return nil
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"missing-hash"}`))
+	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"`+missingFileHash+`"}`))
 	rec := httptest.NewRecorder()
 
 	handler.HandleVerifyUpload(rec, req)
@@ -158,21 +276,21 @@ func TestHandleVerifyUpload_MarksFileVerifiedOnSuccess(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			if string(data) != "payload" || expectedHash != "verified-hash" {
+			if string(data) != "payload" || expectedHash != verifiedFileHash {
 				t.Fatalf("unexpected verify payload: data=%q hash=%s", string(data), expectedHash)
 			}
 			return true, nil
 		},
 		updateFileMetadata: func(fileHash string, fileSize int64, storagePath string) error {
 			updated = true
-			if fileHash != "verified-hash" || fileSize != int64(len("payload")) || storagePath != "ve/verified-hash" {
+			if fileHash != verifiedFileHash || fileSize != int64(len("payload")) || storagePath != "dd/"+verifiedFileHash {
 				t.Fatalf("unexpected metadata update: hash=%s size=%d path=%s", fileHash, fileSize, storagePath)
 			}
 			return nil
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"verified-hash"}`))
+	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"`+verifiedFileHash+`"}`))
 	rec := httptest.NewRecorder()
 
 	handler.HandleVerifyUpload(rec, req)
@@ -206,7 +324,7 @@ func TestHandleDownloadRequest_RejectsUnverifiedFile(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash=pending-hash", nil)
+	req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash="+pendingFileHash, nil)
 	rec := httptest.NewRecorder()
 
 	handler.HandleDownloadRequest(rec, req)
@@ -241,7 +359,7 @@ func TestHandleDownloadRequest_ReturnsDownloadURLForVerifiedFile(t *testing.T) {
 		},
 		fileExistsInStorage: func(context.Context, string) (bool, error) { return true, nil },
 		getPresignedDownloadFor: func(ctx context.Context, fileHash string, expiresIn time.Duration, endpoint string) (string, error) {
-			if fileHash != "verified-hash" {
+			if fileHash != verifiedFileHash {
 				t.Fatalf("unexpected file hash: %s", fileHash)
 			}
 			if expiresIn != time.Hour {
@@ -254,7 +372,7 @@ func TestHandleDownloadRequest_ReturnsDownloadURLForVerifiedFile(t *testing.T) {
 		},
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash=verified-hash", nil)
+	req := httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash="+verifiedFileHash, nil)
 	req.Host = "storage.example.com:8081"
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()

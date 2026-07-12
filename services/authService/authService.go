@@ -24,7 +24,7 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 	jwt := req.GetJwt()
 	result := pb.AuthResult_OK
 
-	logger.Sugar().Debugf("RPC-LoginReq { account:%s, jwt:%s }", account, jwt)
+	logger.Sugar().Debugf("RPC-LoginReq { account:%s, has_jwt:%t }", account, jwt != "")
 	user := &db.User{}
 	err := error(nil)
 
@@ -69,19 +69,28 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 		logger.Sugar().Infoln(userBriefStr(user), "login success with password")
 
 	} else { // jwt验证
-		_, err = utils.ValidateJWT(jwt, user.JwtKey)
-		if err != nil {
+		if len(user.JwtKey) == 0 {
 			result = pb.AuthResult_JWT_ERROR
 			jwt = ""
-			logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", err)
+			logger.Sugar().Warnln(userBriefStr(user), "rejected jwt login without a user signing key")
+			goto RETURN
+		}
+		claim, validateErr := utils.ValidateJWT(jwt, user.JwtKey)
+		if validateErr != nil || claim.ID != user.ID || claim.Account != user.Account {
+			result = pb.AuthResult_JWT_ERROR
+			jwt = ""
+			logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", validateErr)
+			goto RETURN
 		}
 		newJwt, err := utils.GenerateJWT(user)
 		if err != nil {
 			logger.Sugar().Errorln(userBriefStr(user), "failed to generate jwt key:", err)
+			result = pb.AuthResult_SERVICE_ERROR
+			jwt = ""
 		} else {
 			jwt = newJwt
+			logger.Sugar().Infoln(userBriefStr(user), "login success with jwt")
 		}
-		logger.Sugar().Infoln(userBriefStr(user), "login success with jwt")
 	}
 
 RETURN:
@@ -169,7 +178,7 @@ func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.Chec
 	account := ""
 	var claim *utils.BetterflyClaims
 
-	logger.Sugar().Debugf("RPC-CheckJwtReq { userID:%s, jwt:%s }", userID, jwt)
+	logger.Sugar().Debugf("RPC-CheckJwtReq { userID:%d, has_jwt:%t }", userID, jwt != "")
 
 	// 获取用户
 	user, err := db.GetUserById(userID)

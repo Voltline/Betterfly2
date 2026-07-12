@@ -2,14 +2,19 @@ package http_server
 
 import (
 	"abTestService/internal/abtest"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 )
+
+const maxJSONBodyBytes = 64 << 10
 
 //go:embed admin.html
 var adminHTML string
@@ -38,7 +43,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/abtest/admin/", s.adminPanel)
 	mux.HandleFunc("/abtest/admin/api/experiments", s.requireAdmin(s.experiments))
 	mux.HandleFunc("/abtest/admin/api/experiments/", s.requireAdmin(s.experimentByID))
-	return mux
+	return securityHeaders(mux)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -78,7 +83,7 @@ func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req abtest.EvaluateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
@@ -101,7 +106,7 @@ func (s *Server) experiments(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, experiments)
 	case http.MethodPost:
 		var req abtest.CreateExperimentRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -138,7 +143,7 @@ func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, experiment)
 	case http.MethodPut:
 		var req abtest.UpdateExperimentRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -207,7 +212,7 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 			return
 		}
 		var req abtest.GroupInput
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -223,7 +228,7 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 			return
 		}
 		var req abtest.OverrideInput
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSONBody(w, r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
@@ -239,7 +244,7 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 }
 
 func (s *Server) adminPanel(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/abtest/admin" && r.URL.Path != "/abtest/admin/" {
+	if s.adminToken == "" || r.URL.Path != "/abtest/admin" && r.URL.Path != "/abtest/admin/" {
 		http.NotFound(w, r)
 		return
 	}
@@ -251,6 +256,10 @@ func (s *Server) adminPanel(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.adminToken == "" {
+			http.NotFound(w, r)
+			return
+		}
 		if !s.isAdminAuthorized(r) {
 			writeError(w, http.StatusUnauthorized, "admin token required")
 			return
@@ -261,13 +270,13 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) isAdminAuthorized(r *http.Request) bool {
 	if s.adminToken == "" {
-		return true
+		return false
 	}
 	token := strings.TrimSpace(r.Header.Get("X-Admin-Token"))
-	if token == "" {
-		token = strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
+	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
+		token = strings.TrimSpace(authorization[7:])
 	}
-	return token == s.adminToken
+	return len(token) == len(s.adminToken) && subtle.ConstantTimeCompare([]byte(token), []byte(s.adminToken)) == 1
 }
 
 func parseExperimentPath(path string) (int64, string, int64, string, bool) {
@@ -314,9 +323,31 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
-func adminTokenHint(token string) string {
-	if token == "" {
-		return "当前未配置 ABTEST_ADMIN_TOKEN，管理接口处于本地开放模式。"
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, value interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(value); err != nil {
+		return err
 	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func adminTokenHint(token string) string {
 	return "管理接口需要 Header: Authorization: Bearer <ABTEST_ADMIN_TOKEN> 或 X-Admin-Token。"
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'")
+		next.ServeHTTP(w, r)
+	})
 }

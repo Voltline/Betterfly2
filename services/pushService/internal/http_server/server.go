@@ -45,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /push/admin/api/audits", s.requireAdmin(s.audits))
 	mux.HandleFunc("POST /push/admin/api/send/message", s.requireAdmin(s.sendMessage))
 	mux.HandleFunc("POST /push/admin/api/send/voip", s.requireAdmin(s.sendVoIP))
+	mux.HandleFunc("POST /push/admin/api/send/broadcast", s.requireAdmin(s.sendBroadcast))
 	return securityHeaders(mux)
 }
 
@@ -136,6 +137,22 @@ func (s *Server) sendVoIP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	report, err := s.service.AdminSendVoIP(ctx, request, operatorName(r))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (s *Server) sendBroadcast(w http.ResponseWriter, r *http.Request) {
+	var request pushservice.AdminBroadcastRequest
+	if err := decodeAdminJSON(w, r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	report, err := s.service.AdminSendBroadcast(ctx, request, operatorName(r))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

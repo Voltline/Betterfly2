@@ -309,3 +309,48 @@ func TestHandleQueryFriendListMapsDatabaseContacts(t *testing.T) {
 		t.Fatalf("contact mapping mismatch: %+v", contact)
 	}
 }
+
+func TestHandleQueryGroupMembersMapsActiveMembers(t *testing.T) {
+	mock := useMockDB(t)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
+		WithArgs(int64(3001), int64(1001)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery(`SELECT group_members\.user_id, users\.account, users\.name, users\.avatar, group_members\.role, group_members\.update_time FROM "group_members" JOIN users ON users\.id = group_members\.user_id WHERE group_members\.group_id = \$1 ORDER BY group_members\.user_id ASC`).
+		WithArgs(int64(3001)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "account", "name", "avatar", "role", "update_time"}).
+			AddRow(int64(1001), "alice", "Alice", "avatar-a", "owner", "2026-07-12T10:00:00Z").
+			AddRow(int64(1002), "bob", "Bob", "avatar-b", "member", "2026-07-12T10:01:00Z"))
+
+	response, err := (&FriendHandler{}).handleQueryGroupMembers(
+		&friend.RequestMessage{TargetUserId: 1001},
+		&friend.QueryGroupMembers{RequestUserId: 1001, GroupId: 3001},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := response.GetGroupMemberListRsp().GetMembers()
+	if response.GetResult() != friend.FriendResult_FRIEND_OK || len(members) != 2 {
+		t.Fatalf("unexpected member list response: %+v", response)
+	}
+	if members[0].GetUserId() != 1001 || members[0].GetRole() != "owner" || members[1].GetName() != "Bob" || members[1].GetAvatar() != "avatar-b" {
+		t.Fatalf("group members were mapped incorrectly: %+v", members)
+	}
+}
+
+func TestHandleQueryGroupMembersRejectsNonMember(t *testing.T) {
+	mock := useMockDB(t)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
+		WithArgs(int64(3001), int64(2001)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	response, err := (&FriendHandler{}).handleQueryGroupMembers(
+		&friend.RequestMessage{TargetUserId: 2001},
+		&friend.QueryGroupMembers{RequestUserId: 2001, GroupId: 3001},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetResult() != friend.FriendResult_RECORD_NOT_EXIST || response.GetGroupMemberListRsp() != nil {
+		t.Fatalf("non-member received group membership data: %+v", response)
+	}
+}

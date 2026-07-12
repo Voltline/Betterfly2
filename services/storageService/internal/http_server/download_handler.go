@@ -43,7 +43,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 	fileHash := r.URL.Query().Get("file_hash")
 	if fileHash == "" {
 		// 尝试从请求体获取
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStorageRequestBodyBytes))
 		if err == nil && len(body) > 0 {
 			var req storage.DownloadFileRequest
 			// 尝试解析为JSON
@@ -58,8 +58,9 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	if fileHash == "" {
-		http.Error(w, "file_hash is required", http.StatusBadRequest)
+	fileHash, validHash := normalizeFileHash(fileHash)
+	if !validHash {
+		http.Error(w, "file_hash must be a SHA-512 hex digest", http.StatusBadRequest)
 		return
 	}
 
@@ -94,7 +95,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 	}
 
 	// 检查文件是否存在于RustFS
-	ctx := context.Background()
+	ctx := r.Context()
 	exists, err := h.fileExistsInStorage(ctx, fileHash)
 	if err != nil {
 		sugar.Errorf("检查文件是否存在失败: %v", err)

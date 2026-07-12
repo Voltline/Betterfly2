@@ -42,6 +42,18 @@ func (s *httpTestStore) MessagePresentation(context.Context, int64, int64, bool)
 func (s *httpTestStore) FindTokens(context.Context, pushservice.TokenFilter) ([]db.PushDeviceToken, error) {
 	return s.tokens, nil
 }
+func (s *httpTestStore) BroadcastAudience(context.Context, string) (int64, int64, error) {
+	return int64(len(s.tokens)), int64(len(s.tokens)), nil
+}
+func (s *httpTestStore) ListBroadcastTokens(_ context.Context, _ string, afterID, throughID int64, limit int) ([]db.PushDeviceToken, error) {
+	var result []db.PushDeviceToken
+	for _, token := range s.tokens {
+		if token.ID > afterID && token.ID <= throughID && token.IsActive && token.PushType == pushservice.PushTypeAPNs {
+			result = append(result, token)
+		}
+	}
+	return result, nil
+}
 func (s *httpTestStore) GetToken(_ context.Context, id int64) (db.PushDeviceToken, error) {
 	for _, token := range s.tokens {
 		if token.ID == id {
@@ -139,5 +151,21 @@ func TestAdminMessageEndpointRejectsUnknownFields(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminBroadcastEndpointSendsAndAudits(t *testing.T) {
+	server, store := newHTTPTestServer("secret")
+	body := `{"campaign_id":"launch","title":"新功能上线","body":"现在就来体验","deep_link":"betterfly://campaign/launch"}`
+	request := httptest.NewRequest(http.MethodPost, "/push/admin/api/send/broadcast", strings.NewReader(body))
+	request.Header.Set("X-Admin-Token", "secret")
+	request.Header.Set("X-Admin-Operator", "marketing")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"kind":"broadcast"`) || !strings.Contains(response.Body.String(), `"accepted":1`) {
+		t.Fatalf("unexpected broadcast response: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if len(store.audits) != 1 || store.audits[0].Kind != "broadcast" {
+		t.Fatalf("broadcast audit not stored: %+v", store.audits)
 	}
 }

@@ -9,9 +9,12 @@ import (
 	"data_forwarding_service/internal/grpcClient"
 	"errors"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 )
+
+var getAuthClient = grpcClient.GetAuthClient
 
 type dfRequestContext struct {
 	fromID  int64
@@ -85,7 +88,7 @@ func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64,
 			},
 		},
 	}
-	rpcClient, err := grpcClient.GetAuthClient()
+	rpcClient, err := getAuthClient()
 	if err != nil {
 		return errRsp, -1, err
 	}
@@ -100,11 +103,16 @@ func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64,
 		authLoginReq.Account = clientLoginReq.GetAccount()
 		authLoginReq.Jwt = jwt
 	}
-	authServiceRsp, err := rpcClient.Login(context.Background(), authLoginReq)
-	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	authServiceRsp, err := rpcClient.Login(ctx, authLoginReq)
 	if err != nil {
 		return errRsp, -1, err
 	}
+	if authServiceRsp == nil {
+		return errRsp, -1, errors.New("auth service returned an empty login response")
+	}
+	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
 	loginRsp := &pb.LoginRsp{}
 	var userID int64 = -1
 	switch authServiceRsp.Result {
@@ -130,7 +138,7 @@ func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64,
 }
 
 func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error) {
-	rpcClient, err := grpcClient.GetAuthClient()
+	rpcClient, err := getAuthClient()
 	errRsp := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Signup{
 			Signup: &pb.SignupRsp{
@@ -147,11 +155,16 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 		Password: clientSignupReq.GetPassword(),
 		UserName: clientSignupReq.GetUserName(),
 	}
-	authServiceRsp, err := rpcClient.Signup(context.Background(), authSignupReq)
-	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	authServiceRsp, err := rpcClient.Signup(ctx, authSignupReq)
 	if err != nil {
 		return errRsp, err
 	}
+	if authServiceRsp == nil {
+		return errRsp, errors.New("auth service returned an empty signup response")
+	}
+	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
 	signupRsp := &pb.SignupRsp{}
 	switch authServiceRsp.Result {
 	case auth.AuthResult_OK:

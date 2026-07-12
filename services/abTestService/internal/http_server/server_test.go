@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -129,6 +130,7 @@ func TestAdminAuthorizationAndExperimentRoutes(t *testing.T) {
 func TestAdminExperimentActions(t *testing.T) {
 	store := &recordingStore{experiments: []abtest.Experiment{{ID: 1, ExperimentKey: "feed", Name: "Feed"}}}
 	server := NewServer(abtest.NewService(store))
+	server.adminToken = "secret"
 	handler := server.Routes()
 
 	actions := []struct {
@@ -146,7 +148,7 @@ func TestAdminExperimentActions(t *testing.T) {
 		{path: "/abtest/admin/api/experiments/1/groups/9/push_full", wantStatus: http.StatusOK},
 	}
 	for _, action := range actions {
-		rec := performRequest(handler, http.MethodPost, action.path, action.body, "")
+		rec := performRequest(handler, http.MethodPost, action.path, action.body, "secret")
 		if rec.Code != action.wantStatus {
 			t.Fatalf("action %s returned %d body=%s", action.path, rec.Code, rec.Body.String())
 		}
@@ -156,6 +158,43 @@ func TestAdminExperimentActions(t *testing.T) {
 	}
 	if len(store.groups) != 1 || len(store.overrides) != 1 || store.lastGroupID != 9 {
 		t.Fatalf("actions were not routed correctly: groups=%+v overrides=%+v pushed=%d", store.groups, store.overrides, store.lastGroupID)
+	}
+}
+
+func TestAdminIsDisabledWithoutConfiguredToken(t *testing.T) {
+	server := NewServer(abtest.NewService(&recordingStore{}))
+	server.adminToken = ""
+	handler := server.Routes()
+
+	if rec := performRequest(handler, http.MethodGet, "/abtest/admin", "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("admin page must fail closed without token, got %d", rec.Code)
+	}
+	if rec := performRequest(handler, http.MethodGet, "/abtest/admin/api/experiments", "", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("admin API must fail closed without token, got %d", rec.Code)
+	}
+}
+
+func TestSecurityHeadersAreApplied(t *testing.T) {
+	server := NewServer(abtest.NewService(&recordingStore{}))
+	handler := server.Routes()
+	rec := performRequest(handler, http.MethodGet, "/health", "", "")
+	if rec.Header().Get("X-Frame-Options") != "DENY" || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("security headers missing: %v", rec.Header())
+	}
+}
+
+func TestJSONEndpointsRejectTrailingAndOversizedBodies(t *testing.T) {
+	server := NewServer(abtest.NewService(&recordingStore{}))
+	handler := server.Routes()
+
+	trailing := performRequest(handler, http.MethodPost, "/abtest/v1/evaluate", `{"subject_type":"device","subject_id":"phone"} {}`, "")
+	if trailing.Code != http.StatusBadRequest {
+		t.Fatalf("trailing JSON value was accepted: status=%d body=%s", trailing.Code, trailing.Body.String())
+	}
+	oversizedBody := `{"subject_type":"device","subject_id":"` + strings.Repeat("x", maxJSONBodyBytes) + `"}`
+	oversized := performRequest(handler, http.MethodPost, "/abtest/v1/evaluate", oversizedBody, "")
+	if oversized.Code != http.StatusBadRequest {
+		t.Fatalf("oversized JSON body was accepted: status=%d", oversized.Code)
 	}
 }
 

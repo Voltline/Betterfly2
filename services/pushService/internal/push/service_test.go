@@ -40,6 +40,34 @@ func (s *memoryStore) FindTokens(_ context.Context, filter TokenFilter) ([]db.Pu
 	return result, nil
 }
 
+func (s *memoryStore) BroadcastAudience(_ context.Context, environment string) (int64, int64, error) {
+	var count, maxID int64
+	for _, token := range s.tokens {
+		if token.PushType != PushTypeAPNs || !token.IsActive || environment != "" && token.Environment != environment {
+			continue
+		}
+		count++
+		if token.ID > maxID {
+			maxID = token.ID
+		}
+	}
+	return count, maxID, nil
+}
+
+func (s *memoryStore) ListBroadcastTokens(_ context.Context, environment string, afterID, throughID int64, limit int) ([]db.PushDeviceToken, error) {
+	var result []db.PushDeviceToken
+	for _, token := range s.tokens {
+		if token.ID <= afterID || token.ID > throughID || token.PushType != PushTypeAPNs || !token.IsActive || environment != "" && token.Environment != environment {
+			continue
+		}
+		result = append(result, token)
+		if len(result) == limit {
+			break
+		}
+	}
+	return result, nil
+}
+
 func (s *memoryStore) GetToken(_ context.Context, id int64) (db.PushDeviceToken, error) {
 	for _, token := range s.tokens {
 		if token.ID == id {
@@ -343,6 +371,77 @@ func TestAdminVoIPCanTargetRegisteredToken(t *testing.T) {
 	}
 	if report.Accepted != 1 || len(sender.sent) != 1 || sender.sent[0].notification.CallID == "" || sender.sent[0].notification.Kind != NotificationVoIP {
 		t.Fatalf("unexpected VoIP debug push: report=%+v sent=%+v", report, sender.sent)
+	}
+}
+
+func TestAdminBroadcastSendsAllMatchingAPNsTokens(t *testing.T) {
+	store := &memoryStore{tokens: []db.PushDeviceToken{
+		{ID: 1, UserID: 2, DeviceID: "sandbox-phone", Token: "token-1", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true},
+		{ID: 2, UserID: 3, DeviceID: "production-phone", Token: "token-2", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+		{ID: 3, UserID: 4, DeviceID: "voip-phone", Token: "token-3", Environment: "sandbox", PushType: PushTypeVoIP, IsActive: true},
+		{ID: 4, UserID: 5, DeviceID: "inactive-phone", Token: "token-4", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: false},
+	}}
+	sender := &memorySender{}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	report, err := service.AdminSendBroadcast(context.Background(), AdminBroadcastRequest{
+		CampaignID: "summer-2026", Title: "夏日活动", Body: "打开 Betterfly 查看详情", DeepLink: "betterfly://campaign/summer-2026",
+		CustomData: map[string]any{"placement": "home"},
+	}, "marketing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Matched != 2 || report.Accepted != 2 || report.Failed != 0 || len(sender.sent) != 2 {
+		t.Fatalf("unexpected broadcast report: %+v sent=%d", report, len(sender.sent))
+	}
+	for _, sent := range sender.sent {
+		if sent.notification.Kind != NotificationBroadcast || sent.notification.CampaignID != "summer-2026" || sent.notification.SenderUserID != 0 || sent.notification.ConversationID != 0 {
+			t.Fatalf("broadcast was encoded as a chat notification: %+v", sent.notification)
+		}
+	}
+	if len(store.audits) != 1 || store.audits[0].TargetSummary != "broadcast:all:summer-2026" {
+		t.Fatalf("unexpected broadcast audit: %+v", store.audits)
+	}
+}
+
+func TestAdminBroadcastDryRunAndEnvironmentFilter(t *testing.T) {
+	store := &memoryStore{tokens: []db.PushDeviceToken{
+		{ID: 1, UserID: 2, Token: "token-1", Environment: "sandbox", PushType: PushTypeAPNs, IsActive: true},
+		{ID: 2, UserID: 3, Token: "token-2", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+	}}
+	sender := &memorySender{}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	report, err := service.AdminSendBroadcast(context.Background(), AdminBroadcastRequest{Title: "预览", Body: "不会发送", Environment: "sandbox", DryRun: true}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Matched != 1 || report.Accepted != 0 || report.CampaignID == "" || len(sender.sent) != 0 {
+		t.Fatalf("unexpected dry-run report: %+v sent=%d", report, len(sender.sent))
+	}
+	if len(store.audits) != 1 || store.audits[0].Status != "dry_run" {
+		t.Fatalf("dry-run audit was not recorded correctly: %+v", store.audits)
+	}
+}
+
+func TestAdminBroadcastPaginatesAndBoundsDetailedResults(t *testing.T) {
+	tokens := make([]db.PushDeviceToken, 0, broadcastPageSize+5)
+	for index := 1; index <= broadcastPageSize+5; index++ {
+		tokens = append(tokens, db.PushDeviceToken{
+			ID: int64(index), UserID: int64(index), DeviceID: "device", Token: "token",
+			Environment: "production", PushType: PushTypeAPNs, IsActive: true,
+		})
+	}
+	store := &memoryStore{tokens: tokens}
+	sender := &memorySender{}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	report, err := service.AdminSendBroadcast(context.Background(), AdminBroadcastRequest{CampaignID: "all-users", Title: "通知", Body: "正文"}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Matched != len(tokens) || report.Accepted != len(tokens) || len(sender.sent) != len(tokens) {
+		t.Fatalf("pagination skipped recipients: report=%+v sent=%d", report, len(sender.sent))
+	}
+	if len(report.Results) != maxBroadcastAuditResults || !report.ResultsTruncated {
+		t.Fatalf("broadcast result details were not bounded: results=%d truncated=%v", len(report.Results), report.ResultsTruncated)
 	}
 }
 

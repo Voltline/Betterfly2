@@ -15,7 +15,11 @@ import (
 	"Betterfly2/shared/logger"
 )
 
-const maxAdminTargets = 50
+const (
+	maxAdminTargets          = 50
+	broadcastPageSize        = 200
+	maxBroadcastAuditResults = 100
+)
 
 type AdminTokenView struct {
 	ID          int64  `json:"id"`
@@ -53,6 +57,16 @@ type AdminVoIPRequest struct {
 	ExpiresIn    int    `json:"expires_in_seconds"`
 }
 
+type AdminBroadcastRequest struct {
+	CampaignID  string         `json:"campaign_id"`
+	Title       string         `json:"title"`
+	Body        string         `json:"body"`
+	DeepLink    string         `json:"deep_link"`
+	CustomData  map[string]any `json:"custom_data"`
+	Environment string         `json:"environment"`
+	DryRun      bool           `json:"dry_run"`
+}
+
 type DeliveryResult struct {
 	TokenID     int64  `json:"token_id"`
 	UserID      int64  `json:"user_id"`
@@ -66,12 +80,15 @@ type DeliveryResult struct {
 }
 
 type DeliveryReport struct {
-	Kind      string           `json:"kind"`
-	Accepted  int              `json:"accepted"`
-	Failed    int              `json:"failed"`
-	Skipped   int              `json:"skipped"`
-	Results   []DeliveryResult `json:"results"`
-	Timestamp string           `json:"timestamp"`
+	Kind             string           `json:"kind"`
+	CampaignID       string           `json:"campaign_id,omitempty"`
+	Matched          int              `json:"matched"`
+	Accepted         int              `json:"accepted"`
+	Failed           int              `json:"failed"`
+	Skipped          int              `json:"skipped"`
+	Results          []DeliveryResult `json:"results"`
+	ResultsTruncated bool             `json:"results_truncated,omitempty"`
+	Timestamp        string           `json:"timestamp"`
 }
 
 type AdminAuditView struct {
@@ -210,6 +227,83 @@ func (s *Service) AdminSendVoIP(ctx context.Context, request AdminVoIPRequest, o
 	return report, nil
 }
 
+func (s *Service) AdminSendBroadcast(ctx context.Context, request AdminBroadcastRequest, operator string) (DeliveryReport, error) {
+	if err := validateAdminBroadcast(request); err != nil {
+		return DeliveryReport{}, err
+	}
+	request.CampaignID = strings.TrimSpace(request.CampaignID)
+	if request.CampaignID == "" {
+		request.CampaignID = newBroadcastID(s.now())
+	}
+	request.Environment = strings.ToLower(strings.TrimSpace(request.Environment))
+	count, maxID, err := s.store.BroadcastAudience(ctx, request.Environment)
+	if err != nil {
+		return DeliveryReport{}, err
+	}
+	report := DeliveryReport{
+		Kind: "broadcast", CampaignID: request.CampaignID, Matched: int(count),
+		Results: make([]DeliveryResult, 0), Timestamp: s.now().UTC().Format(time.RFC3339Nano),
+	}
+	if request.DryRun {
+		s.auditAdminDelivery(ctx, operator, broadcastTargetSummary(request, true), report)
+		return report, nil
+	}
+	if count == 0 {
+		return DeliveryReport{}, fmt.Errorf("no active compatible APNs token found")
+	}
+	now := s.now().UTC()
+	var afterID int64
+	for afterID < maxID {
+		tokens, listErr := s.store.ListBroadcastTokens(ctx, request.Environment, afterID, maxID, broadcastPageSize)
+		if listErr != nil {
+			return report, listErr
+		}
+		if len(tokens) == 0 {
+			break
+		}
+		for _, token := range tokens {
+			afterID = token.ID
+			result := s.sendBroadcast(ctx, token, request, now)
+			if result.Accepted {
+				report.Accepted++
+			} else {
+				report.Failed++
+			}
+			if len(report.Results) < maxBroadcastAuditResults {
+				report.Results = append(report.Results, result)
+			} else {
+				report.ResultsTruncated = true
+			}
+			if err := ctx.Err(); err != nil {
+				return report, err
+			}
+		}
+	}
+	s.auditAdminDelivery(ctx, operator, broadcastTargetSummary(request, false), report)
+	return report, nil
+}
+
+func (s *Service) sendBroadcast(ctx context.Context, token db.PushDeviceToken, request AdminBroadcastRequest, now time.Time) DeliveryResult {
+	result := DeliveryResult{TokenID: token.ID, UserID: token.UserID, DeviceID: token.DeviceID, TokenMasked: maskToken(token.Token), Environment: token.Environment, PushType: token.PushType}
+	sent, err := s.sender.Send(ctx, Notification{
+		Kind: NotificationBroadcast, Token: token.Token, Environment: parseEnvironment(token.Environment),
+		TargetUserID: token.UserID, ExpiresAt: now.Add(24 * time.Hour), SentAt: now,
+		Title: strings.TrimSpace(request.Title), Body: strings.TrimSpace(request.Body),
+		CampaignID: request.CampaignID, DeepLink: strings.TrimSpace(request.DeepLink), CustomData: request.CustomData,
+	})
+	if err == nil {
+		result.Accepted = true
+		result.APNSID = sent.APNSID
+		return result
+	}
+	result.Error = err.Error()
+	var apnsErr *APNSError
+	if errors.As(err, &apnsErr) && apnsErr.InvalidatesToken() {
+		_ = s.store.DeactivateToken(ctx, token.ID)
+	}
+	return result
+}
+
 func (s *Service) adminMessageTokens(ctx context.Context, request AdminMessageRequest) ([]db.PushDeviceToken, int, error) {
 	if request.TokenID > 0 {
 		tokens, err := s.adminTargetTokens(ctx, 0, request.TokenID, PushTypeAPNs, request.Environment)
@@ -274,7 +368,7 @@ func (s *Service) adminTargetTokens(ctx context.Context, userID, tokenID int64, 
 }
 
 func (s *Service) sendAdmin(ctx context.Context, kind string, tokens []db.PushDeviceToken, build func(db.PushDeviceToken) Notification) DeliveryReport {
-	report := DeliveryReport{Kind: kind, Results: make([]DeliveryResult, 0, len(tokens)), Timestamp: s.now().UTC().Format(time.RFC3339Nano)}
+	report := DeliveryReport{Kind: kind, Matched: len(tokens), Results: make([]DeliveryResult, 0, len(tokens)), Timestamp: s.now().UTC().Format(time.RFC3339Nano)}
 	for _, token := range tokens {
 		result := DeliveryResult{TokenID: token.ID, UserID: token.UserID, DeviceID: token.DeviceID, TokenMasked: maskToken(token.Token), Environment: token.Environment, PushType: token.PushType}
 		sent, err := s.sender.Send(ctx, build(token))
@@ -297,7 +391,9 @@ func (s *Service) sendAdmin(ctx context.Context, kind string, tokens []db.PushDe
 
 func (s *Service) auditAdminDelivery(ctx context.Context, operator, target string, report DeliveryReport) {
 	status := "success"
-	if report.Accepted == 0 {
+	if strings.HasPrefix(target, "broadcast_dry_run:") {
+		status = "dry_run"
+	} else if report.Accepted == 0 {
 		status = "failed"
 	} else if report.Failed > 0 {
 		status = "partial"
@@ -328,6 +424,23 @@ func validateAdminMessage(request AdminMessageRequest) error {
 	}
 	if len([]rune(request.Title)) > 100 || len([]rune(request.Body)) > 500 {
 		return fmt.Errorf("title or body is too long")
+	}
+	data, err := json.Marshal(request.CustomData)
+	if err != nil || len(data) > 2048 {
+		return fmt.Errorf("custom_data must be valid and at most 2048 bytes")
+	}
+	if !validAdminEnvironment(request.Environment) {
+		return fmt.Errorf("environment must be sandbox, production or empty")
+	}
+	return nil
+}
+
+func validateAdminBroadcast(request AdminBroadcastRequest) error {
+	if strings.TrimSpace(request.Title) == "" || strings.TrimSpace(request.Body) == "" {
+		return fmt.Errorf("title and body are required")
+	}
+	if len([]rune(request.CampaignID)) > 128 || len([]rune(request.Title)) > 100 || len([]rune(request.Body)) > 500 || len(request.DeepLink) > 1024 {
+		return fmt.Errorf("campaign_id, title, body or deep_link is too long")
 	}
 	data, err := json.Marshal(request.CustomData)
 	if err != nil || len(data) > 2048 {
@@ -380,4 +493,24 @@ func newDebugCallID() string {
 		return fmt.Sprintf("%032x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(data)
+}
+
+func newBroadcastID(now time.Time) string {
+	data := make([]byte, 6)
+	if _, err := rand.Read(data); err != nil {
+		return "broadcast-" + strconv.FormatInt(now.UTC().UnixNano(), 10)
+	}
+	return "broadcast-" + now.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(data)
+}
+
+func broadcastTargetSummary(request AdminBroadcastRequest, dryRun bool) string {
+	environment := strings.TrimSpace(request.Environment)
+	if environment == "" {
+		environment = "all"
+	}
+	prefix := "broadcast"
+	if dryRun {
+		prefix = "broadcast_dry_run"
+	}
+	return prefix + ":" + environment + ":" + request.CampaignID
 }

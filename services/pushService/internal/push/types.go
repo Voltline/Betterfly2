@@ -17,8 +17,9 @@ const (
 type NotificationKind string
 
 const (
-	NotificationVoIP    NotificationKind = "voip"
-	NotificationMessage NotificationKind = "message"
+	NotificationVoIP      NotificationKind = "voip"
+	NotificationMessage   NotificationKind = "message"
+	NotificationBroadcast NotificationKind = "broadcast"
 )
 
 var (
@@ -52,6 +53,8 @@ type Notification struct {
 	AvatarIsGroup      bool
 	ConversationName   string
 	ConversationAvatar string
+	CampaignID         string
+	DeepLink           string
 }
 
 type SendResult struct {
@@ -87,6 +90,8 @@ type Store interface {
 	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)
 	MessagePresentation(context.Context, int64, int64, bool) (MessagePresentation, error)
 	FindTokens(context.Context, TokenFilter) ([]db.PushDeviceToken, error)
+	BroadcastAudience(context.Context, string) (int64, int64, error)
+	ListBroadcastTokens(context.Context, string, int64, int64, int) ([]db.PushDeviceToken, error)
 	GetToken(context.Context, int64) (db.PushDeviceToken, error)
 	CreateDebugAudit(context.Context, *db.PushDebugAudit) error
 	ListDebugAudits(context.Context, int) ([]db.PushDebugAudit, error)

@@ -84,6 +84,40 @@ func (s *GormStore) FindTokens(ctx context.Context, filter TokenFilter) ([]db.Pu
 	return tokens, err
 }
 
+func (s *GormStore) BroadcastAudience(ctx context.Context, environment string) (int64, int64, error) {
+	query := s.db.WithContext(ctx).Model(&db.PushDeviceToken{}).
+		Where("push_type = ? AND is_active = ?", PushTypeAPNs, true)
+	if environment = strings.ToLower(strings.TrimSpace(environment)); environment != "" {
+		query = query.Where("environment = ?", environment)
+	}
+	var maxID int64
+	if err := query.Select("COALESCE(MAX(id), 0)").Scan(&maxID).Error; err != nil {
+		return 0, 0, err
+	}
+	if maxID == 0 {
+		return 0, 0, nil
+	}
+	var count int64
+	if err := query.Where("id <= ?", maxID).Count(&count).Error; err != nil {
+		return 0, 0, err
+	}
+	return count, maxID, nil
+}
+
+func (s *GormStore) ListBroadcastTokens(ctx context.Context, environment string, afterID, throughID int64, limit int) ([]db.PushDeviceToken, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	query := s.db.WithContext(ctx).Model(&db.PushDeviceToken{}).
+		Where("push_type = ? AND is_active = ? AND id > ? AND id <= ?", PushTypeAPNs, true, afterID, throughID)
+	if environment = strings.ToLower(strings.TrimSpace(environment)); environment != "" {
+		query = query.Where("environment = ?", environment)
+	}
+	var tokens []db.PushDeviceToken
+	err := query.Order("id ASC").Limit(limit).Find(&tokens).Error
+	return tokens, err
+}
+
 func (s *GormStore) GetToken(ctx context.Context, id int64) (db.PushDeviceToken, error) {
 	var token db.PushDeviceToken
 	err := s.db.WithContext(ctx).First(&token, id).Error

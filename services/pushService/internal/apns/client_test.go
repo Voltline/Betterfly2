@@ -136,6 +136,45 @@ func TestClientMapsUnregisteredResponse(t *testing.T) {
 	}
 }
 
+func TestClientSendsBroadcastAsOrdinaryAlertWithoutChatMetadata(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("apns-push-type") != "alert" || !strings.HasPrefix(r.URL.Path, "/3/device/") {
+			t.Errorf("broadcast campaign must use ordinary device alert API: path=%s headers=%v", r.URL.Path, r.Header)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["event"] != "broadcast" || payload["campaign_id"] != "summer-2026" || payload["deep_link"] != "betterfly://campaign/summer-2026" {
+			t.Errorf("unexpected campaign payload: %+v", payload)
+		}
+		if _, exists := payload["communication_notification"]; exists {
+			t.Errorf("campaign must not be encoded as a communication notification: %+v", payload)
+		}
+		aps := payload["aps"].(map[string]any)
+		if aps["category"] != "BROADCAST" || aps["thread-id"] != "broadcast:summer-2026" {
+			t.Errorf("unexpected campaign aps payload: %+v", aps)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	client := newTestClient(t)
+	client.httpClient = server.Client()
+	client.sandboxEndpoint = server.URL
+	now := time.Date(2026, 7, 12, 3, 0, 0, 0, time.UTC)
+	_, err := client.Send(context.Background(), pushservice.Notification{
+		Kind: pushservice.NotificationBroadcast, Token: strings.Repeat("ab", 32), Environment: pushpb.PushEnvironment_SANDBOX,
+		TargetUserID: 2, CampaignID: "summer-2026", Title: "夏日活动", Body: "现在就来看看",
+		DeepLink: "betterfly://campaign/summer-2026", SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newTestClient(t *testing.T) *Client {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

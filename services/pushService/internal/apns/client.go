@@ -180,6 +180,8 @@ func validNotification(notification pushservice.Notification) bool {
 		return strings.TrimSpace(notification.CallID) != "" && notification.CallerUserID > 0 && notification.CalleeUserID > 0 && notification.ExpiresAt.After(time.Unix(0, 0))
 	case pushservice.NotificationMessage:
 		return notification.SenderUserID > 0 && notification.TargetUserID > 0 && notification.ConversationID > 0 && strings.TrimSpace(notification.MessageType) != "" && notification.ExpiresAt.After(time.Unix(0, 0))
+	case pushservice.NotificationBroadcast:
+		return notification.TargetUserID > 0 && strings.TrimSpace(notification.CampaignID) != "" && strings.TrimSpace(notification.Title) != "" && strings.TrimSpace(notification.Body) != "" && notification.ExpiresAt.After(time.Unix(0, 0))
 	default:
 		return false
 	}
@@ -260,6 +262,9 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 	if notification.Kind == pushservice.NotificationMessage {
 		return marshalMessagePayload(notification)
 	}
+	if notification.Kind == pushservice.NotificationBroadcast {
+		return marshalBroadcastPayload(notification)
+	}
 	callType := strings.ToLower(strings.TrimSpace(notification.CallType))
 	payload := map[string]any{
 		"aps":            map[string]any{"content-available": 1},
@@ -277,6 +282,31 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 	}
 	if len(data) > maxVoIPPayloadSize {
 		return nil, fmt.Errorf("VoIP payload exceeds %d bytes", maxVoIPPayloadSize)
+	}
+	return data, nil
+}
+
+func marshalBroadcastPayload(notification pushservice.Notification) ([]byte, error) {
+	payload := map[string]any{
+		"aps": map[string]any{
+			"alert": map[string]string{"title": strings.TrimSpace(notification.Title), "body": strings.TrimSpace(notification.Body)},
+			"sound": "default", "thread-id": "broadcast:" + notification.CampaignID, "category": "BROADCAST",
+		},
+		"event": "broadcast", "campaign_id": notification.CampaignID,
+		"sent_at": notification.SentAt.UTC().Format(time.RFC3339Nano),
+	}
+	if deepLink := strings.TrimSpace(notification.DeepLink); deepLink != "" {
+		payload["deep_link"] = deepLink
+	}
+	if len(notification.CustomData) > 0 {
+		payload["data"] = notification.CustomData
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAPNsPayloadSize {
+		return nil, fmt.Errorf("APNs payload exceeds %d bytes", maxAPNsPayloadSize)
 	}
 	return data, nil
 }

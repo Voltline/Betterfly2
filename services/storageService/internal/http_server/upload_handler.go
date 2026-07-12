@@ -63,7 +63,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 
 	// 解析请求
 	var req storage.UploadFileRequest
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStorageRequestBodyBytes))
 	if err != nil {
 		sugar.Errorf("读取请求体失败: %v", err)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -80,11 +80,11 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	fileHash := req.FileHash
+	fileHash, validHash := normalizeFileHash(req.FileHash)
 	fileSize := req.FileSize
 
-	if fileHash == "" {
-		http.Error(w, "file_hash is required", http.StatusBadRequest)
+	if !validHash {
+		http.Error(w, "file_hash must be a SHA-512 hex digest", http.StatusBadRequest)
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 生成预签名上传URL
-	ctx := context.Background()
+	ctx := r.Context()
 	expiresIn := 1 * time.Hour // URL有效期1小时
 	uploadURL, err := h.getUploadURL(ctx, r, fileHash, expiresIn)
 	if err != nil {
@@ -155,7 +155,7 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 
 	// 解析请求
 	var req storage.VerifyUploadRequest
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStorageRequestBodyBytes))
 	if err != nil {
 		sugar.Errorf("读取请求体失败: %v", err)
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
@@ -172,16 +172,16 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	fileHash := req.FileHash
-	if fileHash == "" {
-		http.Error(w, "file_hash is required", http.StatusBadRequest)
+	fileHash, validHash := normalizeFileHash(req.FileHash)
+	if !validHash {
+		http.Error(w, "file_hash must be a SHA-512 hex digest", http.StatusBadRequest)
 		return
 	}
 
 	sugar.Debugf("收到上传验证请求: file_hash=%s", fileHash)
 
 	// 检查文件是否存在于RustFS
-	ctx := context.Background()
+	ctx := r.Context()
 	exists, err := h.fileExistsInStorage(ctx, fileHash)
 	if err != nil {
 		sugar.Errorf("检查文件是否存在失败: %v", err)

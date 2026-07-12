@@ -137,13 +137,14 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 
 	// 保存到数据库
 	start := time.Now()
-	messageID, err := db.StoreNewMessage(
+	storedMessage, created, err := db.StoreNewMessage(
 		msg.FromUserId,
 		msg.ToUserId,
 		msg.Content,
 		msg.MessageType,
 		msg.GetRealFileName(),
 		msg.IsGroup,
+		msg.GetClientMessageId(),
 	)
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
@@ -152,7 +153,7 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 		return nil, err
 	}
 
-	sugar.Debugf("消息保存成功: message_id=%d", messageID)
+	sugar.Debugf("消息保存成功: message_id=%d client_message_id=%s created=%t", storedMessage.MessageID, msg.GetClientMessageId(), created)
 
 	// 更新缓存（先清除相关缓存）
 	h.clearMessageCache(msg.ToUserId)
@@ -163,7 +164,16 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_StoreMsgRsp{
 			StoreMsgRsp: &storage.StoreMsgRsp{
-				MessageId: messageID,
+				MessageId:       storedMessage.MessageID,
+				ClientMessageId: msg.GetClientMessageId(),
+				Created:         created,
+				FromUserId:      msg.GetFromUserId(),
+				ToUserId:        msg.GetToUserId(),
+				Content:         msg.GetContent(),
+				MessageType:     msg.GetMessageType(),
+				IsGroup:         msg.GetIsGroup(),
+				RealFileName:    msg.GetRealFileName(),
+				ClientTimestamp: msg.GetClientTimestamp(),
 			},
 		},
 	}

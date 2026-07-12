@@ -84,6 +84,7 @@ message MessagePushRequest {
   string message_type = 5;
   string sent_at = 6;
   string preview = 7;
+  int64 message_id = 8;
 }
 
 message RequestMessage {

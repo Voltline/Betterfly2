@@ -39,12 +39,14 @@ func TestBuildSyncMessagesStorageRequestRoutesResponseToRequester(t *testing.T) 
 
 func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
 	post := &pb.Post{
-		FromId:       1001,
-		ToId:         2002,
-		Msg:          "hello",
-		MsgType:      "text",
-		IsGroup:      false,
-		RealFileName: "",
+		FromId:          1001,
+		ToId:            2002,
+		Msg:             "hello",
+		MsgType:         "text",
+		IsGroup:         false,
+		RealFileName:    "",
+		Timestamp:       "2026-07-12T09:00:00Z",
+		ClientMessageId: "client-42",
 	}
 
 	storeReq := buildStoreNewMessageStorageRequest(post, "df-pod-1")
@@ -62,6 +64,9 @@ func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
 	}
 	if storePayload.StoreNewMessage.GetToUserId() != 2002 {
 		t.Fatalf("expected stored message target 2002, got %d", storePayload.StoreNewMessage.GetToUserId())
+	}
+	if storePayload.StoreNewMessage.GetClientMessageId() != "client-42" || storePayload.StoreNewMessage.GetClientTimestamp() != post.GetTimestamp() {
+		t.Fatalf("message correlation fields were not forwarded: %+v", storePayload.StoreNewMessage)
 	}
 }
 

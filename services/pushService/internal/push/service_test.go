@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,11 +13,29 @@ import (
 )
 
 type memoryStore struct {
-	tokens       []db.PushDeviceToken
-	deactivated  []int64
-	notify       map[int64]bool
-	audits       []db.PushDebugAudit
-	presentation MessagePresentation
+	tokens            []db.PushDeviceToken
+	deactivated       []int64
+	messageDeliveries map[string]bool
+	notify            map[int64]bool
+	audits            []db.PushDebugAudit
+	presentation      MessagePresentation
+}
+
+func (s *memoryStore) ClaimMessageDelivery(_ context.Context, messageID, tokenID int64) (bool, error) {
+	if s.messageDeliveries == nil {
+		s.messageDeliveries = make(map[string]bool)
+	}
+	key := fmt.Sprintf("%d:%d", messageID, tokenID)
+	if s.messageDeliveries[key] {
+		return false, nil
+	}
+	s.messageDeliveries[key] = true
+	return true, nil
+}
+
+func (s *memoryStore) ReleaseMessageDelivery(_ context.Context, messageID, tokenID int64) error {
+	delete(s.messageDeliveries, fmt.Sprintf("%d:%d", messageID, tokenID))
+	return nil
 }
 
 func (s *memoryStore) MessagePresentation(_ context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
@@ -168,13 +187,16 @@ func TestRegisterStandardTokenAndDispatchMessagePush(t *testing.T) {
 
 	message := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
 		TargetUserIds: []int64{2, 2, 1}, SenderUserId: 1, ConversationId: 1,
-		MessageType: "text", SentAt: now.Format(time.RFC3339Nano),
+		MessageType: "text", SentAt: now.Format(time.RFC3339Nano), MessageId: 101,
 	}}}
 	if err := service.Handle(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.Handle(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
 	if len(sender.sent) != 1 {
-		t.Fatalf("expected one deduplicated message push, got %+v", sender.sent)
+		t.Fatalf("expected one persistent deduplicated message push, got %+v", sender.sent)
 	}
 	notification := sender.sent[0].notification
 	if notification.Kind != NotificationMessage || notification.SenderUserID != 1 || notification.TargetUserID != 2 || notification.ConversationID != 1 {

@@ -42,6 +42,7 @@ message Warn {
 
 message PostAckRsp {
   int64 message_id = 1;
+  string client_message_id = 2; // 与Post.client_message_id对应，客户端据此匹配乱序ACK
 }
 
 message UserInfo {

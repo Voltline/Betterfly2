@@ -3,25 +3,54 @@ package db
 import (
 	"Betterfly2/shared/utils"
 	"errors"
+	"strings"
+
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// StoreNewMessage 存储一条新消息，返回消息ID
-func StoreNewMessage(fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool) (int64, error) {
+// StoreNewMessage 幂等存储消息；created=false表示同一客户端消息已存在。
+func StoreNewMessage(fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID string) (*Message, bool, error) {
+	clientMessageID = strings.TrimSpace(clientMessageID)
+	var clientMessageIDPtr *string
+	if clientMessageID != "" {
+		clientMessageIDPtr = &clientMessageID
+	}
 	message := &Message{
-		FromUserID:   fromUserID,
-		ToUserID:     toUserID,
-		Content:      content,
-		Timestamp:    utils.NowTime(),
-		MessageType:  messageType,
-		RealFileName: realFileName,
-		IsGroup:      isGroup,
+		ClientMessageID: clientMessageIDPtr,
+		FromUserID:      fromUserID,
+		ToUserID:        toUserID,
+		Content:         content,
+		Timestamp:       utils.NowTime(),
+		MessageType:     messageType,
+		RealFileName:    realFileName,
+		IsGroup:         isGroup,
 	}
-	err := DB().Create(message).Error
-	if err != nil {
-		return 0, err
+
+	database := DB()
+	if clientMessageIDPtr == nil {
+		if err := database.Create(message).Error; err != nil {
+			return nil, false, err
+		}
+		return message, true, nil
 	}
-	return message.MessageID, nil
+
+	result := database.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "from_user_id"}, {Name: "client_message_id"}},
+		DoNothing: true,
+	}).Create(message)
+	if result.Error != nil {
+		return nil, false, result.Error
+	}
+	if result.RowsAffected == 1 {
+		return message, true, nil
+	}
+
+	var existing Message
+	if err := database.Where("from_user_id = ? AND client_message_id = ?", fromUserID, clientMessageID).First(&existing).Error; err != nil {
+		return nil, false, err
+	}
+	return &existing, false, nil
 }
 
 // GetMessageByID 基于消息ID直接查询消息

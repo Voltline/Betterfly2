@@ -9,6 +9,7 @@ import (
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
+	"context"
 	"data_forwarding_service/internal/monitor"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
@@ -39,7 +40,7 @@ func sendMessageToStorage(payload *pb.Post, currentContainerID string) error {
 		return err
 	}
 
-	logger.Sugar().Debugf("消息已保存到storageService: from=%d to=%d", payload.GetFromId(), payload.GetToId())
+	logger.Sugar().Debugf("消息存储请求已发布到storageService: from=%d to=%d client_message_id=%s", payload.GetFromId(), payload.GetToId(), payload.GetClientMessageId())
 	return nil
 }
 
@@ -47,12 +48,14 @@ func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID str
 	req := newStorageRequest(currentContainerID, payload.GetFromId())
 	req.Payload = &storage.RequestMessage_StoreNewMessage{
 		StoreNewMessage: &storage.StoreNewMessage{
-			FromUserId:   payload.GetFromId(),
-			ToUserId:     payload.GetToId(),
-			Content:      payload.GetMsg(),
-			MessageType:  payload.GetMsgType(),
-			IsGroup:      payload.GetIsGroup(),
-			RealFileName: payload.GetRealFileName(),
+			FromUserId:      payload.GetFromId(),
+			ToUserId:        payload.GetToId(),
+			Content:         payload.GetMsg(),
+			MessageType:     payload.GetMsgType(),
+			IsGroup:         payload.GetIsGroup(),
+			RealFileName:    payload.GetRealFileName(),
+			ClientMessageId: payload.GetClientMessageId(),
+			ClientTimestamp: payload.GetTimestamp(),
 		},
 	}
 	return req
@@ -67,35 +70,70 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	if err := validatePostPayload(payload); err != nil {
 		return err
 	}
+	clientMessageID := ensurePostClientMessageID(payload)
 	if monitor.IsMonitorID(payload.GetToId()) {
 		return handleMonitorPost(fromID, payload)
 	}
 
-	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
-	targetTopic := redisClient.GetContainerByConnection(targetUserID)
-
-	currentContainerID := currentContainerTopic()
-
-	// 无论用户是否在线，都将消息保存到storageService
-	storageErr := sendMessageToStorage(payload, currentContainerID)
-	if storageErr != nil {
-		// 记录错误但继续处理（消息存储失败不影响转发）
-		logger.Sugar().Errorf("消息保存到storageService失败: %v", storageErr)
-		// 不返回错误，继续尝试转发消息
-	}
-
 	if payload.GetIsGroup() {
-		return routeGroupMessage(fromID, payload, message, currentContainerID)
+		isMember, err := sharedDB.IsActiveGroupMember(payload.GetToId(), fromID)
+		if err != nil {
+			return err
+		}
+		if !isMember {
+			return errors.New("当前用户不在该群中，无法发送群消息")
+		}
 	}
-	publishMessagePushBestEffort([]int64{payload.GetToId()}, payload)
 
-	if targetTopic == "" {
-		// 用户不在线，只保存消息（已保存），不进行转发
-		logger.Sugar().Debugf("%s 用户不在线，消息已保存", targetUserID)
+	claim, err := claimPost(context.Background(), fromID, clientMessageID)
+	if err != nil {
+		return err
+	}
+	if !claim.acquired {
+		if claim.messageID > 0 {
+			return sendPostAck(fromID, claim.messageID, clientMessageID)
+		}
+		logger.Sugar().Debugf("消息正在处理中，忽略重复请求: from=%d client_message_id=%s", fromID, clientMessageID)
 		return nil
 	}
 
-	return routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message)
+	if err := sendMessageToStorage(payload, currentContainerTopic()); err != nil {
+		releasePostClaim(context.Background(), fromID, clientMessageID)
+		return err
+	}
+	return nil
+}
+
+// DeliverStoredPost 在消息完成幂等存储后执行实时投递与APNs副作用。
+func DeliverStoredPost(messageID int64, payload *pb.Post) error {
+	if payload == nil {
+		return errors.New("待投递消息为空")
+	}
+	claimed, err := claimPostEffects(context.Background(), messageID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		logger.Sugar().Debugf("消息副作用已执行，跳过重复Kafka响应: message_id=%d", messageID)
+		return nil
+	}
+
+	message := &pb.RequestMessage{Payload: &pb.RequestMessage_Post{Post: payload}}
+	currentContainerID := currentContainerTopic()
+	if payload.GetIsGroup() {
+		err = routeGroupMessage(messageID, payload.GetFromId(), payload, message, currentContainerID)
+	} else {
+		targetUserID := strconv.FormatInt(payload.GetToId(), 10)
+		targetTopic := redisClient.GetContainerByConnection(targetUserID)
+		publishMessagePushBestEffort([]int64{payload.GetToId()}, payload, messageID)
+		if targetTopic != "" {
+			err = routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message)
+		}
+	}
+	if err != nil {
+		releasePostEffects(context.Background(), messageID)
+	}
+	return err
 }
 
 func InplaceHandlePostMessage(message *pb.RequestMessage) error {
@@ -145,6 +183,9 @@ func validatePostPayload(payload *pb.Post) error {
 	msgType := strings.TrimSpace(payload.GetMsgType())
 	msg := strings.TrimSpace(payload.GetMsg())
 	realFileName := strings.TrimSpace(payload.GetRealFileName())
+	if len(strings.TrimSpace(payload.GetClientMessageId())) > 128 {
+		return errors.New("client_message_id长度超过限制")
+	}
 
 	if msgType == "file" {
 		if msg == "" {
@@ -163,7 +204,7 @@ func validatePostPayload(payload *pb.Post) error {
 	return nil
 }
 
-func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
+func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
 	isMember, err := sharedDB.IsActiveGroupMember(payload.GetToId(), fromID)
 	if err != nil {
 		return err
@@ -187,7 +228,7 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 		targetUserIDs = append(targetUserIDs, targetUserID)
 		memberIDByUserID[targetUserID] = memberID
 	}
-	publishMessagePushBestEffort(membersWithoutSender(memberIDs, fromID), payload)
+	publishMessagePushBestEffort(membersWithoutSender(memberIDs, fromID), payload, messageID)
 	containerByUserID := redisClient.GetContainersByConnections(targetUserIDs)
 
 	delivered := 0
@@ -223,16 +264,16 @@ func routeGroupMessage(fromID int64, payload *pb.Post, message *pb.RequestMessag
 	return nil
 }
 
-func publishMessagePushBestEffort(targetUserIDs []int64, payload *pb.Post) {
+func publishMessagePushBestEffort(targetUserIDs []int64, payload *pb.Post, messageID int64) {
 	if len(targetUserIDs) == 0 || payload == nil {
 		return
 	}
-	if err := publishPushRequest(buildMessagePushRequest(targetUserIDs, payload)); err != nil {
+	if err := publishPushRequest(buildMessagePushRequest(targetUserIDs, payload, messageID)); err != nil {
 		logger.Sugar().Warnf("发布普通消息APNs请求失败: sender_user_id=%d conversation_id=%d targets=%d error=%v", payload.GetFromId(), payload.GetToId(), len(targetUserIDs), err)
 	}
 }
 
-func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post) *pushpb.RequestMessage {
+func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post, messageID int64) *pushpb.RequestMessage {
 	conversationID := payload.GetFromId()
 	if payload.GetIsGroup() {
 		conversationID = payload.GetToId()
@@ -245,6 +286,7 @@ func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post) *pushpb.Re
 		MessageType:    payload.GetMsgType(),
 		SentAt:         payload.GetTimestamp(),
 		Preview:        messagePushPreview(payload),
+		MessageId:      messageID,
 	}}}
 }
 

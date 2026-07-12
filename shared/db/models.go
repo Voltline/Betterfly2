@@ -38,14 +38,15 @@ type GroupMember struct {
 }
 
 type Message struct {
-	MessageID    int64  `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
-	FromUserID   int64  `gorm:"type:int8;comment:消息来源用户ID"`
-	ToUserID     int64  `gorm:"type:int8;index:idx_messages_sync_target_time,priority:2;comment:消息去向用户ID"`
-	Content      string `gorm:"type:varchar(700);comment:消息内容"`
-	Timestamp    string `gorm:"type:varchar(25);index:idx_messages_sync_target_time,priority:3;comment:消息产生时间"`
-	MessageType  string `gorm:"type:varchar(10);comment:消息类型"`
-	RealFileName string `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
-	IsGroup      bool   `gorm:"type:bool;index:idx_messages_sync_target_time,priority:1;comment:消息是否来自于群聊"`
+	MessageID       int64   `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
+	ClientMessageID *string `gorm:"type:varchar(128);uniqueIndex:uidx_messages_sender_client_id,priority:2;comment:客户端幂等消息ID，旧消息为空"`
+	FromUserID      int64   `gorm:"type:int8;uniqueIndex:uidx_messages_sender_client_id,priority:1;comment:消息来源用户ID"`
+	ToUserID        int64   `gorm:"type:int8;index:idx_messages_sync_target_time,priority:2;comment:消息去向用户ID"`
+	Content         string  `gorm:"type:varchar(700);comment:消息内容"`
+	Timestamp       string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time,priority:3;comment:消息产生时间"`
+	MessageType     string  `gorm:"type:varchar(10);comment:消息类型"`
+	RealFileName    string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
+	IsGroup         bool    `gorm:"type:bool;index:idx_messages_sync_target_time,priority:1;comment:消息是否来自于群聊"`
 }
 
 type FileMetadata struct {
@@ -108,6 +109,12 @@ type PushDeviceToken struct {
 	IsActive    bool   `gorm:"default:true;index:idx_push_user_active,priority:2;comment:token是否有效"`
 	CreatedAt   string `gorm:"type:varchar(35);comment:创建时间"`
 	UpdatedAt   string `gorm:"type:varchar(35);comment:更新时间"`
+}
+
+type PushMessageDelivery struct {
+	MessageID int64  `gorm:"primaryKey;comment:消息ID"`
+	TokenID   int64  `gorm:"primaryKey;comment:APNs token记录ID"`
+	CreatedAt string `gorm:"type:varchar(35);index:idx_push_message_delivery_created;comment:首次申请投递时间"`
 }
 
 type PushDebugAudit struct {

@@ -42,6 +42,7 @@ type Notification struct {
 	ConversationID     int64
 	IsGroup            bool
 	MessageType        string
+	MessageID          int64
 	SentAt             time.Time
 	Title              string
 	Body               string
@@ -87,6 +88,8 @@ type Store interface {
 	RegisterToken(context.Context, int64, string, string, string, string, string) error
 	UnregisterToken(context.Context, int64, string, string, string) (bool, error)
 	ListActiveTokens(context.Context, int64, string) ([]db.PushDeviceToken, error)
+	ClaimMessageDelivery(context.Context, int64, int64) (bool, error)
+	ReleaseMessageDelivery(context.Context, int64, int64) error
 	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)
 	MessagePresentation(context.Context, int64, int64, bool) (MessagePresentation, error)
 	FindTokens(context.Context, TokenFilter) ([]db.PushDeviceToken, error)

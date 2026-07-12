@@ -8,13 +8,16 @@ import (
 )
 
 func TestBuildPostAckResponse(t *testing.T) {
-	resp := buildPostAckResponse(&storage.StoreMsgRsp{MessageId: 12345})
+	resp := buildPostAckResponse(&storage.StoreMsgRsp{MessageId: 12345, ClientMessageId: "client-42"})
 
 	if resp.GetPostAckRsp() == nil {
 		t.Fatalf("expected PostAckRsp payload, got %T", resp.Payload)
 	}
 	if resp.GetPostAckRsp().GetMessageId() != 12345 {
 		t.Fatalf("expected message_id 12345, got %d", resp.GetPostAckRsp().GetMessageId())
+	}
+	if resp.GetPostAckRsp().GetClientMessageId() != "client-42" {
+		t.Fatalf("expected client_message_id client-42, got %q", resp.GetPostAckRsp().GetClientMessageId())
 	}
 }
 

@@ -4,6 +4,15 @@ option go_package = "Betterfly2/proto/storage";
 
 message StoreMsgRsp {
   int64 message_id = 1;
+  string client_message_id = 2;
+  bool created = 3;
+  int64 from_user_id = 4;
+  int64 to_user_id = 5;
+  string content = 6;
+  string message_type = 7;
+  bool is_group = 8;
+  string real_file_name = 9;
+  string client_timestamp = 10;
 }
 
 message MessageRsp {

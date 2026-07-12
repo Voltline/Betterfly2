@@ -113,12 +113,14 @@ func TestHandleStoreNewMessage(t *testing.T) {
 		TargetUserId:   1001,
 		Payload: &storage.RequestMessage_StoreNewMessage{
 			StoreNewMessage: &storage.StoreNewMessage{
-				FromUserId:   1000,
-				ToUserId:     1001,
-				Content:      "Hello, World!",
-				MessageType:  "text",
-				IsGroup:      false,
-				RealFileName: "",
+				FromUserId:      1000,
+				ToUserId:        1001,
+				Content:         "Hello, World!",
+				MessageType:     "text",
+				IsGroup:         false,
+				RealFileName:    "",
+				ClientMessageId: "client-message-1",
+				ClientTimestamp: "2026-07-12T09:00:00Z",
 			},
 		},
 	}
@@ -126,7 +128,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	// 设置数据库期望
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs(int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(12345))
 	mock.ExpectCommit()
 
@@ -142,6 +144,41 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	storeRsp := resp.GetStoreMsgRsp()
 	assert.NotNil(t, storeRsp)
 	assert.Equal(t, int64(12345), storeRsp.MessageId)
+	assert.Equal(t, "client-message-1", storeRsp.ClientMessageId)
+	assert.True(t, storeRsp.Created)
+	assert.Equal(t, "2026-07-12T09:00:00Z", storeRsp.ClientTimestamp)
+}
+
+func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *testing.T) {
+	mock := useMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	msg := &storage.StoreNewMessage{
+		FromUserId:      1000,
+		ToUserId:        1001,
+		Content:         "Hello, World!",
+		MessageType:     "text",
+		ClientMessageId: "client-message-1",
+		ClientTimestamp: "2026-07-12T09:00:00Z",
+	}
+	req := &storage.RequestMessage{TargetUserId: 1000, Payload: &storage.RequestMessage_StoreNewMessage{StoreNewMessage: msg}}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO \"messages\"").
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
+		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT \\* FROM \"messages\" WHERE from_user_id = \\$1 AND client_message_id = \\$2 ORDER BY \"messages\".\"message_id\" LIMIT \\$3").
+		WithArgs(int64(1000), "client-message-1", int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "client_message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
+		}).AddRow(12345, "client-message-1", 1000, 1001, "Hello, World!", "2026-07-12T09:00:01Z", "text", "", false))
+
+	resp, err := handler.handleStoreNewMessage(req, msg)
+	assert.NoError(t, err)
+	if assert.NotNil(t, resp) && assert.NotNil(t, resp.GetStoreMsgRsp()) {
+		assert.Equal(t, int64(12345), resp.GetStoreMsgRsp().GetMessageId())
+		assert.False(t, resp.GetStoreMsgRsp().GetCreated())
+	}
 }
 
 func TestHandleQueryMessage(t *testing.T) {

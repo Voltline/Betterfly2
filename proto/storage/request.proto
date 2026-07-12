@@ -9,6 +9,8 @@ message StoreNewMessage {
   string message_type = 4; // text, image, gif, file, audio, video, link
   bool is_group = 5;
   string real_file_name = 6;
+  string client_message_id = 7;
+  string client_timestamp = 8;
 }
 
 message QueryMessage {

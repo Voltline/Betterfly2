@@ -15,12 +15,15 @@ func TestMembersWithoutSender(t *testing.T) {
 
 func TestMessagePushIncludesSafeTextPreview(t *testing.T) {
 	post := &pb.Post{FromId: 1, ToId: 88, IsGroup: true, Msg: "private message", MsgType: "text", Timestamp: "2026-07-11T10:00:00Z"}
-	request := buildMessagePushRequest([]int64{2, 3}, post).GetMessagePush()
+	request := buildMessagePushRequest([]int64{2, 3}, post, 123).GetMessagePush()
 	if request.GetSenderUserId() != 1 || request.GetConversationId() != 88 || !request.GetIsGroup() || request.GetMessageType() != "text" || len(request.GetTargetUserIds()) != 2 {
 		t.Fatalf("unexpected message push metadata: %+v", request)
 	}
 	if request.GetPreview() != "private message" {
 		t.Fatalf("unexpected message preview: %q", request.GetPreview())
+	}
+	if request.GetMessageId() != 123 {
+		t.Fatalf("message ID missing from push request: %+v", request)
 	}
 }
 
@@ -42,7 +45,7 @@ func TestMessagePushPreviewHidesStorageIdentifiers(t *testing.T) {
 
 func TestDirectMessagePushUsesSenderAsRecipientConversation(t *testing.T) {
 	post := &pb.Post{FromId: 7, ToId: 9, MsgType: "link"}
-	request := buildMessagePushRequest([]int64{9}, post).GetMessagePush()
+	request := buildMessagePushRequest([]int64{9}, post, 124).GetMessagePush()
 	if request.GetConversationId() != 7 || request.GetIsGroup() {
 		t.Fatalf("unexpected direct conversation metadata: %+v", request)
 	}

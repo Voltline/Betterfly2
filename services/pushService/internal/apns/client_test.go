@@ -70,14 +70,14 @@ func TestClientSendsVoIPHeadersAndPayloadToSelectedEnvironment(t *testing.T) {
 
 func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("apns-push-type") != "alert" || r.Header.Get("apns-topic") != "com.Voltline.Betterfly2" || r.Header.Get("apns-collapse-id") != "" {
+		if r.Header.Get("apns-push-type") != "alert" || r.Header.Get("apns-topic") != "com.Voltline.Betterfly2" || r.Header.Get("apns-collapse-id") != "message-99" {
 			t.Errorf("unexpected message APNs headers: %+v", r.Header)
 		}
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["event"] != "new_message" || payload["conversation_id"] != float64(88) || payload["is_group"] != true || payload["message_type"] != "image" {
+		if payload["event"] != "new_message" || payload["conversation_id"] != float64(88) || payload["is_group"] != true || payload["message_type"] != "image" || payload["message_id"] != float64(99) {
 			t.Errorf("unexpected message payload: %+v", payload)
 		}
 		aps := payload["aps"].(map[string]any)
@@ -106,7 +106,7 @@ func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
 	now := time.Date(2026, 7, 11, 3, 0, 0, 0, time.UTC)
 	_, err := client.Send(context.Background(), pushservice.Notification{
 		Kind: pushservice.NotificationMessage, Token: strings.Repeat("ef", 32), Environment: pushpb.PushEnvironment_SANDBOX,
-		SenderUserID: 1, TargetUserID: 2, ConversationID: 88, IsGroup: true,
+		SenderUserID: 1, TargetUserID: 2, ConversationID: 88, IsGroup: true, MessageID: 99,
 		MessageType: "image", SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
 		Title: "调试标题", Body: "调试正文", CustomData: map[string]any{"scenario": "smoke"},
 		SenderName: "Alice", SenderAvatar: "alice-avatar-hash", GroupName: "开发群", Avatar: "group-avatar-hash", AvatarIsGroup: true,

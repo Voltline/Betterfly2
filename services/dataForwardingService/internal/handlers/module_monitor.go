@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "Betterfly2/proto/data_forwarding"
@@ -21,6 +23,8 @@ import (
 )
 
 const monitorContactKey = "monitor:contact:1"
+
+var lastMonitorMessageID atomic.Int64
 
 var monitorExecutor = monitor.NewExecutor(monitor.Actions{
 	Status:      monitorServiceStatus,
@@ -80,6 +84,18 @@ func handleMonitorPost(senderUserID int64, post *pb.Post) error {
 	if strings.ToLower(strings.TrimSpace(post.GetMsgType())) != "text" {
 		return sendMonitorWarning(senderUserID, "Monitor 仅接受 text 类型指令")
 	}
+	clientMessageID := ensurePostClientMessageID(post)
+	cached, acquired, err := claimMonitorCommand(context.Background(), senderUserID, clientMessageID)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		if cached == nil {
+			logger.Sugar().Debugf("Monitor指令正在处理中，忽略重复请求: actor_user_id=%d client_message_id=%s", senderUserID, clientMessageID)
+			return nil
+		}
+		return sendMonitorPostResult(senderUserID, clientMessageID, cached.MessageID, cached.Response)
+	}
 
 	commandName, response, err := monitorExecutor.Execute(context.Background(), senderUserID, post.GetMsg())
 	if err != nil {
@@ -91,24 +107,88 @@ func handleMonitorPost(senderUserID int64, post *pb.Post) error {
 	}
 	logger.Sugar().Infof("Monitor审计: actor_user_id=%d command=%s", senderUserID, commandName)
 
-	// Monitor messages are not persisted; negative IDs keep synthetic ACKs out of
-	// the monotonically increasing database message-ID space used by clients.
-	messageID := -time.Now().UnixNano()
-	if err := sendMonitorResponse(senderUserID, &pb.ResponseMessage{
-		Payload: &pb.ResponseMessage_PostAckRsp{PostAckRsp: &pb.PostAckRsp{MessageId: messageID}},
-	}); err != nil {
+	messageID := nextMonitorMessageID(time.Now())
+	result := &monitorCommandResult{MessageID: messageID, Response: response}
+	if err := cacheMonitorCommand(context.Background(), senderUserID, clientMessageID, result); err != nil {
+		logger.Sugar().Errorf("缓存Monitor指令结果失败: actor_user_id=%d client_message_id=%s err=%v", senderUserID, clientMessageID, err)
+	}
+	return sendMonitorPostResult(senderUserID, clientMessageID, messageID, response)
+}
+
+type monitorCommandResult struct {
+	MessageID int64  `json:"message_id"`
+	Response  string `json:"response"`
+}
+
+func sendMonitorPostResult(userID int64, clientMessageID string, messageID int64, response string) error {
+	if err := sendMonitorResponse(userID, newMonitorPostAck(clientMessageID, messageID)); err != nil {
 		return err
 	}
 	profile := monitor.CurrentProfile()
-	return sendMonitorResponse(senderUserID, &pb.ResponseMessage{
+	return sendMonitorResponse(userID, &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Post{Post: &pb.Post{
-			FromId:    profile.UserID,
-			ToId:      senderUserID,
-			Msg:       response,
-			MsgType:   "text",
-			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			FromId:          profile.UserID,
+			ToId:            userID,
+			Msg:             response,
+			MsgType:         "text",
+			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+			ClientMessageId: clientMessageID,
 		}},
 	})
+}
+
+func newMonitorPostAck(clientMessageID string, messageID int64) *pb.ResponseMessage {
+	return &pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_PostAckRsp{
+			PostAckRsp: &pb.PostAckRsp{MessageId: messageID, ClientMessageId: clientMessageID},
+		},
+	}
+}
+
+func claimMonitorCommand(ctx context.Context, userID int64, clientMessageID string) (*monitorCommandResult, bool, error) {
+	if redisClient.Rdb == nil {
+		return nil, true, nil
+	}
+	key := "monitor:" + postIdempotencyKey(userID, clientMessageID)
+	value, err := redisClient.Rdb.Get(ctx, key).Result()
+	if err == nil && value != "pending" {
+		var cached monitorCommandResult
+		if json.Unmarshal([]byte(value), &cached) == nil && cached.MessageID > 0 {
+			return &cached, false, nil
+		}
+	}
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return nil, false, err
+	}
+	acquired, err := redisClient.Rdb.SetNX(ctx, key, "pending", postPendingTTL).Result()
+	return nil, acquired, err
+}
+
+func cacheMonitorCommand(ctx context.Context, userID int64, clientMessageID string, result *monitorCommandResult) error {
+	if redisClient.Rdb == nil {
+		return nil
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	return redisClient.Rdb.Set(ctx, "monitor:"+postIdempotencyKey(userID, clientMessageID), payload, postCompletedTTL).Err()
+}
+
+func nextMonitorMessageID(now time.Time) int64 {
+	candidate := now.UnixNano()
+	if candidate < 1 {
+		candidate = 1
+	}
+	for {
+		previous := lastMonitorMessageID.Load()
+		if candidate <= previous {
+			candidate = previous + 1
+		}
+		if lastMonitorMessageID.CompareAndSwap(previous, candidate) {
+			return candidate
+		}
+	}
 }
 
 func DecorateMonitorContacts(targetUserID int64, contacts []*pb.ContactInfo) []*pb.ContactInfo {

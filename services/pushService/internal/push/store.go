@@ -5,15 +5,20 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"Betterfly2/shared/db"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type GormStore struct {
-	db *gorm.DB
+	db                 *gorm.DB
+	deliveryClaimCount atomic.Uint64
 }
+
+const messageDeliveryRetention = 30 * 24 * time.Hour
 
 func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
 	var sender db.User
@@ -54,8 +59,33 @@ func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conve
 }
 
 func NewGormStore() *GormStore {
-	database := db.DB(&db.PushDeviceToken{}, &db.PushDebugAudit{})
-	return &GormStore{db: database}
+	database := db.DB(&db.PushDeviceToken{}, &db.PushDebugAudit{}, &db.PushMessageDelivery{})
+	store := &GormStore{db: database}
+	store.cleanupExpiredMessageDeliveries(context.Background())
+	return store
+}
+
+func (s *GormStore) ClaimMessageDelivery(ctx context.Context, messageID, tokenID int64) (bool, error) {
+	result := s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&db.PushMessageDelivery{
+		MessageID: messageID,
+		TokenID:   tokenID,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if s.deliveryClaimCount.Add(1)%1000 == 0 {
+		s.cleanupExpiredMessageDeliveries(ctx)
+	}
+	return result.RowsAffected == 1, result.Error
+}
+
+func (s *GormStore) ReleaseMessageDelivery(ctx context.Context, messageID, tokenID int64) error {
+	return s.db.WithContext(ctx).
+		Where("message_id = ? AND token_id = ?", messageID, tokenID).
+		Delete(&db.PushMessageDelivery{}).Error
+}
+
+func (s *GormStore) cleanupExpiredMessageDeliveries(ctx context.Context) {
+	cutoff := time.Now().UTC().Add(-messageDeliveryRetention).Format(time.RFC3339Nano)
+	_ = s.db.WithContext(ctx).Where("created_at < ?", cutoff).Delete(&db.PushMessageDelivery{}).Error
 }
 
 func (s *GormStore) FindTokens(ctx context.Context, filter TokenFilter) ([]db.PushDeviceToken, error) {

@@ -33,6 +33,10 @@ func (s *httpTestStore) ListActiveTokens(_ context.Context, userID int64, pushTy
 	}
 	return result, nil
 }
+func (s *httpTestStore) ClaimMessageDelivery(context.Context, int64, int64) (bool, error) {
+	return true, nil
+}
+func (s *httpTestStore) ReleaseMessageDelivery(context.Context, int64, int64) error { return nil }
 func (s *httpTestStore) MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error) {
 	return true, nil
 }

@@ -8,6 +8,7 @@ import (
 	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
+	"context"
 	"data_forwarding_service/internal/handlers"
 	"fmt"
 	"os"
@@ -688,7 +689,26 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 
 	switch payload := storageResp.Payload.(type) {
 	case *storage.ResponseMessage_StoreMsgRsp:
-		sugar.Debugf("收到消息存储响应: message_id=%d", payload.StoreMsgRsp.GetMessageId())
+		storeRsp := payload.StoreMsgRsp
+		sugar.Debugf("收到消息存储响应: message_id=%d client_message_id=%s created=%t", storeRsp.GetMessageId(), storeRsp.GetClientMessageId(), storeRsp.GetCreated())
+		if err := handlers.CompletePostIdempotency(context.Background(), storeRsp.GetFromUserId(), storeRsp.GetClientMessageId(), storeRsp.GetMessageId()); err != nil {
+			sugar.Errorf("更新消息幂等ACK缓存失败: message_id=%d err=%v", storeRsp.GetMessageId(), err)
+		}
+		if storeRsp.GetCreated() {
+			post := &pb.Post{
+				FromId:          storeRsp.GetFromUserId(),
+				ToId:            storeRsp.GetToUserId(),
+				Msg:             storeRsp.GetContent(),
+				MsgType:         storeRsp.GetMessageType(),
+				IsGroup:         storeRsp.GetIsGroup(),
+				RealFileName:    storeRsp.GetRealFileName(),
+				Timestamp:       storeRsp.GetClientTimestamp(),
+				ClientMessageId: storeRsp.GetClientMessageId(),
+			}
+			if err := handlers.DeliverStoredPost(storeRsp.GetMessageId(), post); err != nil {
+				sugar.Errorf("存储成功后的消息投递失败: message_id=%d err=%v", storeRsp.GetMessageId(), err)
+			}
+		}
 		dfResp = buildPostAckResponse(payload.StoreMsgRsp)
 
 	case *storage.ResponseMessage_MsgRsp:
@@ -785,7 +805,8 @@ func buildPostAckResponse(storeMsgRsp *storage.StoreMsgRsp) *pb.ResponseMessage 
 	return &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_PostAckRsp{
 			PostAckRsp: &pb.PostAckRsp{
-				MessageId: storeMsgRsp.GetMessageId(),
+				MessageId:       storeMsgRsp.GetMessageId(),
+				ClientMessageId: storeMsgRsp.GetClientMessageId(),
 			},
 		},
 	}

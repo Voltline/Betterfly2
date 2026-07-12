@@ -7,10 +7,44 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	pb "Betterfly2/proto/data_forwarding"
 	"data_forwarding_service/internal/monitor"
 )
+
+func TestNextMonitorMessageIDIsPositiveAndMonotonic(t *testing.T) {
+	previous := lastMonitorMessageID.Load()
+	t.Cleanup(func() { lastMonitorMessageID.Store(previous) })
+	lastMonitorMessageID.Store(0)
+	now := time.Unix(1_700_000_000, 123)
+
+	first := nextMonitorMessageID(now)
+	second := nextMonitorMessageID(now)
+
+	if first <= 0 {
+		t.Fatalf("monitor ACK ID must be positive, got %d", first)
+	}
+	if second <= first {
+		t.Fatalf("monitor ACK IDs must increase: first=%d second=%d", first, second)
+	}
+}
+
+func TestMonitorPostAckPreservesClientMessageID(t *testing.T) {
+	ack := newMonitorPostAck("client-42", 99).GetPostAckRsp()
+	if ack.GetMessageId() != 99 || ack.GetClientMessageId() != "client-42" {
+		t.Fatalf("unexpected monitor ACK: %+v", ack)
+	}
+}
+
+func TestNextMonitorMessageIDHandlesPreEpochTime(t *testing.T) {
+	previous := lastMonitorMessageID.Load()
+	t.Cleanup(func() { lastMonitorMessageID.Store(previous) })
+	lastMonitorMessageID.Store(0)
+	if got := nextMonitorMessageID(time.Unix(-1, 0)); got != 1 {
+		t.Fatalf("expected positive fallback ACK ID, got %d", got)
+	}
+}
 
 func TestDecorateMonitorContactsRequiresAdminAndAddedState(t *testing.T) {
 	original := []*pb.ContactInfo{{UserId: 42, Name: "Alice"}}

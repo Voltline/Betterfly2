@@ -188,11 +188,23 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 			return queryErr
 		}
 		for _, token := range tokens {
+			claimed := true
+			if request.GetMessageId() > 0 && token.ID > 0 {
+				claimed, queryErr = s.store.ClaimMessageDelivery(ctx, request.GetMessageId(), token.ID)
+				if queryErr != nil {
+					return queryErr
+				}
+			}
+			if !claimed {
+				logger.Sugar().Debugf("跳过重复消息APNs投递: message_id=%d token_id=%d", request.GetMessageId(), token.ID)
+				continue
+			}
 			_, sendErr := s.sender.Send(ctx, Notification{
 				Kind: NotificationMessage, Token: token.Token, Environment: parseEnvironment(token.Environment),
 				SenderUserID: request.GetSenderUserId(), TargetUserID: targetUserID,
 				ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
 				MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
+				MessageID: request.GetMessageId(),
 				ExpiresAt: sentAt.Add(24 * time.Hour),
 				Title:     presentation.Title, Body: body, SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar,
 				GroupName: presentation.GroupName, Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
@@ -200,6 +212,11 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 			})
 			if sendErr == nil {
 				continue
+			}
+			if request.GetMessageId() > 0 && token.ID > 0 {
+				if releaseErr := s.store.ReleaseMessageDelivery(ctx, request.GetMessageId(), token.ID); releaseErr != nil {
+					logger.Sugar().Warnf("释放失败的消息投递记录失败: message_id=%d token_id=%d error=%v", request.GetMessageId(), token.ID, releaseErr)
+				}
 			}
 			var apnsErr *APNSError
 			if errors.As(sendErr, &apnsErr) && apnsErr.InvalidatesToken() {

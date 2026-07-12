@@ -191,6 +191,9 @@ func (c *Client) requestMetadata(notification pushservice.Notification) (pushTyp
 	if notification.Kind == pushservice.NotificationVoIP {
 		return "voip", c.bundleID + ".voip", notification.CallID
 	}
+	if notification.Kind == pushservice.NotificationMessage && notification.MessageID > 0 {
+		return "alert", c.bundleID, "message-" + strconv.FormatInt(notification.MessageID, 10)
+	}
 	return "alert", c.bundleID, ""
 }
 
@@ -335,6 +338,7 @@ func marshalMessagePayload(notification pushservice.Notification) ([]byte, error
 		},
 		"event": "new_message", "sender_user_id": notification.SenderUserID,
 		"conversation_id": notification.ConversationID, "is_group": notification.IsGroup,
+		"message_id":                 notification.MessageID,
 		"message_type":               strings.TrimSpace(notification.MessageType),
 		"sent_at":                    notification.SentAt.UTC().Format(time.RFC3339Nano),
 		"sender_name":                strings.TrimSpace(notification.SenderName),

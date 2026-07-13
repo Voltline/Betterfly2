@@ -13,6 +13,7 @@ import (
 	"data_forwarding_service/internal/monitor"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
+	routerpkg "data_forwarding_service/internal/router"
 	"errors"
 	"fmt"
 	"strconv"
@@ -124,10 +125,14 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 		err = routeGroupMessage(messageID, payload.GetFromId(), payload, message, currentContainerID)
 	} else {
 		targetUserID := strconv.FormatInt(payload.GetToId(), 10)
-		targetTopic := redisClient.GetContainerByConnection(targetUserID)
+		targetTopic, routeErr := redisClient.GetContainerByConnection(targetUserID)
 		publishMessagePushBestEffort([]int64{payload.GetToId()}, payload, messageID)
-		if targetTopic != "" {
+		if routeErr == nil {
 			err = routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message)
+		} else if errors.Is(routeErr, redisClient.ErrRouteNotFound) {
+			err = routerpkg.ErrUserOffline
+		} else {
+			err = routeErr
 		}
 	}
 	if err != nil {
@@ -204,6 +209,11 @@ func validatePostPayload(payload *pb.Post) error {
 	return nil
 }
 
+// ValidatePostPayload validates an internal post before it enters the delivery path.
+func ValidatePostPayload(payload *pb.Post) error {
+	return validatePostPayload(payload)
+}
+
 func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
 	isMember, err := sharedDB.IsActiveGroupMember(payload.GetToId(), fromID)
 	if err != nil {
@@ -229,7 +239,10 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 		memberIDByUserID[targetUserID] = memberID
 	}
 	publishMessagePushBestEffort(membersWithoutSender(memberIDs, fromID), payload, messageID)
-	containerByUserID := redisClient.GetContainersByConnections(targetUserIDs)
+	containerByUserID, err := redisClient.GetContainersByConnections(targetUserIDs)
+	if err != nil {
+		return err
+	}
 
 	delivered := 0
 	crossContainerTargets := make(map[string][]int64)

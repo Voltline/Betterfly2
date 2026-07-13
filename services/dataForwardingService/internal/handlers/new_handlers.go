@@ -7,6 +7,7 @@ import (
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
 	"data_forwarding_service/internal/session"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,17 +17,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
 // WebSocketHandler 处理WebSocket连接和消息
 type WebSocketHandler struct {
 	connManager    *connection.ConnectionManager
 	sessionManager *session.SessionManager
 	router         *router.Router
+	config         websocketConfig
+	upgrader       websocket.Upgrader
 }
 
 // NewWebSocketHandler 创建新的WebSocket处理器
@@ -40,7 +37,9 @@ func NewWebSocketHandler() *WebSocketHandler {
 		connManager:    connManager,
 		sessionManager: sessionManager,
 		router:         router,
+		config:         loadWebSocketConfig(),
 	}
+	handler.upgrader.CheckOrigin = handler.config.checkOrigin
 
 	// 订阅实时踢出通知
 	handler.subscribeKickNotifications()
@@ -51,7 +50,6 @@ func NewWebSocketHandler() *WebSocketHandler {
 
 // StartWebSocketServer 启动WebSocket服务器
 func (h *WebSocketHandler) StartWebSocketServer() error {
-	http.HandleFunc("/ws", h.handleConnection)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "54342"
@@ -67,13 +65,22 @@ func (h *WebSocketHandler) StartWebSocketServer() error {
 		keyFile = "./certs/key.pem"
 	}
 
-	return http.ListenAndServeTLS(":"+port, certFile, keyFile, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", h.handleConnection)
+	server := &http.Server{
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: h.config.readHeaderTimeout,
+		IdleTimeout:       h.config.idleTimeout,
+		MaxHeaderBytes:    h.config.maxHeaderBytes,
+	}
+	return server.ListenAndServeTLS(certFile, keyFile)
 }
 
 // handleConnection 处理WebSocket连接
 func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Request) {
 	sugar := logger.Sugar()
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		sugar.Errorf("连接错误: %s", err)
 		return
@@ -81,6 +88,14 @@ func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Reque
 
 	// 创建新连接
 	connection := h.connManager.AddConnection(conn)
+	conn.SetReadLimit(h.config.maxMessageBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(h.config.authTimeout))
+	conn.SetPongHandler(func(string) error {
+		if !connection.IsAuthenticated() {
+			return nil
+		}
+		return conn.SetReadDeadline(time.Now().Add(h.config.pongWait))
+	})
 
 	sugar.Debugf("已与 %v 建立连接", conn.RemoteAddr())
 
@@ -92,16 +107,18 @@ func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Reque
 func (h *WebSocketHandler) refreshRouteLease(conn *connection.Connection, userID string) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		if conn.IsClosed() {
+	for {
+		select {
+		case <-conn.Done():
 			return
-		}
-		containerID := os.Getenv("HOSTNAME")
-		if containerID == "" {
-			containerID = "local"
-		}
-		if err := redisClient.RefreshConnection(userID, containerID); err != nil {
-			logger.Sugar().Warnf("刷新WebSocket路由租约失败: user_id=%s error=%v", userID, err)
+		case <-ticker.C:
+			containerID := os.Getenv("HOSTNAME")
+			if containerID == "" {
+				containerID = "local"
+			}
+			if err := redisClient.RefreshConnection(userID, containerID); err != nil {
+				logger.Sugar().Warnf("刷新WebSocket路由租约失败: user_id=%s error=%v", userID, err)
+			}
 		}
 	}
 }
@@ -112,7 +129,7 @@ func (h *WebSocketHandler) readProcess(conn *connection.Connection) {
 	defer func() {
 		// 连接关闭时清理
 		h.connManager.RemoveConnection(conn.ID)
-		if conn.LoggedIn && conn.UserID != "" {
+		if conn.IsAuthenticated() && conn.UserID != "" {
 			h.sessionManager.RemoveSession(conn.UserID)
 		}
 		sugar.Debugf("(%v, %v)连接已关闭", conn.ID, conn.Conn.RemoteAddr())
@@ -123,6 +140,13 @@ func (h *WebSocketHandler) readProcess(conn *connection.Connection) {
 		_, p, err := conn.Conn.ReadMessage()
 
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() && !conn.IsAuthenticated() {
+				_ = conn.Conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication timeout"),
+					time.Now().Add(h.config.writeTimeout),
+				)
+			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
 				sugar.Infof("连接关闭，读协程退出")
 			} else {
@@ -143,7 +167,7 @@ func (h *WebSocketHandler) readProcess(conn *connection.Connection) {
 		}
 
 		// 根据登录状态处理消息
-		if !conn.LoggedIn {
+		if !conn.IsAuthenticated() {
 			h.handleUnauthenticatedMessage(conn, requestMsg)
 		} else {
 			h.handleAuthenticatedMessage(conn, requestMsg)
@@ -226,6 +250,7 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 		logger.Sugar().Errorf("创建会话失败: %v", err)
 	}
 	go h.refreshRouteLease(conn, userIDStr)
+	_ = conn.Conn.SetReadDeadline(time.Now().Add(h.config.pongWait))
 
 	// 返回登录结果
 	h.sendResponse(conn, rsp)
@@ -250,14 +275,33 @@ func (h *WebSocketHandler) handleSignup(conn *connection.Connection, requestMsg 
 // writeToClient 监听 channel 发送消息协程
 func (h *WebSocketHandler) writeToClient(conn *connection.Connection) {
 	sugar := logger.Sugar()
+	ticker := time.NewTicker(h.config.pingInterval)
 	defer func() {
+		ticker.Stop()
 		sugar.Debugf("连接关闭，写协程退出")
 	}()
 
-	for msg := range conn.SendChan {
-		err := conn.Conn.WriteMessage(websocket.BinaryMessage, msg)
-		if err != nil {
-			sugar.Errorln("发送消息错误: ", err)
+	for {
+		select {
+		case <-conn.Done():
+			return
+		case msg, ok := <-conn.SendChan:
+			if !ok {
+				return
+			}
+			_ = conn.Conn.SetWriteDeadline(time.Now().Add(h.config.writeTimeout))
+			if err := conn.Conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+				sugar.Errorln("发送消息错误: ", err)
+				conn.Close()
+				return
+			}
+		case <-ticker.C:
+			_ = conn.Conn.SetWriteDeadline(time.Now().Add(h.config.writeTimeout))
+			if err := conn.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				sugar.Debugf("WebSocket ping失败，关闭连接: connection_id=%s error=%v", conn.ID, err)
+				conn.Close()
+				return
+			}
 		}
 	}
 }

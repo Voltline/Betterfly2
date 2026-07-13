@@ -8,6 +8,7 @@ import (
 	"data_forwarding_service/internal/connection"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -17,6 +18,8 @@ import (
 type Router struct {
 	connManager *connection.ConnectionManager
 }
+
+var ErrUserOffline = errors.New("用户没有有效WebSocket路由")
 
 // NewRouter 创建新的路由器
 func NewRouter(connManager *connection.ConnectionManager) *Router {
@@ -38,8 +41,8 @@ func (r *Router) RouteMessage(toUserID string, message []byte) error {
 	}
 
 	// 2. 检查用户是否在其他容器在线
-	targetContainerID := redisClient.GetContainerByConnection(toUserID)
-	if targetContainerID != "" {
+	targetContainerID, routeErr := redisClient.GetContainerByConnection(toUserID)
+	if routeErr == nil {
 		// 用户在其他容器在线，进行跨容器路由
 		err := r.routeCrossContainer(toUserID, targetContainerID, message)
 		if err != nil {
@@ -50,15 +53,15 @@ func (r *Router) RouteMessage(toUserID string, message []byte) error {
 		return err
 	}
 
-	// 3. 用户不在线，处理为离线消息
-	sugar.Warnf("用户不在线，消息暂存: %s", toUserID)
-	err := r.handleOfflineMessage(toUserID, message)
-	if err != nil {
+	if !errors.Is(routeErr, redisClient.ErrRouteNotFound) {
 		metrics.RecordRoutingError()
-	} else {
-		metrics.RecordMessageRouted("offline", start)
+		return routeErr
 	}
-	return err
+
+	// 离线消息已经由 storageService 持久化；实时投递失败必须显式返回，不能伪装成功。
+	sugar.Infow("用户没有有效WebSocket路由", "user_id", toUserID)
+	metrics.RecordRoutingError()
+	return ErrUserOffline
 }
 
 // routeLocally 尝试本地路由
@@ -114,32 +117,6 @@ func (r *Router) routeCrossContainer(toUserID string, targetContainerID string, 
 
 	sugar.Debugf("跨容器消息转发成功: %s (目标容器: %s)", toUserID, targetContainerID)
 	metrics.RecordKafkaMessageProduced(targetContainerID)
-	return nil
-}
-
-// handleOfflineMessage 处理离线消息
-func (r *Router) handleOfflineMessage(toUserID string, message []byte) error {
-	sugar := logger.Sugar()
-
-	// TODO: 这里应该将消息存储到离线消息队列
-	// 目前先记录日志
-	sugar.Debugf("用户离线，消息暂存: %s", toUserID)
-
-	// 临时方案：通过Kafka发布到存储服务
-	// 后续应该实现完整的离线消息存储
-	envBytes, err := mq.MarshalEnvelopeBytes(envelope.MessageType_DF_REQUEST, message)
-	if err != nil {
-		sugar.Errorf("序列化Envelope失败: %v", err)
-		return err
-	}
-	err = publisher.PublishMessage(string(envBytes), "storage-service")
-	if err != nil {
-		sugar.Errorf("离线消息发布失败: %v", err)
-		metrics.RecordKafkaProcessingError()
-		return err
-	}
-
-	metrics.RecordKafkaMessageProduced("storage-service")
 	return nil
 }
 

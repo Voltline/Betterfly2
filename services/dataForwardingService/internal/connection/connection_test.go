@@ -36,7 +36,7 @@ func TestConnectionClosePreventsFurtherEnqueue(t *testing.T) {
 }
 
 func TestConnectionEnqueueRejectsFullChannelAndCloseIsIdempotent(t *testing.T) {
-	conn := &Connection{ID: "conn-full", SendChan: make(chan []byte, 1)}
+	conn := &Connection{ID: "conn-full", SendChan: make(chan []byte, 1), done: make(chan struct{})}
 	if err := conn.EnqueueMessage([]byte("first")); err != nil {
 		t.Fatal(err)
 	}
@@ -47,6 +47,11 @@ func TestConnectionEnqueueRejectsFullChannelAndCloseIsIdempotent(t *testing.T) {
 	conn.Close()
 	if !conn.IsClosed() || !conn.ShouldStop {
 		t.Fatalf("connection was not marked closed: %+v", conn)
+	}
+	select {
+	case <-conn.Done():
+	default:
+		t.Fatal("connection close signal was not delivered")
 	}
 }
 

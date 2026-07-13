@@ -1,0 +1,103 @@
+package handlers
+
+import (
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type websocketConfig struct {
+	allowedOrigins     map[string]struct{}
+	allowMissingOrigin bool
+	maxMessageBytes    int64
+	authTimeout        time.Duration
+	pongWait           time.Duration
+	pingInterval       time.Duration
+	writeTimeout       time.Duration
+	readHeaderTimeout  time.Duration
+	idleTimeout        time.Duration
+	maxHeaderBytes     int
+}
+
+func loadWebSocketConfig() websocketConfig {
+	pongWait := envDurationValue("WS_PONG_WAIT", 60*time.Second)
+	pingInterval := envDurationValue("WS_PING_INTERVAL", 25*time.Second)
+	if pingInterval >= pongWait {
+		pingInterval = pongWait / 2
+	}
+	return websocketConfig{
+		allowedOrigins:     parseAllowedOrigins(os.Getenv("WS_ALLOWED_ORIGINS")),
+		allowMissingOrigin: envBoolValue("WS_ALLOW_MISSING_ORIGIN", true),
+		maxMessageBytes:    int64(envIntValue("WS_MAX_MESSAGE_BYTES", 4<<20)),
+		authTimeout:        envDurationValue("WS_AUTH_TIMEOUT", 15*time.Second),
+		pongWait:           pongWait,
+		pingInterval:       pingInterval,
+		writeTimeout:       envDurationValue("WS_WRITE_TIMEOUT", 10*time.Second),
+		readHeaderTimeout:  envDurationValue("WS_READ_HEADER_TIMEOUT", 5*time.Second),
+		idleTimeout:        envDurationValue("WS_IDLE_TIMEOUT", 60*time.Second),
+		maxHeaderBytes:     envIntValue("WS_MAX_HEADER_BYTES", 1<<20),
+	}
+}
+
+func parseAllowedOrigins(raw string) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, item := range strings.Split(raw, ",") {
+		origin, ok := canonicalOrigin(item)
+		if ok {
+			result[origin] = struct{}{}
+		}
+	}
+	return result
+}
+
+func canonicalOrigin(raw string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), true
+}
+
+func (c websocketConfig) checkOrigin(r *http.Request) bool {
+	rawOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+	if rawOrigin == "" {
+		return c.allowMissingOrigin
+	}
+	origin, ok := canonicalOrigin(rawOrigin)
+	if !ok {
+		return false
+	}
+	_, allowed := c.allowedOrigins[origin]
+	return allowed
+}
+
+func envDurationValue(key string, fallback time.Duration) time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func envIntValue(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func envBoolValue(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}

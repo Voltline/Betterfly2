@@ -3,15 +3,14 @@ package consumer
 import (
 	callpb "Betterfly2/proto/call"
 	pb "Betterfly2/proto/data_forwarding"
-	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
 	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
 	"Betterfly2/shared/logger"
 	"context"
 	"data_forwarding_service/internal/handlers"
+	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 
@@ -21,19 +20,22 @@ import (
 
 // Pre-compiled regex patterns for efficient matching
 var (
-	deleteUserPatternMatch   = regexp.MustCompile(`DELETE USER \d+ TARGET [-a-zA-Z0-9]+`)
-	deleteUserPatternCapture = regexp.MustCompile(`DELETE USER (\d+) TARGET ([-a-zA-Z0-9]+)`)
+	deleteUserPatternCapture = regexp.MustCompile(`^DELETE USER (\d+) TARGET ([-a-zA-Z0-9]+)$`)
 )
 
 // NewKafkaConsumerGroupHandler 新的Kafka消费者处理器
 type NewKafkaConsumerGroupHandler struct {
-	wsHandler *handlers.WebSocketHandler
+	wsHandler        *handlers.WebSocketHandler
+	retryConfig      consumerRetryConfig
+	processMessageFn func(*sarama.ConsumerMessage) error
+	publishDLQFn     func(string, []byte) error
 }
 
 // NewKafkaConsumerGroupHandlerWithHandler 创建带处理器的消费者处理器
 func NewKafkaConsumerGroupHandlerWithHandler(wsHandler *handlers.WebSocketHandler) *NewKafkaConsumerGroupHandler {
 	return &NewKafkaConsumerGroupHandler{
-		wsHandler: wsHandler,
+		wsHandler:   wsHandler,
+		retryConfig: loadConsumerRetryConfig(),
 	}
 }
 
@@ -42,165 +44,15 @@ func (h *NewKafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) er
 
 // ConsumeClaim 实现samara的消费处理器协议
 func (h *NewKafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	sugar := logger.Sugar()
-
 	for msg := range claim.Messages() {
-		sugar.Debugf("Kafka 收到消息 - Topic: %s, Partition: %d, Offset: %d", msg.Topic, msg.Partition, msg.Offset)
-
-		// 检查是否为关闭连接请求（Kafka降级方案），使用预编译的正则表达式
-		if deleteUserPatternMatch.Match(msg.Value) {
-			matches := deleteUserPatternCapture.FindStringSubmatch(string(msg.Value))
-			if len(matches) > 2 {
-				userID := matches[1]
-				targetContainerID := matches[2]
-
-				// 获取容器标识符（使用HOSTNAME作为唯一标识）
-				currentContainerID := os.Getenv("HOSTNAME")
-				if currentContainerID == "" {
-					currentContainerID = "local"
-				}
-
-				// 只有目标容器才处理踢出消息
-				if targetContainerID == currentContainerID {
-					sugar.Infof("收到Kafka降级踢出消息，执行强制登出: 用户 %s", userID)
-
-					// 使用传入的WebSocket处理器
-					if h.wsHandler != nil {
-						h.wsHandler.StopClient(userID)
-						sugar.Debugf("降级踢出操作完成: 用户 %s", userID)
-					} else {
-						sugar.Errorf("WebSocket处理器未设置，无法踢出用户: %s", userID)
-					}
-				} else {
-					sugar.Debugf("收到踢出消息但非本容器目标，忽略: 用户 %s, 目标容器: %s, 当前容器: %s",
-						userID, targetContainerID, currentContainerID)
-				}
+		logger.Sugar().Debugw("Kafka收到消息", "topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset)
+		if err := h.processWithRetry(session.Context(), msg); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
 			}
-			continue
+			logger.Sugar().Errorw("Kafka消息未确认，等待重新投递", "topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", summarizeError(err))
+			return err
 		}
-
-		// 尝试解析为Envelope
-		env := &envelope.Envelope{}
-		if err := proto.Unmarshal(msg.Value, env); err == nil {
-			// 成功解析为Envelope，根据类型处理
-			sugar.Debugf("收到Envelope消息: type=%v", env.Type)
-			switch env.Type {
-			case envelope.MessageType_STORAGE_RESPONSE:
-				storageResp := &storage.ResponseMessage{}
-				if err := proto.Unmarshal(env.Payload, storageResp); err != nil {
-					sugar.Errorf("解析Envelope中的STORAGE_RESPONSE payload失败: %v", err)
-					continue
-				}
-				// 处理storage响应
-				if err := h.handleStorageResponse(storageResp); err != nil {
-					sugar.Errorf("处理storage响应失败: %v", err)
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_FRIEND_RESPONSE:
-				friendResp := &friend.ResponseMessage{}
-				if err := proto.Unmarshal(env.Payload, friendResp); err != nil {
-					sugar.Errorf("解析Envelope中的FRIEND_RESPONSE payload失败: %v", err)
-					continue
-				}
-				if err := h.handleFriendResponse(friendResp); err != nil {
-					sugar.Errorf("处理friend响应失败: %v", err)
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_CALL_RESPONSE:
-				delivery := &callpb.Delivery{}
-				if err := proto.Unmarshal(env.Payload, delivery); err != nil {
-					sugar.Errorf("解析Envelope中的CALL_RESPONSE payload失败: %v", err)
-					continue
-				}
-				if err := h.handleCallDelivery(delivery); err != nil {
-					sugar.Errorf("处理call响应失败: %v", err)
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_PUSH_RESPONSE:
-				response := &pushpb.ResponseMessage{}
-				if err := proto.Unmarshal(env.Payload, response); err != nil {
-					sugar.Errorf("解析Envelope中的PUSH_RESPONSE payload失败: %v", err)
-					continue
-				}
-				if err := h.handlePushResponse(response); err != nil {
-					sugar.Errorf("处理push响应失败: %v", err)
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_DF_REQUEST:
-				requestMsg, err := handlers.HandleRequestData(env.Payload)
-				if err != nil {
-					sugar.Errorf("处理Envelope中的DF_REQUEST payload失败: %v", err)
-					continue
-				}
-				if requestMsg.GetPost() == nil {
-					sugar.Errorln("消费者收到非Post报文")
-					continue
-				}
-				err = handlers.InplaceHandlePostMessage(requestMsg)
-				if err != nil {
-					sugar.Errorf("处理消息失败: %v", err)
-					continue
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_STORAGE_REQUEST:
-				// storage请求应该由storage服务处理，这里可能不需要处理
-				sugar.Warnf("收到STORAGE_REQUEST类型Envelope，但data forwarding服务不处理，忽略")
-				continue
-			case envelope.MessageType_DF_RESPONSE:
-				if err := h.handleDFResponse(env.Payload); err != nil {
-					sugar.Errorf("处理DF响应失败: %v", err)
-				}
-				session.MarkMessage(msg, "")
-				continue
-			case envelope.MessageType_TEXT:
-				// 文本消息，可能用于降级方案，但已经在前面的正则匹配中处理
-				sugar.Debugf("收到TEXT类型Envelope，内容: %s", string(env.Payload))
-				continue
-			default:
-				sugar.Warnf("未知的Envelope类型: %v", env.Type)
-				continue
-			}
-		}
-
-		// 如果不是Envelope，继续旧逻辑
-		// 先尝试解析为storage响应消息
-		storageResp := &storage.ResponseMessage{}
-		if err := proto.Unmarshal(msg.Value, storageResp); err == nil {
-			// 成功解析为storage响应，处理这些消息
-			sugar.Debugf("收到storage响应: result=%v, target_user=%d", storageResp.Result, storageResp.TargetUserId)
-
-			// 处理storage响应并转发给客户端
-			if err := h.handleStorageResponse(storageResp); err != nil {
-				sugar.Errorf("处理storage响应失败: %v", err)
-			}
-
-			session.MarkMessage(msg, "")
-			continue
-		}
-
-		// 不是storage响应，尝试解析为data forwarding请求
-		requestMsg, err := handlers.HandleRequestData(msg.Value)
-		if err != nil {
-			sugar.Errorf("处理消息失败: %v", err)
-			continue
-		}
-
-		if requestMsg.GetPost() == nil {
-			sugar.Errorln("消费者收到非Post报文")
-			continue
-		}
-
-		err = handlers.InplaceHandlePostMessage(requestMsg)
-		if err != nil {
-			sugar.Errorf("处理消息失败: %v", err)
-			continue
-		}
-
 		session.MarkMessage(msg, "")
 	}
 	return nil
@@ -637,13 +489,13 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 		case *pb.DFInternalDelivery_GroupPostBatchDelivery:
 			groupBatchDelivery := delivery.GroupPostBatchDelivery
 			if groupBatchDelivery.GetPost() == nil || len(groupBatchDelivery.GetTargetUserIds()) == 0 {
-				return fmt.Errorf("GroupPostBatchDelivery内容不完整")
+				return permanentError("GroupPostBatchDelivery内容不完整")
 			}
 			return h.deliverGroupPostToUsers(groupBatchDelivery.GetPost(), groupBatchDelivery.GetTargetUserIds())
 		case *pb.DFInternalDelivery_GroupPostDelivery:
 			groupDelivery := delivery.GroupPostDelivery
 			if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
-				return fmt.Errorf("GroupPostDelivery内容不完整")
+				return permanentError("GroupPostDelivery内容不完整")
 			}
 			return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
 		}
@@ -652,10 +504,10 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 	// 兼容旧格式：历史版本直接把 GroupPostDelivery 作为 DF_RESPONSE payload。
 	groupDelivery := &pb.GroupPostDelivery{}
 	if err := proto.Unmarshal(payload, groupDelivery); err != nil {
-		return fmt.Errorf("解析GroupPostDelivery失败: %v", err)
+		return permanentError("解析GroupPostDelivery失败: %v", err)
 	}
 	if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
-		return fmt.Errorf("GroupPostDelivery内容不完整")
+		return permanentError("GroupPostDelivery内容不完整")
 	}
 
 	return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})

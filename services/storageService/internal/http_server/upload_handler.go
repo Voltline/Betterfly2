@@ -235,10 +235,21 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 	storagePath := rustfs.GetStoragePath(fileHash)
 	err = h.updateFileMetadata(fileHash, fileSize, storagePath)
 	if err != nil {
-		sugar.Errorf("保存文件元数据失败: %v", err)
 		// 如果待验证记录不存在，回退为创建已验证记录，兼容旧流程。
-		if fallbackErr := h.storeFileMetadata(fileHash, fileSize, storagePath); fallbackErr != nil {
-			sugar.Errorf("回退创建文件元数据失败: %v", fallbackErr)
+		fallbackErr := h.storeFileMetadata(fileHash, fileSize, storagePath)
+		if fallbackErr != nil {
+			sugar.Errorw("上传对象校验成功但元数据保存失败",
+				"file_hash", fileHash,
+				"update_error", err,
+				"fallback_error", fallbackErr,
+			)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			h.sendResponse(w, &storage.VerifyUploadResponse{
+				Success:      false,
+				ErrorMessage: "Failed to save verified file metadata",
+			})
+			return
 		}
 	}
 

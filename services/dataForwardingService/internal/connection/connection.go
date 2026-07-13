@@ -18,15 +18,17 @@ import (
 
 // Connection 表示一个WebSocket连接
 type Connection struct {
-	ID         string
-	UserID     string // 用户ID，登录前为空
-	Conn       *websocket.Conn
-	SendChan   chan []byte
-	ShouldStop bool
-	LoggedIn   bool
-	sendMu     sync.RWMutex
-	closeOnce  sync.Once
-	closed     atomic.Bool
+	ID            string
+	UserID        string // 用户ID，登录前为空
+	Conn          *websocket.Conn
+	SendChan      chan []byte
+	ShouldStop    bool
+	LoggedIn      bool
+	sendMu        sync.RWMutex
+	closeOnce     sync.Once
+	closed        atomic.Bool
+	authenticated atomic.Bool
+	done          chan struct{}
 }
 
 // ConnectionManager 管理所有WebSocket连接
@@ -61,6 +63,7 @@ func (cm *ConnectionManager) AddConnection(conn *websocket.Conn) *Connection {
 		SendChan:   make(chan []byte, 256),
 		ShouldStop: false,
 		LoggedIn:   false,
+		done:       make(chan struct{}),
 	}
 
 	cm.connections.Store(connectionID, connection)
@@ -139,8 +142,7 @@ func (cm *ConnectionManager) Login(connectionID string, userID string) error {
 	// 5. 更新连接信息
 	if conn, ok := cm.connections.Load(connectionID); ok {
 		connection := conn.(*Connection)
-		connection.UserID = userID
-		connection.LoggedIn = true
+		connection.MarkAuthenticated(userID)
 
 		// 更新用户-连接映射
 		cm.userConnections.Store(userID, connectionID)
@@ -237,7 +239,7 @@ func (cm *ConnectionManager) removeConnectionLocked(connectionID string) {
 		metrics.RecordWebSocketConnectionClosed()
 
 		// 如果已登录，清理用户映射和全局会话
-		if connection.LoggedIn && connection.UserID != "" {
+		if connection.IsAuthenticated() && connection.UserID != "" {
 			cm.userConnections.Delete(connection.UserID)
 			atomic.AddInt64(&cm.loggedInCount, -1)
 			// 更新在线用户数指标（删除后）
@@ -376,6 +378,9 @@ func (c *Connection) Close() {
 		c.ShouldStop = true
 		c.closed.Store(true)
 		close(c.SendChan)
+		if c.done != nil {
+			close(c.done)
+		}
 		c.sendMu.Unlock()
 
 		if c.Conn != nil {
@@ -386,4 +391,21 @@ func (c *Connection) Close() {
 
 func (c *Connection) IsClosed() bool {
 	return c.closed.Load()
+}
+
+func (c *Connection) MarkAuthenticated(userID string) {
+	c.UserID = userID
+	c.LoggedIn = true
+	c.authenticated.Store(true)
+}
+
+func (c *Connection) IsAuthenticated() bool {
+	return c.authenticated.Load()
+}
+
+func (c *Connection) Done() <-chan struct{} {
+	if c.done == nil {
+		return nil
+	}
+	return c.done
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -310,6 +311,131 @@ func TestHandleVerifyUpload_MarksFileVerifiedOnSuccess(t *testing.T) {
 	}
 	if !resp.Success {
 		t.Fatal("expected success=true")
+	}
+}
+
+func newMetadataVerifyHandler(update func(string, int64, string) error, store func(string, int64, string) error, deleted *bool) *UploadHandler {
+	return &UploadHandler{
+		fileExistsInStorage: func(context.Context, string) (bool, error) { return true, nil },
+		downloadFile: func(context.Context, string) (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewBufferString("payload")), nil
+		},
+		verifyFileHash: func(reader io.Reader, _ string) (bool, error) {
+			_, err := io.Copy(io.Discard, reader)
+			return err == nil, err
+		},
+		updateFileMetadata: update,
+		storeFileMetadata:  store,
+		deleteFile: func(context.Context, string) error {
+			if deleted != nil {
+				*deleted = true
+			}
+			return nil
+		},
+	}
+}
+
+func verifyUpload(t *testing.T, handler *UploadHandler) (int, storageVerifyResponse) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/storage_service/upload/verify", strings.NewReader(`{"file_hash":"`+verifiedFileHash+`"}`))
+	rec := httptest.NewRecorder()
+	handler.HandleVerifyUpload(rec, req)
+	var response storageVerifyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode verify response: %v body=%q", err, rec.Body.String())
+	}
+	return rec.Code, response
+}
+
+type storageVerifyResponse struct {
+	Success      bool   `json:"success"`
+	ErrorMessage string `json:"error_message"`
+}
+
+func TestHandleVerifyUploadFallsBackToCreateWhenPendingMetadataIsMissing(t *testing.T) {
+	storeCalls := 0
+	handler := newMetadataVerifyHandler(
+		func(string, int64, string) error { return errors.New("record not found") },
+		func(string, int64, string) error {
+			storeCalls++
+			return nil
+		},
+		nil,
+	)
+	status, response := verifyUpload(t, handler)
+	if status != http.StatusOK || !response.Success || storeCalls != 1 {
+		t.Fatalf("fallback did not complete verification: status=%d response=%+v store_calls=%d", status, response, storeCalls)
+	}
+}
+
+func TestHandleVerifyUploadReturnsFailureWhenBothMetadataWritesFail(t *testing.T) {
+	deleted := false
+	handler := newMetadataVerifyHandler(
+		func(string, int64, string) error { return errors.New("update database unavailable") },
+		func(string, int64, string) error { return errors.New("fallback database unavailable") },
+		&deleted,
+	)
+	status, response := verifyUpload(t, handler)
+	if status != http.StatusInternalServerError || response.Success {
+		t.Fatalf("dual metadata failure was reported as success: status=%d response=%+v", status, response)
+	}
+	if response.ErrorMessage != "Failed to save verified file metadata" {
+		t.Fatalf("unexpected public error: %q", response.ErrorMessage)
+	}
+	if deleted {
+		t.Fatal("verified object was deleted after metadata failure")
+	}
+}
+
+func TestHandleVerifyUploadCanRetryAfterMetadataFailure(t *testing.T) {
+	updateCalls := 0
+	storeCalls := 0
+	deleted := false
+	handler := newMetadataVerifyHandler(
+		func(string, int64, string) error {
+			updateCalls++
+			if updateCalls == 1 {
+				return errors.New("temporary update failure")
+			}
+			return nil
+		},
+		func(string, int64, string) error {
+			storeCalls++
+			return errors.New("temporary fallback failure")
+		},
+		&deleted,
+	)
+	if status, response := verifyUpload(t, handler); status != http.StatusInternalServerError || response.Success {
+		t.Fatalf("first verify unexpectedly succeeded: status=%d response=%+v", status, response)
+	}
+	if status, response := verifyUpload(t, handler); status != http.StatusOK || !response.Success {
+		t.Fatalf("retry did not complete: status=%d response=%+v", status, response)
+	}
+	if updateCalls != 2 || storeCalls != 1 || deleted {
+		t.Fatalf("unexpected retry side effects: updates=%d stores=%d deleted=%v", updateCalls, storeCalls, deleted)
+	}
+}
+
+func TestHandleVerifyUploadIsIdempotentForVerifiedMetadata(t *testing.T) {
+	updateCalls := 0
+	handler := newMetadataVerifyHandler(
+		func(string, int64, string) error {
+			updateCalls++
+			return nil
+		},
+		func(string, int64, string) error {
+			t.Fatal("verified metadata must not use fallback")
+			return nil
+		},
+		nil,
+	)
+	for i := 0; i < 2; i++ {
+		if status, response := verifyUpload(t, handler); status != http.StatusOK || !response.Success {
+			t.Fatalf("verify %d failed: status=%d response=%+v", i+1, status, response)
+		}
+	}
+	if updateCalls != 2 {
+		t.Fatalf("expected both verifies to update idempotently, got %d calls", updateCalls)
 	}
 }
 

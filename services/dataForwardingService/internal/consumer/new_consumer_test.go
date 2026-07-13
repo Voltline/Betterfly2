@@ -4,8 +4,198 @@ import (
 	pb "Betterfly2/proto/data_forwarding"
 	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
+	"context"
+	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/IBM/sarama"
 )
+
+type consumerTestSession struct {
+	ctx    context.Context
+	mu     sync.Mutex
+	marked []*sarama.ConsumerMessage
+}
+
+func (s *consumerTestSession) Claims() map[string][]int32               { return nil }
+func (s *consumerTestSession) MemberID() string                         { return "test" }
+func (s *consumerTestSession) GenerationID() int32                      { return 1 }
+func (s *consumerTestSession) MarkOffset(string, int32, int64, string)  {}
+func (s *consumerTestSession) Commit()                                  {}
+func (s *consumerTestSession) ResetOffset(string, int32, int64, string) {}
+func (s *consumerTestSession) Context() context.Context                 { return s.ctx }
+func (s *consumerTestSession) MarkMessage(msg *sarama.ConsumerMessage, _ string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.marked = append(s.marked, msg)
+}
+
+type consumerTestClaim struct {
+	messages <-chan *sarama.ConsumerMessage
+}
+
+func (c *consumerTestClaim) Topic() string                            { return "test-topic" }
+func (c *consumerTestClaim) Partition() int32                         { return 0 }
+func (c *consumerTestClaim) InitialOffset() int64                     { return 0 }
+func (c *consumerTestClaim) HighWaterMarkOffset() int64               { return 0 }
+func (c *consumerTestClaim) Messages() <-chan *sarama.ConsumerMessage { return c.messages }
+
+func newConsumerTestClaim(messages ...*sarama.ConsumerMessage) *consumerTestClaim {
+	ch := make(chan *sarama.ConsumerMessage, len(messages))
+	for _, msg := range messages {
+		ch <- msg
+	}
+	close(ch)
+	return &consumerTestClaim{messages: ch}
+}
+
+func newProcessingTestHandler(process func(*sarama.ConsumerMessage) error, dlq func(string, []byte) error) *NewKafkaConsumerGroupHandler {
+	return &NewKafkaConsumerGroupHandler{
+		retryConfig: consumerRetryConfig{
+			maxRetries:     2,
+			initialBackoff: time.Millisecond,
+			maxBackoff:     2 * time.Millisecond,
+			dlqTopic:       "test-dlq",
+		},
+		processMessageFn: process,
+		publishDLQFn:     dlq,
+	}
+}
+
+func TestConsumeClaimMarksOnlyAfterSuccessfulProcessing(t *testing.T) {
+	msg := &sarama.ConsumerMessage{Topic: "source", Partition: 2, Offset: 10, Value: []byte("payload")}
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return nil }, func(string, []byte) error {
+		t.Fatal("successful message must not enter DLQ")
+		return nil
+	})
+	session := &consumerTestSession{ctx: context.Background()}
+
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(msg)); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.marked) != 1 || session.marked[0] != msg {
+		t.Fatalf("expected exactly one marked message, got %+v", session.marked)
+	}
+}
+
+func TestConsumeClaimRetriesTransientFailureBeforeMarking(t *testing.T) {
+	attempts := 0
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("temporary websocket route failure")
+		}
+		return nil
+	}, func(string, []byte) error {
+		t.Fatal("recovered message must not enter DLQ")
+		return nil
+	})
+	session := &consumerTestSession{ctx: context.Background()}
+
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(&sarama.ConsumerMessage{Topic: "source", Offset: 1})); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || len(session.marked) != 1 {
+		t.Fatalf("unexpected retry/mark result: attempts=%d marked=%d", attempts, len(session.marked))
+	}
+}
+
+func TestConsumeClaimMarksAfterRetryExhaustionAndSuccessfulDLQ(t *testing.T) {
+	attempts := 0
+	var record deadLetterMessage
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
+		attempts++
+		return errors.New("user route unavailable")
+	}, func(topic string, payload []byte) error {
+		if topic != "test-dlq" {
+			t.Fatalf("unexpected DLQ topic: %s", topic)
+		}
+		return json.Unmarshal(payload, &record)
+	})
+	msg := &sarama.ConsumerMessage{Topic: "source", Partition: 3, Offset: 42, Value: []byte("original")}
+	session := &consumerTestSession{ctx: context.Background()}
+
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(msg)); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 || len(session.marked) != 1 {
+		t.Fatalf("unexpected retry/mark result: attempts=%d marked=%d", attempts, len(session.marked))
+	}
+	if record.OriginalTopic != "source" || record.OriginalPartition != 3 || record.OriginalOffset != 42 || string(record.OriginalPayload) != "original" || record.RetryCount != 2 || record.ErrorClass != failureTransient {
+		t.Fatalf("incomplete DLQ record: %+v", record)
+	}
+}
+
+func TestConsumeClaimDoesNotMarkWhenDLQPublishFailsOrSkipPartitionMessage(t *testing.T) {
+	processedOffsets := make([]int64, 0, 2)
+	handler := newProcessingTestHandler(func(msg *sarama.ConsumerMessage) error {
+		processedOffsets = append(processedOffsets, msg.Offset)
+		return permanentError("invalid payload")
+	}, func(string, []byte) error { return errors.New("kafka unavailable") })
+	first := &sarama.ConsumerMessage{Topic: "source", Partition: 0, Offset: 7}
+	second := &sarama.ConsumerMessage{Topic: "source", Partition: 0, Offset: 8}
+	session := &consumerTestSession{ctx: context.Background()}
+
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(first, second)); err == nil {
+		t.Fatal("expected DLQ failure")
+	}
+	if len(session.marked) != 0 {
+		t.Fatalf("DLQ failure unexpectedly marked offsets: %+v", session.marked)
+	}
+	if len(processedOffsets) != 1 || processedOffsets[0] != 7 {
+		t.Fatalf("consumer crossed failed partition message: %v", processedOffsets)
+	}
+}
+
+func TestConsumeClaimWritesMalformedProtobufToDLQ(t *testing.T) {
+	dlqCalls := 0
+	handler := newProcessingTestHandler(nil, func(_ string, payload []byte) error {
+		dlqCalls++
+		var record deadLetterMessage
+		if err := json.Unmarshal(payload, &record); err != nil {
+			return err
+		}
+		if record.ErrorClass != failurePermanent || record.RetryCount != 0 {
+			t.Fatalf("malformed protobuf was not classified as permanent: %+v", record)
+		}
+		return nil
+	})
+	handler.processMessageFn = handler.processMessage
+	session := &consumerTestSession{ctx: context.Background()}
+
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(&sarama.ConsumerMessage{Topic: "source", Value: []byte{0xff, 0xff}})); err != nil {
+		t.Fatal(err)
+	}
+	if dlqCalls != 1 || len(session.marked) != 1 {
+		t.Fatalf("unexpected malformed protobuf result: dlq=%d marked=%d", dlqCalls, len(session.marked))
+	}
+}
+
+func TestProcessWithRetryStopsWhenContextIsCanceled(t *testing.T) {
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return errors.New("temporary") }, func(string, []byte) error {
+		t.Fatal("canceled retry must not enter DLQ")
+		return nil
+	})
+	handler.retryConfig.initialBackoff = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- handler.processWithRetry(ctx, &sarama.ConsumerMessage{Topic: "source"})
+	}()
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry backoff ignored context cancellation")
+	}
+}
 
 func TestBuildPostAckResponse(t *testing.T) {
 	resp := buildPostAckResponse(&storage.StoreMsgRsp{MessageId: 12345, ClientMessageId: "client-42"})

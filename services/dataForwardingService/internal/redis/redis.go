@@ -16,7 +16,77 @@ var ctx = context.Background()
 
 const routeLeaseTTL = 90 * time.Second
 
+var ErrRouteNotFound = errors.New("无有效WebSocket路由")
+
 func routeLeaseKey(userID string) string { return "ws_route_lease:" + userID }
+
+var registerConnectionScript = redis.NewScript(`
+local previous = redis.call('HGET', KEYS[1], ARGV[1])
+if previous and previous ~= ARGV[2] then
+  redis.call('SREM', 'container_connections:' .. previous, ARGV[1])
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('SADD', 'container_connections:' .. ARGV[2], ARGV[1])
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+return 1
+`)
+
+var unregisterConnectionScript = redis.NewScript(`
+local mapped = redis.call('HGET', KEYS[1], ARGV[1])
+if mapped ~= ARGV[2] then
+  return 0
+end
+redis.call('HDEL', KEYS[1], ARGV[1])
+redis.call('SREM', 'container_connections:' .. ARGV[2], ARGV[1])
+local leased = redis.call('GET', KEYS[2])
+if leased == ARGV[2] then
+  redis.call('DEL', KEYS[2])
+end
+return 1
+`)
+
+var refreshConnectionScript = redis.NewScript(`
+local mapped = redis.call('HGET', KEYS[1], ARGV[1])
+if mapped ~= ARGV[2] then
+  return 0
+end
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+return 1
+`)
+
+var getValidRouteScript = redis.NewScript(`
+local mapped = redis.call('HGET', KEYS[1], ARGV[1])
+if not mapped then
+  return nil
+end
+local leased = redis.call('GET', KEYS[2])
+if leased == mapped then
+  return mapped
+end
+if redis.call('HGET', KEYS[1], ARGV[1]) == mapped then
+  redis.call('HDEL', KEYS[1], ARGV[1])
+  redis.call('SREM', 'container_connections:' .. mapped, ARGV[1])
+end
+return nil
+`)
+
+var getValidRoutesScript = redis.NewScript(`
+local result = {}
+for i, user_id in ipairs(ARGV) do
+  local mapped = redis.call('HGET', KEYS[1], user_id)
+  if mapped then
+    local leased = redis.call('GET', 'ws_route_lease:' .. user_id)
+    if leased == mapped then
+      table.insert(result, user_id)
+      table.insert(result, mapped)
+    elseif redis.call('HGET', KEYS[1], user_id) == mapped then
+      redis.call('HDEL', KEYS[1], user_id)
+      redis.call('SREM', 'container_connections:' .. mapped, user_id)
+    end
+  end
+end
+return result
+`)
 
 // InitRedis 初始化 Redis
 func InitRedis() error {
@@ -25,91 +95,87 @@ func InitRedis() error {
 		addr = "localhost:6379"
 	}
 
-	Rdb = redis.NewClient(&redis.Options{
-		Addr: addr,
-		DB:   0,
-	})
-
-	sugar := logger.Sugar()
-	sugar.Debugf("当前 Redis: %s", addr)
-
-	_, err := Rdb.Ping(ctx).Result()
-	if err != nil {
+	Rdb = redis.NewClient(&redis.Options{Addr: addr, DB: 0})
+	logger.Sugar().Debugf("当前 Redis: %s", addr)
+	if _, err := Rdb.Ping(ctx).Result(); err != nil {
 		return fmt.Errorf("连接 Redis 失败: %v", err)
 	}
 	return nil
 }
 
 func RegisterConnection(id string, containerID string) error {
-	pipe := Rdb.TxPipeline()
-	pipe.HSet(ctx, "ws_connection_mapping", id, containerID)
-	pipe.SAdd(ctx, "container_connections:"+containerID, id)
-	pipe.SetEx(ctx, routeLeaseKey(id), containerID, routeLeaseTTL)
-	_, err := pipe.Exec(ctx)
-	return err
+	if Rdb == nil {
+		return errors.New("Redis客户端未初始化")
+	}
+	return registerConnectionScript.Run(ctx, Rdb,
+		[]string{"ws_connection_mapping", routeLeaseKey(id)},
+		id, containerID, routeLeaseTTL.Milliseconds(),
+	).Err()
 }
 
 func UnregisterConnection(id string, containerID string) error {
-	// 检查当前记录是否匹配当前容器
-	current, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil // 本来就没有
-		}
-		return err
+	if Rdb == nil {
+		return errors.New("Redis客户端未初始化")
 	}
-	if current != containerID {
-		logger.Sugar().Warnf("尝试删除非本容器的连接: %s 属于 %s, 当前容器: %s", id, current, containerID)
-		return nil // 不匹配则不删除
-	}
-
-	pipe := Rdb.TxPipeline()
-	pipe.HDel(ctx, "ws_connection_mapping", id)
-	pipe.SRem(ctx, fmt.Sprintf("container_connections:%s", containerID), id)
-	pipe.Del(ctx, routeLeaseKey(id))
-	_, err = pipe.Exec(ctx)
+	_, err := unregisterConnectionScript.Run(ctx, Rdb,
+		[]string{"ws_connection_mapping", routeLeaseKey(id)},
+		id, containerID,
+	).Result()
 	return err
 }
 
 func RefreshConnection(id string, containerID string) error {
-	current, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
+	if Rdb == nil {
+		return errors.New("Redis客户端未初始化")
+	}
+	updated, err := refreshConnectionScript.Run(ctx, Rdb,
+		[]string{"ws_connection_mapping", routeLeaseKey(id)},
+		id, containerID, routeLeaseTTL.Milliseconds(),
+	).Int()
 	if err != nil {
 		return err
 	}
-	if current != containerID {
-		return fmt.Errorf("用户连接映射已变更: %s", id)
+	if updated == 0 {
+		return ErrRouteNotFound
 	}
-	return Rdb.SetEx(ctx, routeLeaseKey(id), containerID, routeLeaseTTL).Err()
+	return nil
 }
 
-func GetContainerByConnection(id string) string {
-	result, err := Rdb.HGet(ctx, "ws_connection_mapping", id).Result()
-	logger.Sugar().Debugf("ws_connection_mapping 待查询id为: %s", id)
+func GetContainerByConnection(id string) (string, error) {
+	if Rdb == nil {
+		return "", errors.New("Redis客户端未初始化")
+	}
+	result, err := getValidRouteScript.Run(ctx, Rdb,
+		[]string{"ws_connection_mapping", routeLeaseKey(id)}, id,
+	).Text()
+	if errors.Is(err, redis.Nil) {
+		return "", ErrRouteNotFound
+	}
 	if err != nil {
-		logger.Sugar().Warnf("GetContainerByConnection 错误: %v", err)
-		return ""
+		return "", fmt.Errorf("读取WebSocket路由失败: %w", err)
 	}
-	return result
+	return result, nil
 }
 
-func GetContainersByConnections(ids []string) map[string]string {
+func GetContainersByConnections(ids []string) (map[string]string, error) {
 	result := make(map[string]string, len(ids))
 	if len(ids) == 0 {
-		return result
+		return result, nil
+	}
+	if Rdb == nil {
+		return nil, errors.New("Redis客户端未初始化")
 	}
 
-	values, err := Rdb.HMGet(ctx, "ws_connection_mapping", ids...).Result()
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	values, err := getValidRoutesScript.Run(ctx, Rdb, []string{"ws_connection_mapping"}, args...).StringSlice()
 	if err != nil {
-		logger.Sugar().Warnf("GetContainersByConnections 错误: %v", err)
-		return result
+		return nil, fmt.Errorf("批量读取WebSocket路由失败: %w", err)
 	}
-
-	for i, value := range values {
-		containerID, ok := value.(string)
-		if !ok || containerID == "" {
-			continue
-		}
-		result[ids[i]] = containerID
+	for i := 0; i+1 < len(values); i += 2 {
+		result[values[i]] = values[i+1]
 	}
-	return result
+	return result, nil
 }

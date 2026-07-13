@@ -19,8 +19,15 @@ func StoreFileMetadata(fileHash string, fileSize int64, storagePath string) erro
 		CreatedAt:   nowTime,
 		UpdatedAt:   nowTime,
 	}
-	err := DB().Create(fileMetadata).Error
-	return err
+	return DB().Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "file_hash"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"file_size":    fileSize,
+			"storage_path": storagePath,
+			"is_verified":  true,
+			"updated_at":   nowTime,
+		}),
+	}).Create(fileMetadata).Error
 }
 
 // UpsertPendingFileMetadata 记录待验证文件元数据
@@ -72,14 +79,21 @@ func FileExists(fileHash string) (bool, error) {
 // UpdateFileMetadata 更新文件元数据（主要用于更新时间戳）
 func UpdateFileMetadata(fileHash string, fileSize int64, storagePath string) error {
 	nowTime := utils.NowTime()
-	return DB().Model(&FileMetadata{}).
+	result := DB().Model(&FileMetadata{}).
 		Where("file_hash = ?", fileHash).
 		Updates(map[string]interface{}{
 			"file_size":    fileSize,
 			"storage_path": storagePath,
 			"is_verified":  true,
 			"updated_at":   nowTime,
-		}).Error
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // DeleteFileMetadata 删除文件元数据

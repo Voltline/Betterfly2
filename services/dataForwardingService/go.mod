@@ -13,6 +13,7 @@ require (
 	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
 	github.com/IBM/sarama v1.45.1
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.21.0
 	github.com/redis/go-redis/v9 v9.8.0
@@ -51,6 +52,7 @@ require (
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/net v0.47.0 // indirect

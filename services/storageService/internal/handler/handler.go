@@ -75,7 +75,10 @@ type fileExistsCacheEntry struct {
 // NewStorageHandler 创建新的存储处理器
 func NewStorageHandler() *StorageHandler {
 	// 初始化数据库连接并自动迁移表
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.Message{}, &db.FileMetadata{})
+	_ = db.DB(&db.User{}, &db.Friend{}, &db.GroupMember{}, &db.Message{}, &db.FileMetadata{})
+	if err := db.BackfillGroupMemberJoinedAt(); err != nil {
+		logger.Sugar().Fatalf("回填群成员入群时间失败: %v", err)
+	}
 
 	// 初始化L1缓存
 	l1Cache := cache.NewL1Cache()
@@ -190,7 +193,7 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 	if cached, ok := h.getFromCache(cacheKey); ok {
 		if msg, ok := cached.(*db.Message); ok {
 			sugar.Debugf("从缓存获取消息: message_id=%d", query.MessageId)
-			return h.buildMessageResponse(req, msg), nil
+			return h.authorizedMessageResponse(req, msg)
 		}
 	}
 
@@ -213,12 +216,46 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 	// 存入缓存
 	h.setToCache(cacheKey, message, 5*time.Minute)
 
+	return h.authorizedMessageResponse(req, message)
+}
+
+func (h *StorageHandler) authorizedMessageResponse(req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
+	allowed, err := db.CanUserReadMessage(req.GetTargetUserId(), message)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		logger.Sugar().Warnf(
+			"安全拒绝按ID读取消息: requester_user_id=%d message_id=%d",
+			req.GetTargetUserId(),
+			message.MessageID,
+		)
+		return messageNotFoundResponse(req), nil
+	}
 	return h.buildMessageResponse(req, message), nil
+}
+
+func messageNotFoundResponse(req *storage.RequestMessage) *storage.ResponseMessage {
+	return &storage.ResponseMessage{
+		Result:       storage.StorageResult_RECORD_NOT_EXIST,
+		TargetUserId: req.GetTargetUserId(),
+	}
 }
 
 // handleQuerySyncMessages 处理同步消息请求
 func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
+	if req.GetTargetUserId() <= 0 || req.GetTargetUserId() != query.GetToUserId() {
+		sugar.Warnf(
+			"安全拒绝同步消息身份不一致: requester_user_id=%d query_user_id=%d",
+			req.GetTargetUserId(),
+			query.GetToUserId(),
+		)
+		return &storage.ResponseMessage{
+			Result:       storage.StorageResult_FORBIDDEN,
+			TargetUserId: req.GetTargetUserId(),
+		}, nil
+	}
 
 	// 解析时间戳，使用预定义的格式列表
 	var timestamp time.Time

@@ -713,6 +713,12 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 					},
 				},
 			}
+		case storage.StorageResult_FORBIDDEN:
+			dfResp = &pb.ResponseMessage{
+				Payload: &pb.ResponseMessage_Warn{
+					Warn: &pb.Warn{WarningMessage: "无权访问该资源"},
+				},
+			}
 		default:
 			dfResp = &pb.ResponseMessage{
 				Payload: &pb.ResponseMessage_Warn{

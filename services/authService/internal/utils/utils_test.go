@@ -89,6 +89,25 @@ func TestValidateJWTRejectsUnexpectedSigningAlgorithm(t *testing.T) {
 	}
 }
 
+func TestValidateJWTAllowsOnlySmallClockSkew(t *testing.T) {
+	key := []byte("clock-skew-secret")
+	withinLeeway := signedTestToken(t, key, goJwt.RegisteredClaims{
+		ExpiresAt: goJwt.NewNumericDate(time.Now().Add(time.Hour)),
+		NotBefore: goJwt.NewNumericDate(time.Now().Add(15 * time.Second)),
+	})
+	if _, err := ValidateJWT(withinLeeway, key); err != nil {
+		t.Fatalf("token within clock skew was rejected: %v", err)
+	}
+
+	beyondLeeway := signedTestToken(t, key, goJwt.RegisteredClaims{
+		ExpiresAt: goJwt.NewNumericDate(time.Now().Add(time.Hour)),
+		NotBefore: goJwt.NewNumericDate(time.Now().Add(2 * time.Minute)),
+	})
+	if _, err := ValidateJWT(beyondLeeway, key); err == nil {
+		t.Fatal("token beyond clock skew was accepted")
+	}
+}
+
 func signedTestToken(t *testing.T, key []byte, registered goJwt.RegisteredClaims) string {
 	t.Helper()
 	token, err := goJwt.NewWithClaims(goJwt.SigningMethodHS256, BetterflyClaims{

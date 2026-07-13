@@ -55,7 +55,12 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 				result = pb.AuthResult_SERVICE_ERROR
 				goto RETURN
 			}
-			db.UpdateUserJwtKeyById(user.ID, user.JwtKey)
+			if err = db.UpdateUserJwtKeyById(user.ID, user.JwtKey); err != nil {
+				logger.Sugar().Errorln(userBriefStr(user), "failed to persist jwt key:", err)
+				user.JwtKey = nil
+				result = pb.AuthResult_SERVICE_ERROR
+				goto RETURN
+			}
 		}
 
 		// 生成jwt

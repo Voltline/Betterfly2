@@ -34,6 +34,7 @@ type GroupMember struct {
 	GroupID    int64  `gorm:"primaryKey;index:idx_group_members_user_group,priority:2;comment:群组ID"`
 	UserID     int64  `gorm:"primaryKey;index:idx_group_members_user_group,priority:1;comment:成员用户ID"`
 	Role       string `gorm:"type:varchar(20);comment:成员角色，例如owner/member"`
+	JoinedAt   string `gorm:"type:varchar(25);comment:加入群组时间，角色变化不得修改"`
 	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间"`
 }
 

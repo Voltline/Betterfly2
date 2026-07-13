@@ -5,6 +5,7 @@ import (
 	"Betterfly2/shared/db"
 	"authService/internal/utils"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -117,6 +118,28 @@ func TestPasswordLoginRejectsWrongPasswordAndIssuesJWTOnSuccess(t *testing.T) {
 			t.Fatalf("successful login did not issue a valid JWT: response=%+v claims=%+v err=%v", resp, claims, validateErr)
 		}
 	})
+}
+
+func TestPasswordLoginDoesNotIssueJWTWhenSigningKeyPersistenceFails(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := useAuthMockDB(t)
+	expectUserByAccount(mock, passwordHash, nil)
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE "users" SET "jwt_key"=\$1 WHERE id = \$2`).
+		WithArgs(sqlmock.AnyArg(), int64(9)).
+		WillReturnError(errors.New("database unavailable"))
+	mock.ExpectRollback()
+
+	resp, err := (&AuthService{}).Login(context.Background(), &pb.LoginReq{Account: "alice", Password: "correct-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetResult() != pb.AuthResult_SERVICE_ERROR || resp.GetJwt() != "" {
+		t.Fatalf("persistence failure issued a JWT: %+v", resp)
+	}
 }
 
 func expectUserByAccount(mock sqlmock.Sqlmock, passwordHash []byte, key []byte) {

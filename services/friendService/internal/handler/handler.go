@@ -51,6 +51,9 @@ type FriendHandler struct{}
 
 func NewFriendHandler() *FriendHandler {
 	_ = db.DB(&db.User{}, &db.Friend{}, &db.Group{}, &db.GroupMember{}, &db.RelationshipRequest{})
+	if err := db.BackfillGroupMemberJoinedAt(); err != nil {
+		logger.Sugar().Fatalf("回填群成员入群时间失败: %v", err)
+	}
 	return &FriendHandler{}
 }
 

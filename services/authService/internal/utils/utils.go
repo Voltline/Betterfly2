@@ -9,7 +9,8 @@ import (
 )
 
 const (
-	jwtExp = time.Hour * 24 * 30 // 有效期：30天
+	jwtExp       = time.Hour * 24 * 30 // 有效期：30天
+	jwtClockSkew = 30 * time.Second
 )
 
 type BetterflyClaims struct {
@@ -19,13 +20,14 @@ type BetterflyClaims struct {
 }
 
 func GenerateJWT(user *db.User) (string, error) {
+	now := time.Now().UTC()
 	claims := BetterflyClaims{
 		ID:      user.ID,
 		Account: user.Account,
 		RegisteredClaims: goJwt.RegisteredClaims{
-			ExpiresAt: goJwt.NewNumericDate(time.Now().Add(jwtExp)),
-			IssuedAt:  goJwt.NewNumericDate(time.Now()),
-			NotBefore: goJwt.NewNumericDate(time.Now()),
+			ExpiresAt: goJwt.NewNumericDate(now.Add(jwtExp)),
+			IssuedAt:  goJwt.NewNumericDate(now),
+			NotBefore: goJwt.NewNumericDate(now),
 		},
 	}
 	return goJwt.NewWithClaims(goJwt.SigningMethodHS256, claims).SignedString(user.JwtKey)
@@ -35,6 +37,7 @@ func ValidateJWT(jwtStr string, jwtKey []byte) (*BetterflyClaims, error) {
 	var parser = goJwt.NewParser(
 		goJwt.WithValidMethods([]string{"HS256"}), // 明确指定签名算法
 		goJwt.WithExpirationRequired(),            // 必须含有 exp 字段
+		goJwt.WithLeeway(jwtClockSkew),            // 容忍多实例间轻微时钟偏差
 	)
 
 	jwt, err := parser.ParseWithClaims(jwtStr, &BetterflyClaims{}, func(_ *goJwt.Token) (interface{}, error) {

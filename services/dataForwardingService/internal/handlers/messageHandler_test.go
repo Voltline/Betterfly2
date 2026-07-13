@@ -29,8 +29,8 @@ func TestBuildSyncMessagesStorageRequestRoutesResponseToRequester(t *testing.T) 
 	if !ok {
 		t.Fatalf("expected QuerySyncMessages payload, got %T", storeReq.Payload)
 	}
-	if queryPayload.QuerySyncMessages.GetToUserId() != 2002 {
-		t.Fatalf("expected sync query target 2002, got %d", queryPayload.QuerySyncMessages.GetToUserId())
+	if queryPayload.QuerySyncMessages.GetToUserId() != 1001 {
+		t.Fatalf("expected sync query target to be forced to requester 1001, got %d", queryPayload.QuerySyncMessages.GetToUserId())
 	}
 	if queryPayload.QuerySyncMessages.GetTimestamp() != "2026-03-27T08:00:00Z" {
 		t.Fatalf("unexpected timestamp: %q", queryPayload.QuerySyncMessages.GetTimestamp())

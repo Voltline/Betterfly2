@@ -25,6 +25,24 @@ type JoinedGroupContact struct {
 	UpdateTime  string `gorm:"column:update_time"`
 }
 
+func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
+	return &GroupMember{
+		GroupID:    groupID,
+		UserID:     userID,
+		Role:       role,
+		JoinedAt:   joinedAt,
+		UpdateTime: joinedAt,
+	}
+}
+
+// BackfillGroupMemberJoinedAt migrates legacy rows without changing their
+// effective join time. It is idempotent and safe during rolling upgrades.
+func BackfillGroupMemberJoinedAt() error {
+	return DB().Model(&GroupMember{}).
+		Where("joined_at IS NULL OR joined_at = ''").
+		Update("joined_at", gorm.Expr("update_time")).Error
+}
+
 func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, string, error) {
 	now := utils.NowTime()
 	alreadyExists := false
@@ -67,12 +85,7 @@ func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, s
 		var member GroupMember
 		err = tx.Where("group_id = ? AND user_id = ?", groupID, ownerUserID).First(&member).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return tx.Create(&GroupMember{
-				GroupID:    groupID,
-				UserID:     ownerUserID,
-				Role:       "owner",
-				UpdateTime: now,
-			}).Error
+			return tx.Create(newGroupMember(groupID, ownerUserID, GroupRoleOwner, now)).Error
 		}
 		if err != nil {
 			return err
@@ -80,10 +93,7 @@ func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, s
 
 		return tx.Model(&GroupMember{}).
 			Where("group_id = ? AND user_id = ?", groupID, ownerUserID).
-			Updates(map[string]interface{}{
-				"role":        "owner",
-				"update_time": now,
-			}).Error
+			Updates(groupMemberRoleUpdates("owner", now)).Error
 	})
 
 	return alreadyExists, now, err
@@ -200,7 +210,7 @@ func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
 				}
 				if err := tx.Model(&GroupMember{}).
 					Where("group_id = ? AND user_id = ?", groupID, successor.UserID).
-					Updates(map[string]interface{}{"role": "owner", "update_time": now}).Error; err != nil {
+					Updates(groupMemberRoleUpdates("owner", now)).Error; err != nil {
 					return err
 				}
 			}

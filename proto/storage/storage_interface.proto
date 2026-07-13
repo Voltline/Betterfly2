@@ -10,6 +10,7 @@ enum StorageResult {
   SERVICE_ERROR = 255;
 
   RECORD_NOT_EXIST = 1;
+  FORBIDDEN = 2;
 }
 
 message RequestMessage {

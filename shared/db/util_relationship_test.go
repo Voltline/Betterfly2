@@ -41,6 +41,23 @@ func TestRelationshipUpdateTimeFitsLegacySynchronizationColumns(t *testing.T) {
 	}
 }
 
+func TestGroupMemberRoleChangesPreserveJoinedAt(t *testing.T) {
+	updates := groupMemberRoleUpdates(GroupRoleAdmin, "2026-07-13T04:00:00Z")
+	if _, changesJoinedAt := updates["joined_at"]; changesJoinedAt {
+		t.Fatal("role update must not change joined_at")
+	}
+	if updates["role"] != GroupRoleAdmin || updates["update_time"] == "" {
+		t.Fatalf("unexpected role updates: %#v", updates)
+	}
+}
+
+func TestNewGroupMemberRecordsJoinedAt(t *testing.T) {
+	member := newGroupMember(3001, 1002, GroupRoleMember, "2026-07-13T04:00:00Z")
+	if member.JoinedAt == "" || member.JoinedAt != member.UpdateTime {
+		t.Fatalf("new member timestamps are invalid: %+v", member)
+	}
+}
+
 func TestGroupPermissionMatrix(t *testing.T) {
 	tests := []struct {
 		name       string

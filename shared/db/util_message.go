@@ -70,7 +70,7 @@ func GetMessageByID(messageID int64) (*Message, error) {
 // 当前会返回：
 // 1. 发给该用户的单聊消息
 // 2. 该用户当前已加入群组中的群聊消息
-// 群聊消息会额外要求消息时间晚于该成员记录的 update_time，
+// 群聊消息会额外要求消息时间不早于该成员的入群时间，
 // 避免把用户入群前的旧消息同步回来。
 func GetSyncMessagesByTimestamp(toUserID int64, timestamp string) ([]Message, error) {
 	var messages []Message
@@ -106,11 +106,36 @@ FROM (
   JOIN messages AS m
     ON m.to_user_id = gm.group_id
    AND m.is_group = TRUE
-   AND m.timestamp > gm.update_time
+   AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time)
    AND m.timestamp > ?
   WHERE gm.user_id = ?
 ) AS sync_messages
 ORDER BY timestamp ASC
 `, toUserID, timestamp, timestamp, toUserID).Scan(&messages).Error
 	return messages, err
+}
+
+// CanUserReadMessage checks authorization against the current relationship
+// state. Callers must invoke it even when the message entity came from cache.
+func CanUserReadMessage(requesterID int64, message *Message) (bool, error) {
+	if requesterID <= 0 || message == nil {
+		return false, nil
+	}
+	if !message.IsGroup {
+		return requesterID == message.FromUserID || requesterID == message.ToUserID, nil
+	}
+	if requesterID == message.FromUserID {
+		return true, nil
+	}
+
+	var count int64
+	err := DB().Model(&GroupMember{}).
+		Where(
+			"group_id = ? AND user_id = ? AND COALESCE(NULLIF(joined_at, ''), update_time) <= ?",
+			message.ToUserID,
+			requesterID,
+			message.Timestamp,
+		).
+		Count(&count).Error
+	return count > 0, err
 }

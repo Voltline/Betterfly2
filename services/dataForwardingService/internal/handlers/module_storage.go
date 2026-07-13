@@ -6,6 +6,7 @@ import (
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/monitor"
+	"fmt"
 )
 
 func init() {
@@ -66,10 +67,11 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 	if err != nil {
 		return err
 	}
+	storeReq, err := prepareSyncMessagesStorageRequest(fromID, payload, currentContainerTopic())
+	if err != nil {
+		return err
+	}
 
-	currentContainerID := currentContainerTopic()
-
-	storeReq := buildSyncMessagesStorageRequest(fromID, payload, currentContainerID)
 	if err := publishStorageRequest(storeReq); err != nil {
 		logger.Sugar().Errorf("发布同步查询请求到storage-service失败: %v", err)
 		return err
@@ -78,20 +80,39 @@ func handleQuerySyncMessages(fromID int64, message *pb.RequestMessage) error {
 	logger.Sugar().Debugf(
 		"同步消息查询请求已发送到storageService: requester_user_id=%d, query_target_id=%d",
 		fromID,
-		payload.GetToUserId(),
+		fromID,
 	)
 	return nil
+}
+
+func prepareSyncMessagesStorageRequest(fromID int64, payload *pb.QuerySyncMessages, currentContainerID string) (*storage.RequestMessage, error) {
+	if err := validateSyncMessagesTarget(fromID, payload.GetToUserId()); err != nil {
+		logger.Sugar().Warnf(
+			"安全拒绝同步消息越权请求: requester_user_id=%d requested_user_id=%d",
+			fromID,
+			payload.GetToUserId(),
+		)
+		return nil, err
+	}
+	return buildSyncMessagesStorageRequest(fromID, payload, currentContainerID), nil
 }
 
 func buildSyncMessagesStorageRequest(fromID int64, payload *pb.QuerySyncMessages, currentContainerID string) *storage.RequestMessage {
 	req := newStorageRequest(currentContainerID, fromID)
 	req.Payload = &storage.RequestMessage_QuerySyncMessages{
 		QuerySyncMessages: &storage.QuerySyncMessages{
-			ToUserId:  payload.GetToUserId(),
+			ToUserId:  fromID,
 			Timestamp: payload.GetTimestamp(),
 		},
 	}
 	return req
+}
+
+func validateSyncMessagesTarget(fromID, requestedUserID int64) error {
+	if fromID <= 0 || requestedUserID != 0 && requestedUserID != fromID {
+		return fmt.Errorf("无权同步其他用户的消息")
+	}
+	return nil
 }
 
 // handleQueryUser 处理查询用户信息请求

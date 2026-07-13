@@ -364,7 +364,7 @@ func addGroupMemberTx(tx *gorm.DB, groupID, userID int64, now string) error {
 	var member GroupMember
 	err := tx.Where("group_id = ? AND user_id = ?", groupID, userID).First(&member).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if err := tx.Create(&GroupMember{GroupID: groupID, UserID: userID, Role: GroupRoleMember, UpdateTime: now}).Error; err != nil {
+		if err := tx.Create(newGroupMember(groupID, userID, GroupRoleMember, now)).Error; err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -444,6 +444,10 @@ func canChangeGroupMemberRole(actorRole, targetRole, newRole string) bool {
 	return actorRole == GroupRoleOwner && targetRole != GroupRoleOwner && (newRole == GroupRoleAdmin || newRole == GroupRoleMember)
 }
 
+func groupMemberRoleUpdates(role, updateTime string) map[string]interface{} {
+	return map[string]interface{}{"role": role, "update_time": updateTime}
+}
+
 func KickGroupMemberBy(actorID, groupID, targetID int64) (string, error) {
 	now := relationshipUpdateTime(relationshipNow())
 	err := DB().Transaction(func(tx *gorm.DB) error {
@@ -491,7 +495,7 @@ func UpdateGroupMemberRoleBy(actorID, groupID, targetID int64, role string) (str
 			return ErrRelationshipForbidden
 		}
 		if err := tx.Model(&GroupMember{}).Where("group_id = ? AND user_id = ?", groupID, targetID).
-			Updates(map[string]interface{}{"role": role, "update_time": now}).Error; err != nil {
+			Updates(groupMemberRoleUpdates(role, now)).Error; err != nil {
 			return err
 		}
 		return tx.Model(&Group{}).Where("group_id = ?", groupID).Update("update_time", now).Error

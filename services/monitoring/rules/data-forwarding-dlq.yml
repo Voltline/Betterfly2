@@ -1,0 +1,17 @@
+groups:
+  - name: data-forwarding-dlq
+    rules:
+      - alert: BetterflyDataForwardingDLQMessages
+        expr: increase(betterfly_kafka_dlq_messages_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: DataForwarding messages entered the DLQ
+      - alert: BetterflyDataForwardingDLQPublishFailure
+        expr: increase(betterfly_kafka_dlq_publish_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: DataForwarding cannot publish to its DLQ and may block a partition

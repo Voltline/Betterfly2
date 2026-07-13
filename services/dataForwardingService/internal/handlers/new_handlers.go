@@ -3,6 +3,7 @@ package handlers
 import (
 	pb "Betterfly2/proto/data_forwarding"
 	"Betterfly2/shared/logger"
+	"context"
 	"data_forwarding_service/internal/connection"
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
@@ -116,7 +117,10 @@ func (h *WebSocketHandler) refreshRouteLease(conn *connection.Connection, userID
 			if containerID == "" {
 				containerID = "local"
 			}
-			if err := redisClient.RefreshConnection(userID, containerID); err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), h.config.writeTimeout)
+			err := redisClient.RefreshConnection(ctx, userID, containerID, conn.OwnerToken)
+			cancel()
+			if err != nil {
 				logger.Sugar().Warnf("刷新WebSocket路由租约失败: user_id=%s error=%v", userID, err)
 			}
 		}
@@ -128,8 +132,9 @@ func (h *WebSocketHandler) readProcess(conn *connection.Connection) {
 	sugar := logger.Sugar()
 	defer func() {
 		// 连接关闭时清理
+		wasCurrentSession := conn.IsAuthenticated() && conn.UserID != "" && h.connManager.IsCurrentUserConnection(conn.UserID, conn.ID)
 		h.connManager.RemoveConnection(conn.ID)
-		if conn.IsAuthenticated() && conn.UserID != "" {
+		if wasCurrentSession {
 			h.sessionManager.RemoveSession(conn.UserID)
 		}
 		sugar.Debugf("(%v, %v)连接已关闭", conn.ID, conn.Conn.RemoteAddr())
@@ -230,7 +235,9 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 
 	// 登录成功，绑定用户ID
 	userIDStr := strconv.FormatInt(realUserID, 10)
-	err = h.connManager.Login(conn.ID, userIDStr)
+	loginCtx, cancel := context.WithTimeout(context.Background(), h.config.authTimeout)
+	defer cancel()
+	err = h.connManager.Login(loginCtx, conn.ID, userIDStr)
 	if err != nil {
 		logger.Sugar().Errorf("绑定用户ID失败: %v", err)
 		rsp = &pb.ResponseMessage{
@@ -245,10 +252,7 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 	}
 
 	// 创建会话
-	err = h.sessionManager.CreateSession(userIDStr, conn.ID)
-	if err != nil {
-		logger.Sugar().Errorf("创建会话失败: %v", err)
-	}
+	h.sessionManager.ReplaceSession(userIDStr, conn.ID)
 	go h.refreshRouteLease(conn, userIDStr)
 	_ = conn.Conn.SetReadDeadline(time.Now().Add(h.config.pongWait))
 
@@ -333,6 +337,10 @@ func (h *WebSocketHandler) StopClient(userID string) {
 	h.sessionManager.ForceLogout(userID, h.connManager)
 }
 
+func (h *WebSocketHandler) StopClientIfOwner(userID, ownerToken string) {
+	h.connManager.StopUserIfOwner(userID, ownerToken)
+}
+
 // GetConnectionStats 获取连接统计信息
 func (h *WebSocketHandler) GetConnectionStats() (int, int) {
 	return h.connManager.GetConnectionCount(), h.connManager.GetLoggedInUserCount()
@@ -364,9 +372,9 @@ func (h *WebSocketHandler) subscribeKickNotifications() {
 	}
 
 	dsm := &redisClient.DistributedSessionManager{}
-	err := dsm.SubscribeKickNotifications(containerID, func(userID string) {
-		logger.Sugar().Infof("收到实时踢出通知，执行强制登出: 用户 %s", userID)
-		h.StopClient(userID)
+	err := dsm.SubscribeKickNotifications(containerID, func(userID, ownerToken string) {
+		logger.Sugar().Infof("收到实时踢出通知，执行所有权校验: 用户 %s", userID)
+		h.connManager.StopUserIfOwner(userID, ownerToken)
 	})
 
 	if err != nil {

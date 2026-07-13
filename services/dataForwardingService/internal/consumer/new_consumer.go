@@ -20,7 +20,7 @@ import (
 
 // Pre-compiled regex patterns for efficient matching
 var (
-	deleteUserPatternCapture = regexp.MustCompile(`^DELETE USER (\d+) TARGET ([-a-zA-Z0-9]+)$`)
+	deleteUserPatternCapture = regexp.MustCompile(`^DELETE USER (\d+) TARGET ([-a-zA-Z0-9]+)(?: OWNER ([a-fA-F0-9]+))?$`)
 )
 
 // NewKafkaConsumerGroupHandler 新的Kafka消费者处理器
@@ -28,7 +28,7 @@ type NewKafkaConsumerGroupHandler struct {
 	wsHandler        *handlers.WebSocketHandler
 	retryConfig      consumerRetryConfig
 	processMessageFn func(*sarama.ConsumerMessage) error
-	publishDLQFn     func(string, []byte) error
+	publishDLQFn     func(string, []byte, []sarama.RecordHeader) error
 }
 
 // NewKafkaConsumerGroupHandlerWithHandler 创建带处理器的消费者处理器
@@ -667,7 +667,10 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_SyncMsgsRsp{
 				SyncMsgsRsp: &pb.SyncMessagesRsp{
-					Msgs: dfMsgs,
+					Msgs:                dfMsgs,
+					HasMore:             syncMsgs.GetHasMore(),
+					NextCursorTimestamp: syncMsgs.GetNextCursorTimestamp(),
+					NextCursorMessageId: syncMsgs.GetNextCursorMessageId(),
 				},
 			},
 		}

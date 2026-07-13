@@ -57,6 +57,18 @@ func (sm *SessionManager) CreateSession(userID string, connectionID string) erro
 	return nil
 }
 
+func (sm *SessionManager) ReplaceSession(userID, connectionID string) {
+	sm.mutex.Lock()
+	defer sm.mutex.Unlock()
+	sm.sessions.Store(userID, &Session{
+		UserID:       userID,
+		ConnectionID: connectionID,
+		LoginTime:    time.Now(),
+		LastActive:   time.Now(),
+		IsActive:     true,
+	})
+}
+
 // GetSession 获取会话
 func (sm *SessionManager) GetSession(userID string) (*Session, bool) {
 	sm.mutex.RLock()

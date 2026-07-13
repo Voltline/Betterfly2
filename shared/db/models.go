@@ -3,7 +3,7 @@ package db
 const MaxNameLen = 50 // 账户、用户名、备注等的长度限制
 
 type User struct {
-	ID           int64  `gorm:"primaryKey;comment:用户id，唯一"`
+	ID           int64  `gorm:"primaryKey;autoIncrement;comment:用户id，唯一"`
 	Account      string `gorm:"uniqueIndex;type:varchar(50);comment:用户账号，唯一"`
 	Name         string `gorm:"type:varchar(50);comment:用户昵称，不唯一"`
 	UpdateTime   string `gorm:"type:varchar(25);comment:上次更新个人资料时间，用于用户间的个人资料同步"`
@@ -54,15 +54,15 @@ type RelationshipRequest struct {
 }
 
 type Message struct {
-	MessageID       int64   `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
+	MessageID       int64   `gorm:"primaryKey;autoIncrement:true;index:idx_messages_sync_target_time_id,priority:4;comment:消息唯一ID"`
 	ClientMessageID *string `gorm:"type:varchar(128);uniqueIndex:uidx_messages_sender_client_id,priority:2;comment:客户端幂等消息ID，旧消息为空"`
 	FromUserID      int64   `gorm:"type:int8;uniqueIndex:uidx_messages_sender_client_id,priority:1;comment:消息来源用户ID"`
-	ToUserID        int64   `gorm:"type:int8;index:idx_messages_sync_target_time,priority:2;comment:消息去向用户ID"`
+	ToUserID        int64   `gorm:"type:int8;index:idx_messages_sync_target_time_id,priority:2;comment:消息去向用户ID"`
 	Content         string  `gorm:"type:varchar(700);comment:消息内容"`
-	Timestamp       string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time,priority:3;comment:消息产生时间"`
+	Timestamp       string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time_id,priority:3;comment:消息产生时间"`
 	MessageType     string  `gorm:"type:varchar(10);comment:消息类型"`
 	RealFileName    string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
-	IsGroup         bool    `gorm:"type:bool;index:idx_messages_sync_target_time,priority:1;comment:消息是否来自于群聊"`
+	IsGroup         bool    `gorm:"type:bool;index:idx_messages_sync_target_time_id,priority:1;comment:消息是否来自于群聊"`
 }
 
 type FileMetadata struct {

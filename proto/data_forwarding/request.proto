@@ -150,6 +150,9 @@ message QueryMessage {
 message QuerySyncMessages {
   int64 to_user_id = 1;
   string timestamp = 2;
+  int32 page_size = 3;
+  string cursor_timestamp = 4;
+  int64 cursor_message_id = 5;
 }
 
 // 更新用户名

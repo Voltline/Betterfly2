@@ -4,8 +4,8 @@ import (
 	pb "Betterfly2/proto/data_forwarding"
 	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
+	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -52,7 +52,7 @@ func newConsumerTestClaim(messages ...*sarama.ConsumerMessage) *consumerTestClai
 	return &consumerTestClaim{messages: ch}
 }
 
-func newProcessingTestHandler(process func(*sarama.ConsumerMessage) error, dlq func(string, []byte) error) *NewKafkaConsumerGroupHandler {
+func newProcessingTestHandler(process func(*sarama.ConsumerMessage) error, dlq func(string, []byte, []sarama.RecordHeader) error) *NewKafkaConsumerGroupHandler {
 	return &NewKafkaConsumerGroupHandler{
 		retryConfig: consumerRetryConfig{
 			maxRetries:     2,
@@ -67,7 +67,7 @@ func newProcessingTestHandler(process func(*sarama.ConsumerMessage) error, dlq f
 
 func TestConsumeClaimMarksOnlyAfterSuccessfulProcessing(t *testing.T) {
 	msg := &sarama.ConsumerMessage{Topic: "source", Partition: 2, Offset: 10, Value: []byte("payload")}
-	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return nil }, func(string, []byte) error {
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return nil }, func(string, []byte, []sarama.RecordHeader) error {
 		t.Fatal("successful message must not enter DLQ")
 		return nil
 	})
@@ -89,7 +89,7 @@ func TestConsumeClaimRetriesTransientFailureBeforeMarking(t *testing.T) {
 			return errors.New("temporary websocket route failure")
 		}
 		return nil
-	}, func(string, []byte) error {
+	}, func(string, []byte, []sarama.RecordHeader) error {
 		t.Fatal("recovered message must not enter DLQ")
 		return nil
 	})
@@ -105,15 +105,18 @@ func TestConsumeClaimRetriesTransientFailureBeforeMarking(t *testing.T) {
 
 func TestConsumeClaimMarksAfterRetryExhaustionAndSuccessfulDLQ(t *testing.T) {
 	attempts := 0
-	var record deadLetterMessage
+	var dlqPayload []byte
+	var dlqHeaders []sarama.RecordHeader
 	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
 		attempts++
 		return errors.New("user route unavailable")
-	}, func(topic string, payload []byte) error {
+	}, func(topic string, payload []byte, headers []sarama.RecordHeader) error {
 		if topic != "test-dlq" {
 			t.Fatalf("unexpected DLQ topic: %s", topic)
 		}
-		return json.Unmarshal(payload, &record)
+		dlqPayload = append([]byte(nil), payload...)
+		dlqHeaders = headers
+		return nil
 	})
 	msg := &sarama.ConsumerMessage{Topic: "source", Partition: 3, Offset: 42, Value: []byte("original")}
 	session := &consumerTestSession{ctx: context.Background()}
@@ -124,9 +127,36 @@ func TestConsumeClaimMarksAfterRetryExhaustionAndSuccessfulDLQ(t *testing.T) {
 	if attempts != 3 || len(session.marked) != 1 {
 		t.Fatalf("unexpected retry/mark result: attempts=%d marked=%d", attempts, len(session.marked))
 	}
-	if record.OriginalTopic != "source" || record.OriginalPartition != 3 || record.OriginalOffset != 42 || string(record.OriginalPayload) != "original" || record.RetryCount != 2 || record.ErrorClass != failureTransient {
-		t.Fatalf("incomplete DLQ record: %+v", record)
+	headers := headerMap(dlqHeaders)
+	if len(headers) != 10 || string(dlqPayload) != "original" || headers["schema_version"] != "1" || headers["original_topic"] != "source" || headers["original_partition"] != "3" || headers["original_offset"] != "42" || headers["retry_count"] != "2" || headers["error_class"] != string(failureTransient) || headers["first_failure_time"] == "" || headers["final_failure_time"] == "" || headers["sanitized_error_summary"] == "" {
+		t.Fatalf("incomplete DLQ record: payload=%q headers=%+v", dlqPayload, headers)
 	}
+}
+
+func TestDLQLargePayloadIsNotBase64Expanded(t *testing.T) {
+	original := bytes.Repeat([]byte{0xab}, 1024*1024)
+	var delivered []byte
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
+		return permanentError("invalid large message")
+	}, func(_ string, payload []byte, _ []sarama.RecordHeader) error {
+		delivered = append([]byte(nil), payload...)
+		return nil
+	})
+	session := &consumerTestSession{ctx: context.Background()}
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(&sarama.ConsumerMessage{Topic: "source", Value: original})); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(delivered, original) || len(delivered) != len(original) {
+		t.Fatalf("DLQ payload was transformed: original=%d delivered=%d", len(original), len(delivered))
+	}
+}
+
+func headerMap(headers []sarama.RecordHeader) map[string]string {
+	result := make(map[string]string, len(headers))
+	for _, header := range headers {
+		result[string(header.Key)] = string(header.Value)
+	}
+	return result
 }
 
 func TestConsumeClaimDoesNotMarkWhenDLQPublishFailsOrSkipPartitionMessage(t *testing.T) {
@@ -134,7 +164,7 @@ func TestConsumeClaimDoesNotMarkWhenDLQPublishFailsOrSkipPartitionMessage(t *tes
 	handler := newProcessingTestHandler(func(msg *sarama.ConsumerMessage) error {
 		processedOffsets = append(processedOffsets, msg.Offset)
 		return permanentError("invalid payload")
-	}, func(string, []byte) error { return errors.New("kafka unavailable") })
+	}, func(string, []byte, []sarama.RecordHeader) error { return errors.New("kafka unavailable") })
 	first := &sarama.ConsumerMessage{Topic: "source", Partition: 0, Offset: 7}
 	second := &sarama.ConsumerMessage{Topic: "source", Partition: 0, Offset: 8}
 	session := &consumerTestSession{ctx: context.Background()}
@@ -152,14 +182,14 @@ func TestConsumeClaimDoesNotMarkWhenDLQPublishFailsOrSkipPartitionMessage(t *tes
 
 func TestConsumeClaimWritesMalformedProtobufToDLQ(t *testing.T) {
 	dlqCalls := 0
-	handler := newProcessingTestHandler(nil, func(_ string, payload []byte) error {
+	handler := newProcessingTestHandler(nil, func(_ string, payload []byte, headers []sarama.RecordHeader) error {
 		dlqCalls++
-		var record deadLetterMessage
-		if err := json.Unmarshal(payload, &record); err != nil {
-			return err
+		metadata := headerMap(headers)
+		if metadata["error_class"] != string(failurePermanent) || metadata["retry_count"] != "0" {
+			t.Fatalf("malformed protobuf was not classified as permanent: %+v", metadata)
 		}
-		if record.ErrorClass != failurePermanent || record.RetryCount != 0 {
-			t.Fatalf("malformed protobuf was not classified as permanent: %+v", record)
+		if string(payload) != string([]byte{0xff, 0xff}) {
+			t.Fatalf("DLQ payload changed: %v", payload)
 		}
 		return nil
 	})
@@ -175,7 +205,7 @@ func TestConsumeClaimWritesMalformedProtobufToDLQ(t *testing.T) {
 }
 
 func TestProcessWithRetryStopsWhenContextIsCanceled(t *testing.T) {
-	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return errors.New("temporary") }, func(string, []byte) error {
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error { return errors.New("temporary") }, func(string, []byte, []sarama.RecordHeader) error {
 		t.Fatal("canceled retry must not enter DLQ")
 		return nil
 	})

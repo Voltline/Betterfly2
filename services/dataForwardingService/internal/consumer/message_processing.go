@@ -11,7 +11,6 @@ import (
 	"context"
 	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,19 +92,6 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 	return value
 }
 
-type deadLetterMessage struct {
-	OriginalTopic     string               `json:"original_topic"`
-	OriginalPartition int32                `json:"original_partition"`
-	OriginalOffset    int64                `json:"original_offset"`
-	EnvelopeType      envelope.MessageType `json:"envelope_type"`
-	OriginalPayload   []byte               `json:"original_payload"`
-	ErrorClass        failureClass         `json:"error_class"`
-	ErrorSummary      string               `json:"error_summary"`
-	FirstFailureTime  time.Time            `json:"first_failure_time"`
-	FinalFailureTime  time.Time            `json:"final_failure_time"`
-	RetryCount        int                  `json:"retry_count"`
-}
-
 func (h *NewKafkaConsumerGroupHandler) initializeProcessingDefaults() {
 	if h.retryConfig.dlqTopic == "" {
 		h.retryConfig = loadConsumerRetryConfig()
@@ -114,8 +100,8 @@ func (h *NewKafkaConsumerGroupHandler) initializeProcessingDefaults() {
 		h.processMessageFn = h.processMessage
 	}
 	if h.publishDLQFn == nil {
-		h.publishDLQFn = func(topic string, payload []byte) error {
-			return publisher.PublishMessage(string(payload), topic)
+		h.publishDLQFn = func(topic string, payload []byte, headers []sarama.RecordHeader) error {
+			return publisher.PublishRawMessage(payload, topic, headers)
 		}
 	}
 }
@@ -154,6 +140,7 @@ func (h *NewKafkaConsumerGroupHandler) processWithRetry(ctx context.Context, msg
 			"error", summarizeError(err),
 		)
 		metrics.RecordKafkaProcessingError()
+		metrics.RecordKafkaProcessingRetry()
 
 		timer := time.NewTimer(backoff)
 		select {
@@ -175,23 +162,10 @@ func (h *NewKafkaConsumerGroupHandler) processWithRetry(ctx context.Context, msg
 }
 
 func (h *NewKafkaConsumerGroupHandler) publishDeadLetter(msg *sarama.ConsumerMessage, class failureClass, processingErr error, firstFailure time.Time, retryCount int) error {
-	record := deadLetterMessage{
-		OriginalTopic:     msg.Topic,
-		OriginalPartition: msg.Partition,
-		OriginalOffset:    msg.Offset,
-		EnvelopeType:      envelopeTypeOf(msg.Value),
-		OriginalPayload:   msg.Value,
-		ErrorClass:        class,
-		ErrorSummary:      summarizeError(processingErr),
-		FirstFailureTime:  firstFailure,
-		FinalFailureTime:  time.Now().UTC(),
-		RetryCount:        retryCount,
-	}
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("序列化DLQ消息失败: %w", err)
-	}
-	if err := h.publishDLQFn(h.retryConfig.dlqTopic, payload); err != nil {
+	envelopeType := envelopeTypeOf(msg.Value)
+	headers := dlqHeaders(msg, envelopeType, class, processingErr, firstFailure, time.Now().UTC(), retryCount)
+	if err := h.publishDLQFn(h.retryConfig.dlqTopic, msg.Value, headers); err != nil {
+		metrics.RecordKafkaDLQPublishFailure()
 		return fmt.Errorf("写入Kafka DLQ失败: %w", err)
 	}
 
@@ -199,14 +173,35 @@ func (h *NewKafkaConsumerGroupHandler) publishDeadLetter(msg *sarama.ConsumerMes
 		"topic", msg.Topic,
 		"partition", msg.Partition,
 		"offset", msg.Offset,
-		"envelope_type", record.EnvelopeType.String(),
+		"envelope_type", envelopeType.String(),
 		"error_class", class,
 		"retry_count", retryCount,
-		"error", record.ErrorSummary,
+		"error", summarizeError(processingErr),
 	)
 	metrics.RecordKafkaProcessingError()
 	metrics.RecordKafkaMessageProduced(h.retryConfig.dlqTopic)
+	metrics.RecordKafkaDLQMessage(string(class), envelopeType.String())
 	return nil
+}
+
+func dlqHeaders(msg *sarama.ConsumerMessage, envelopeType envelope.MessageType, class failureClass, processingErr error, firstFailure, finalFailure time.Time, retryCount int) []sarama.RecordHeader {
+	values := [][2]string{
+		{"schema_version", "1"},
+		{"original_topic", msg.Topic},
+		{"original_partition", strconv.FormatInt(int64(msg.Partition), 10)},
+		{"original_offset", strconv.FormatInt(msg.Offset, 10)},
+		{"envelope_type", envelopeType.String()},
+		{"error_class", string(class)},
+		{"sanitized_error_summary", summarizeError(processingErr)},
+		{"first_failure_time", firstFailure.Format(time.RFC3339Nano)},
+		{"final_failure_time", finalFailure.Format(time.RFC3339Nano)},
+		{"retry_count", strconv.Itoa(retryCount)},
+	}
+	headers := make([]sarama.RecordHeader, 0, len(values))
+	for _, value := range values {
+		headers = append(headers, sarama.RecordHeader{Key: []byte(value[0]), Value: []byte(value[1])})
+	}
+	return headers
 }
 
 func summarizeError(err error) string {
@@ -238,7 +233,11 @@ func (h *NewKafkaConsumerGroupHandler) processMessage(msg *sarama.ConsumerMessag
 		if h.wsHandler == nil {
 			return errors.New("WebSocket处理器未设置，无法踢出用户")
 		}
-		h.wsHandler.StopClient(matches[1])
+		if matches[3] != "" {
+			h.wsHandler.StopClientIfOwner(matches[1], matches[3])
+		} else {
+			h.wsHandler.StopClient(matches[1])
+		}
 		return nil
 	}
 

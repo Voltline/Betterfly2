@@ -13,6 +13,35 @@ spec:
       labels:
         app: data-forwarding
     spec:
+      initContainers:
+        - name: ensure-data-forwarding-dlq
+          image: apache/kafka:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              until /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "${KAFKA_BROKER}" --list >/dev/null 2>&1; do
+                echo "waiting for Kafka"
+                sleep 2
+              done
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "${KAFKA_BROKER}" \
+                --create --if-not-exists \
+                --topic "${DF_KAFKA_DLQ_TOPIC}" \
+                --partitions "${DF_KAFKA_DLQ_PARTITIONS}" \
+                --replication-factor "${DF_KAFKA_DLQ_REPLICATION_FACTOR}"
+              /opt/kafka/bin/kafka-configs.sh \
+                --bootstrap-server "${KAFKA_BROKER}" \
+                --alter --entity-type topics --entity-name "${DF_KAFKA_DLQ_TOPIC}" \
+                --add-config "cleanup.policy=delete,retention.ms=${DF_KAFKA_DLQ_RETENTION_MS},min.insync.replicas=${DF_KAFKA_DLQ_MIN_ISR}"
+              /opt/kafka/bin/kafka-topics.sh \
+                --bootstrap-server "${KAFKA_BROKER}" \
+                --describe --topic "${DF_KAFKA_DLQ_TOPIC}"
       containers:
         - name: data-forwarding
           image: betterfly2/data-forwarding-service:latest

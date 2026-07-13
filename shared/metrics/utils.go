@@ -93,6 +93,18 @@ func RecordKafkaProcessingError() {
 	KafkaProcessingErrorsTotal.Inc()
 }
 
+func RecordKafkaDLQMessage(errorClass, envelopeType string) {
+	KafkaDLQMessagesTotal.WithLabelValues(errorClass, envelopeType).Inc()
+}
+
+func RecordKafkaDLQPublishFailure() {
+	KafkaDLQPublishFailuresTotal.Inc()
+}
+
+func RecordKafkaProcessingRetry() {
+	KafkaProcessingRetriesTotal.Inc()
+}
+
 // RecordKafkaProcessingLatency 记录Kafka处理延迟
 func RecordKafkaProcessingLatency(start time.Time) {
 	TimeSince(start, KafkaProcessingLatency)

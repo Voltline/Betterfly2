@@ -8,8 +8,8 @@ import (
 	"authService/internal/utils"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
-	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -157,7 +157,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	}
 	err = db.AddUser(user)
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate") {
+		if errors.Is(err, db.ErrAccountExists) {
 			result = pb.AuthResult_ACCOUNT_EXIST
 		} else {
 			logger.Sugar().Errorln("fail to get user:", err)

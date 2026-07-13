@@ -52,6 +52,44 @@ services:
     depends_on:
       - kafka1
 
+  kafka-init:
+    image: apache/kafka:latest
+    container_name: kafka-init
+    depends_on:
+      - kafka1
+      - kafka2
+    environment:
+      DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
+      DLQ_PARTITIONS: ${DF_KAFKA_DLQ_PARTITIONS:-3}
+      DLQ_REPLICATION_FACTOR: ${DF_KAFKA_DLQ_REPLICATION_FACTOR:-2}
+      DLQ_MIN_ISR: ${DF_KAFKA_DLQ_MIN_ISR:-1}
+      DLQ_RETENTION_MS: ${DF_KAFKA_DLQ_RETENTION_MS:-604800000}
+    command:
+      - /bin/bash
+      - -ec
+      - |
+        until /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka1:9092,kafka2:9094 --list >/dev/null 2>&1; do
+          echo "waiting for Kafka quorum"
+          sleep 2
+        done
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka1:9092,kafka2:9094 \
+          --create --if-not-exists \
+          --topic "$${DLQ_TOPIC}" \
+          --partitions "$${DLQ_PARTITIONS}" \
+          --replication-factor "$${DLQ_REPLICATION_FACTOR}"
+        /opt/kafka/bin/kafka-configs.sh \
+          --bootstrap-server kafka1:9092,kafka2:9094 \
+          --alter --entity-type topics --entity-name "$${DLQ_TOPIC}" \
+          --add-config "cleanup.policy=delete,retention.ms=$${DLQ_RETENTION_MS},min.insync.replicas=$${DLQ_MIN_ISR}"
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server kafka1:9092,kafka2:9094 \
+          --describe --topic "$${DLQ_TOPIC}"
+    restart: "no"
+    networks:
+      - backend
+
   kafka-ui:
     profiles: ["tools"]
     image: provectuslabs/kafka-ui:latest
@@ -74,15 +112,30 @@ services:
       dockerfile: services/dataForwardingService/Dockerfile
     container_name: df
     depends_on:
-      - redis
-      - kafka1
-      - kafka2
+      redis:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
     environment:
       PORT: 54342
       PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      DF_KAFKA_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
+      DF_KAFKA_PROCESS_MAX_RETRIES: ${DF_KAFKA_PROCESS_MAX_RETRIES:-3}
+      DF_KAFKA_RETRY_INITIAL_BACKOFF: ${DF_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      DF_KAFKA_RETRY_MAX_BACKOFF: ${DF_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
+      WS_ALLOW_MISSING_ORIGIN: ${WS_ALLOW_MISSING_ORIGIN:-true}
+      WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-4194304}
+      WS_AUTH_TIMEOUT: ${WS_AUTH_TIMEOUT:-15s}
+      WS_PONG_WAIT: ${WS_PONG_WAIT:-60s}
+      WS_PING_INTERVAL: ${WS_PING_INTERVAL:-25s}
+      WS_WRITE_TIMEOUT: ${WS_WRITE_TIMEOUT:-10s}
+      WS_READ_HEADER_TIMEOUT: ${WS_READ_HEADER_TIMEOUT:-5s}
+      WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-60s}
+      WS_MAX_HEADER_BYTES: ${WS_MAX_HEADER_BYTES:-1048576}
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
@@ -100,15 +153,30 @@ services:
       dockerfile: services/dataForwardingService/Dockerfile
     container_name: df2
     depends_on:
-      - redis
-      - kafka1
-      - kafka2
+      redis:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
     environment:
       PORT: 54343
       PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
+      DF_KAFKA_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
+      DF_KAFKA_PROCESS_MAX_RETRIES: ${DF_KAFKA_PROCESS_MAX_RETRIES:-3}
+      DF_KAFKA_RETRY_INITIAL_BACKOFF: ${DF_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      DF_KAFKA_RETRY_MAX_BACKOFF: ${DF_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
+      WS_ALLOW_MISSING_ORIGIN: ${WS_ALLOW_MISSING_ORIGIN:-true}
+      WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-4194304}
+      WS_AUTH_TIMEOUT: ${WS_AUTH_TIMEOUT:-15s}
+      WS_PONG_WAIT: ${WS_PONG_WAIT:-60s}
+      WS_PING_INTERVAL: ${WS_PING_INTERVAL:-25s}
+      WS_WRITE_TIMEOUT: ${WS_WRITE_TIMEOUT:-10s}
+      WS_READ_HEADER_TIMEOUT: ${WS_READ_HEADER_TIMEOUT:-5s}
+      WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-60s}
+      WS_MAX_HEADER_BYTES: ${WS_MAX_HEADER_BYTES:-1048576}
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
@@ -209,6 +277,7 @@ services:
       - "9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/rules:/etc/prometheus/rules:ro
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'

@@ -23,6 +23,11 @@ var DB = func() func(dst ...interface{}) *gorm.DB {
 		if err != nil {
 			logger.Sugar().Fatalln("数据库自动迁移失败:", err)
 		}
+		if db.Dialector.Name() == "postgres" {
+			if err := MigratePostgresSchema(db); err != nil {
+				logger.Sugar().Fatalln("PostgreSQL显式迁移失败:", err)
+			}
+		}
 	}
 
 	return func(dst ...interface{}) *gorm.DB {

@@ -82,6 +82,16 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 	}
 }
 
+func TestCanonicalOriginTreatsDefaultPortsAsEquivalent(t *testing.T) {
+	for _, pair := range [][2]string{{"http://example.com", "http://example.com:80"}, {"https://example.com", "https://example.com:443"}} {
+		left, leftOK := canonicalOrigin(pair[0])
+		right, rightOK := canonicalOrigin(pair[1])
+		if !leftOK || !rightOK || left != right {
+			t.Fatalf("default ports were not normalized: %q => %q, %q => %q", pair[0], left, pair[1], right)
+		}
+	}
+}
+
 func TestWebSocketOversizedMessageClosesAndCleansConnection(t *testing.T) {
 	config := testWebSocketConfig()
 	config.maxMessageBytes = 16
@@ -140,7 +150,7 @@ func TestWebSocketPongExtendsAuthenticatedConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverConn := waitForConnection(t, handler, client)
-	serverConn.MarkAuthenticated("")
+	serverConn.MarkAuthenticated("", "test-owner")
 	readDone := make(chan error, 1)
 	go func() {
 		for {
@@ -181,7 +191,7 @@ func TestWebSocketMissingPongCleansConnection(t *testing.T) {
 	}
 	defer client.Close()
 	serverConn := waitForConnection(t, handler, client)
-	serverConn.MarkAuthenticated("")
+	serverConn.MarkAuthenticated("", "test-owner")
 	// Do not read from the client, so ping control frames are never processed and no pong is sent.
 	waitForConnectionCount(t, handler, 0)
 	select {

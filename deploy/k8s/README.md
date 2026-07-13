@@ -89,6 +89,12 @@ kubectl -n betterfly2 get svc
 kubectl -n betterfly2 logs deploy/data-forwarding
 ```
 
+The DataForwarding init container creates `data-forwarding-dlq` before the
+service starts and reapplies its retention settings on restart. The development
+base uses replication factor 1 because its Kafka StatefulSet has one broker;
+increase both the broker count and `DF_KAFKA_DLQ_REPLICATION_FACTOR` together in
+a production overlay.
+
 ## Local Access
 
 Without Ingress, port-forward the services:

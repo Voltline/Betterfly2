@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"Betterfly2/shared/logger"
+	"context"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/utils"
 	"fmt"
@@ -79,6 +80,11 @@ func InitKafkaProducer() error {
 
 // PublishMessage 发布消息到 Kafka
 func PublishMessage(message string, targetTopic string) error {
+	return PublishRawMessage([]byte(message), targetTopic, nil)
+}
+
+// PublishRawMessage publishes binary data without string or JSON re-encoding.
+func PublishRawMessage(payload []byte, targetTopic string, headers []sarama.RecordHeader) error {
 	sugar := logger.Sugar()
 
 	if KafkaProducer == nil {
@@ -86,8 +92,9 @@ func PublishMessage(message string, targetTopic string) error {
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: targetTopic,
-		Value: sarama.ByteEncoder(message),
+		Topic:   targetTopic,
+		Value:   sarama.ByteEncoder(payload),
+		Headers: headers,
 	}
 
 	partition, offset, err := KafkaProducer.SendMessage(msg)
@@ -96,4 +103,15 @@ func PublishMessage(message string, targetTopic string) error {
 	}
 	sugar.Debugf("Kafka 消息发布成功 - Partition: %d, Offset: %d", partition, offset)
 	return nil
+}
+
+func PublishRawMessageContext(ctx context.Context, payload []byte, targetTopic string, headers []sarama.RecordHeader) error {
+	result := make(chan error, 1)
+	go func() { result <- PublishRawMessage(payload, targetTopic, headers) }()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-result:
+		return err
+	}
 }

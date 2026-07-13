@@ -156,4 +156,7 @@ message MessageRsp {
 // 同步消息响应
 message SyncMessagesRsp {
   repeated MessageRsp msgs = 1;
+  bool has_more = 2;
+  string next_cursor_timestamp = 3;
+  int64 next_cursor_message_id = 4;
 }

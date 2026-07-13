@@ -3,8 +3,11 @@ package connection
 import (
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
+	"context"
+	"crypto/rand"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -16,10 +19,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Connection 表示一个WebSocket连接
 type Connection struct {
 	ID            string
-	UserID        string // 用户ID，登录前为空
+	UserID        string
+	OwnerToken    string
 	Conn          *websocket.Conn
 	SendChan      chan []byte
 	ShouldStop    bool
@@ -31,339 +34,280 @@ type Connection struct {
 	done          chan struct{}
 }
 
-// ConnectionManager 管理所有WebSocket连接
 type ConnectionManager struct {
-	connections     *sync.Map // connectionID -> *Connection
-	userConnections *sync.Map // userID -> connectionID
-	mutex           sync.RWMutex
-	instanceID      string // 实例标识符，用于调试
-	connectionCount int64  // 使用原子计数器提高性能
-	loggedInCount   int64  // 已登录用户的原子计数器
+	connections         *sync.Map
+	userConnections     *sync.Map
+	mutex               sync.RWMutex
+	instanceID          string
+	connectionCount     int64
+	loggedInCount       int64
+	userLocks           *keyedLocker
+	beforeExternalLogin func(context.Context, string) error
 }
 
-// NewConnectionManager 创建新的连接管理器
 func NewConnectionManager() *ConnectionManager {
 	instanceID := fmt.Sprintf("cm-%d", time.Now().UnixNano())
-	logger.Sugar().Debugf("创建连接管理器: %s", instanceID)
 	return &ConnectionManager{
 		connections:     &sync.Map{},
 		userConnections: &sync.Map{},
 		instanceID:      instanceID,
+		userLocks:       newKeyedLocker(),
 	}
 }
 
-// AddConnection 添加新连接（未登录状态）
 func (cm *ConnectionManager) AddConnection(conn *websocket.Conn) *Connection {
-	connectionID := conn.RemoteAddr().String()
-
 	connection := &Connection{
-		ID:         connectionID,
-		UserID:     "", // 未登录时为空
-		Conn:       conn,
-		SendChan:   make(chan []byte, 256),
-		ShouldStop: false,
-		LoggedIn:   false,
-		done:       make(chan struct{}),
+		ID:       conn.RemoteAddr().String(),
+		Conn:     conn,
+		SendChan: make(chan []byte, 256),
+		done:     make(chan struct{}),
 	}
-
-	cm.connections.Store(connectionID, connection)
+	cm.connections.Store(connection.ID, connection)
 	atomic.AddInt64(&cm.connectionCount, 1)
-	logger.Sugar().Debugf("新连接建立: %s", connectionID)
 	metrics.RecordWebSocketConnectionOpened()
-
 	return connection
 }
 
-// Login 用户登录，绑定用户ID
-func (cm *ConnectionManager) Login(connectionID string, userID string) error {
-	parsedUserID, err := strconv.ParseInt(strings.TrimSpace(userID), 10, 64)
+// Login first claims distributed ownership and only then commits local state.
+func (cm *ConnectionManager) Login(ctx context.Context, connectionID, rawUserID string) error {
+	parsedUserID, err := strconv.ParseInt(strings.TrimSpace(rawUserID), 10, 64)
 	if err != nil || parsedUserID <= 0 {
-		return fmt.Errorf("无效用户ID: %q", userID)
+		return fmt.Errorf("无效用户ID: %q", rawUserID)
 	}
-	userID = strconv.FormatInt(parsedUserID, 10)
+	userID := strconv.FormatInt(parsedUserID, 10)
+	unlock, err := cm.userLocks.Lock(ctx, userID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
-	cm.mutex.Lock()
-	defer cm.mutex.Unlock()
-
-	// 获取容器标识符（使用HOSTNAME作为唯一标识）
-	containerID := os.Getenv("HOSTNAME")
-	if containerID == "" {
-		containerID = "local"
+	if cm.beforeExternalLogin != nil {
+		if err := cm.beforeExternalLogin(ctx, userID); err != nil {
+			return err
+		}
+	}
+	if connection, ok := cm.connections.Load(connectionID); !ok || connection.(*Connection).IsClosed() || connection.(*Connection).IsAuthenticated() {
+		return fmt.Errorf("连接不存在或状态不允许登录: %s", connectionID)
 	}
 
-	// 1. 获取分布式锁，防止并发登录
+	ownerToken, err := newOwnerToken()
+	if err != nil {
+		return err
+	}
+	containerID := currentContainerID()
 	dsm := &redisClient.DistributedSessionManager{}
-	locked, err := dsm.AcquireUserLock(userID, 5*time.Second) // 减少锁时间，提高并发性
+	if err := acquireDistributedUserLock(ctx, dsm, userID, ownerToken); err != nil {
+		return err
+	}
+	defer releaseDistributedUserLock(dsm, userID, ownerToken)
+
+	previous, exists, err := dsm.GetUserSession(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("获取分布式锁失败: %v", err)
+		return fmt.Errorf("读取现有会话失败: %w", err)
 	}
-	if !locked {
-		return fmt.Errorf("用户正在其他设备登录，请稍后重试")
+	if exists && previous.ContainerID != "" && previous.OwnerToken != "" {
+		if err := dsm.PublishOwnedKickNotification(ctx, userID, previous.ContainerID, previous.OwnerToken); err != nil {
+			logger.Sugar().Warnw("发送旧会话踢出通知失败", "user_id", userID, "container_id", previous.ContainerID, "error", err)
+			kick := fmt.Sprintf("DELETE USER %s TARGET %s OWNER %s", userID, previous.ContainerID, previous.OwnerToken)
+			if kafkaErr := publisher.PublishRawMessageContext(ctx, []byte(kick), "user-kick-topic", nil); kafkaErr != nil {
+				return fmt.Errorf("发布旧会话踢出通知失败: redis=%v kafka=%w", err, kafkaErr)
+			}
+		}
 	}
-	defer dsm.ReleaseUserLock(userID)
 
-	// 2. 检查全局会话状态
-	existingSession, err := dsm.GetUserSession(userID)
+	claimed := redisClient.SessionData{ConnectionID: connectionID, ContainerID: containerID, OwnerToken: ownerToken}
+	if err := dsm.ClaimSessionAndRoute(ctx, userID, claimed, 24*time.Hour); err != nil {
+		return fmt.Errorf("声明会话所有权失败: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupOwnedSession(dsm, userID, claimed)
+		return err
+	}
+	oldConnection, err := cm.commitLocalLogin(connectionID, userID, ownerToken)
 	if err != nil {
-		return fmt.Errorf("检查全局会话失败: %v", err)
+		cleanupOwnedSession(dsm, userID, claimed)
+		return err
 	}
-
-	// 3. 如果用户已在其他容器登录，发送踢出消息并等待
-	if existingSession != "" {
-		_, existingContainerID := dsm.ParseSessionData(existingSession)
-
-		// 如果会话在不同容器，发送实时踢出通知
-		if existingContainerID != containerID && existingContainerID != "" {
-			// 使用Redis Pub/Sub发送实时踢出通知
-			err := dsm.PublishKickNotification(userID, existingContainerID)
-			if err != nil {
-				logger.Sugar().Errorf("发送实时踢出通知失败: %v", err)
-				// 降级到Kafka方案
-				kickMessage := fmt.Sprintf("DELETE USER %s TARGET %s", userID, existingContainerID)
-				if kafkaErr := publisher.PublishMessage(kickMessage, "user-kick-topic"); kafkaErr != nil {
-					logger.Sugar().Errorf("Kafka降级方案也失败: %v", kafkaErr)
-				}
-			} else {
-				logger.Sugar().Infof("检测到跨容器登录，发送实时踢出通知: %s -> %s", existingContainerID, containerID)
-			}
-
-			// 快速检查：立即尝试登录，如果失败则说明踢出尚未完成
-			// 这样可以避免不必要的等待，让客户端快速重试
-			logger.Sugar().Infof("已发送踢出通知，立即尝试登录，如果失败请客户端重试")
-		}
+	if oldConnection != nil {
+		oldConnection.Close()
 	}
-
-	// 4. 检查本地是否已有该用户的连接
-	if oldConnectionID, exists := cm.userConnections.Load(userID); exists {
-		cm.removeConnectionLocked(oldConnectionID.(string))
-		logger.Sugar().Debugf("强制登出本地旧连接: %s", oldConnectionID)
-	}
-
-	// 5. 更新连接信息
-	if conn, ok := cm.connections.Load(connectionID); ok {
-		connection := conn.(*Connection)
-		connection.MarkAuthenticated(userID)
-
-		// 更新用户-连接映射
-		cm.userConnections.Store(userID, connectionID)
-		atomic.AddInt64(&cm.loggedInCount, 1)
-		logger.Sugar().Debugf("[%s] Login: 设置用户连接映射 %s -> %s", cm.instanceID, userID, connectionID)
-
-		// 6. 最终冲突检查：在设置会话前再次检查，防止竞态条件
-		// 增加重试机制，等待踢出操作完成
-		maxRetries := 3
-		retryDelay := 100 * time.Millisecond
-		var finalSession string
-		var finalContainerID string
-
-		for i := 0; i < maxRetries; i++ {
-			finalSession, err = dsm.GetUserSession(userID)
-			if err != nil {
-				break
-			}
-			if finalSession == "" {
-				// 会话已被清理，可以继续
-				break
-			}
-
-			_, finalContainerID = dsm.ParseSessionData(finalSession)
-			// 如果会话仍然在其他容器，等待后重试
-			if finalContainerID != containerID && finalContainerID != "" {
-				if i < maxRetries-1 {
-					logger.Sugar().Debugf("登录冲突检测重试 %d/%d: 用户 %s 仍在容器 %s 登录，等待 %v 后重试",
-						i+1, maxRetries, userID, finalContainerID, retryDelay)
-					time.Sleep(retryDelay)
-					continue
-				} else {
-					// 最后一次重试仍然失败，尝试强制清理会话
-					logger.Sugar().Warnf("登录冲突检测：用户 %s 仍在容器 %s 登录，尝试强制清理会话", userID, finalContainerID)
-					// 直接删除用户会话，因为踢出通知可能已发送但目标容器未处理
-					if cleanupErr := dsm.RemoveUserSession(userID); cleanupErr != nil {
-						logger.Sugar().Errorf("强制清理用户会话失败: %v", cleanupErr)
-					} else {
-						logger.Sugar().Infof("已强制清理用户 %s 的会话，重新检查", userID)
-						// 清理后立即再次检查
-						time.Sleep(50 * time.Millisecond) // 短暂等待确保Redis更新
-						finalSession, err = dsm.GetUserSession(userID)
-						if err == nil && finalSession == "" {
-							// 会话已清理，可以继续
-							break
-						}
-					}
-					// 如果强制清理后仍然有会话，返回错误
-					logger.Sugar().Warnf("登录冲突检测：用户 %s 仍在容器 %s 登录，踢出可能失败", userID, finalContainerID)
-					return fmt.Errorf("登录冲突，请稍后重试")
-				}
-			} else {
-				// 会话在当前容器或已清理，可以继续
-				break
-			}
-		}
-
-		// 7. 更新全局会话
-		err = dsm.SetUserSession(userID, connectionID, containerID, 24*time.Hour)
-		if err != nil {
-			logger.Sugar().Errorf("更新全局会话失败: %v", err)
-			// 不返回错误，继续执行
-		}
-
-		// 8. 注册连接映射
-		err = redisClient.RegisterConnection(userID, containerID)
-		if err != nil {
-			logger.Sugar().Errorf("注册连接映射失败: %v", err)
-			// 不返回错误，继续执行
-		}
-
-		logger.Sugar().Infof("用户登录成功: %s (容器: %s)", userID, containerID)
-		// 更新在线用户数指标
-		metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
-		return nil
-	}
-
-	return fmt.Errorf("连接不存在: %s", connectionID)
+	metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
+	logger.Sugar().Infof("用户登录成功: %s (容器: %s)", userID, containerID)
+	return nil
 }
 
-// RemoveConnection 移除连接
-func (cm *ConnectionManager) RemoveConnection(connectionID string) {
+func (cm *ConnectionManager) commitLocalLogin(connectionID, userID, ownerToken string) (*Connection, error) {
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
-
-	cm.removeConnectionLocked(connectionID)
+	value, ok := cm.connections.Load(connectionID)
+	if !ok || value.(*Connection).IsClosed() || value.(*Connection).IsAuthenticated() {
+		return nil, fmt.Errorf("连接不存在或状态已变化: %s", connectionID)
+	}
+	var old *Connection
+	if oldID, exists := cm.userConnections.Load(userID); exists && oldID.(string) != connectionID {
+		if oldValue, found := cm.connections.LoadAndDelete(oldID.(string)); found {
+			old = oldValue.(*Connection)
+			atomic.AddInt64(&cm.connectionCount, -1)
+			if old.IsAuthenticated() {
+				atomic.AddInt64(&cm.loggedInCount, -1)
+			}
+		}
+	}
+	connection := value.(*Connection)
+	connection.MarkAuthenticated(userID, ownerToken)
+	cm.userConnections.Store(userID, connectionID)
+	atomic.AddInt64(&cm.loggedInCount, 1)
+	return old, nil
 }
 
-func (cm *ConnectionManager) removeConnectionLocked(connectionID string) {
-	if conn, ok := cm.connections.Load(connectionID); ok {
-		connection := conn.(*Connection)
+func acquireDistributedUserLock(ctx context.Context, dsm *redisClient.DistributedSessionManager, userID, ownerToken string) error {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		locked, err := dsm.AcquireUserLock(ctx, userID, ownerToken, 30*time.Second)
+		if err != nil {
+			return fmt.Errorf("获取分布式用户锁失败: %w", err)
+		}
+		if locked {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
 
-		// 记录WebSocket连接关闭
-		metrics.RecordWebSocketConnectionClosed()
+func releaseDistributedUserLock(dsm *redisClient.DistributedSessionManager, userID, ownerToken string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = dsm.ReleaseUserLock(ctx, userID, ownerToken)
+}
 
-		// 如果已登录，清理用户映射和全局会话
-		if connection.IsAuthenticated() && connection.UserID != "" {
+func cleanupOwnedSession(dsm *redisClient.DistributedSessionManager, userID string, data redisClient.SessionData) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = dsm.RemoveOwnedSessionAndRoute(ctx, userID, data)
+}
+
+func newOwnerToken() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value), nil
+}
+
+func currentContainerID() string {
+	if value := os.Getenv("HOSTNAME"); value != "" {
+		return value
+	}
+	return "local"
+}
+
+func (cm *ConnectionManager) RemoveConnection(connectionID string) {
+	connection, removeOwnership := cm.detachConnection(connectionID)
+	if connection == nil {
+		return
+	}
+	connection.Close()
+	metrics.RecordWebSocketConnectionClosed()
+	if removeOwnership {
+		cleanupOwnedSession(&redisClient.DistributedSessionManager{}, connection.UserID, redisClient.SessionData{
+			ConnectionID: connection.ID,
+			ContainerID:  currentContainerID(),
+			OwnerToken:   connection.OwnerToken,
+		})
+	}
+	metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
+}
+
+func (cm *ConnectionManager) detachConnection(connectionID string) (*Connection, bool) {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+	value, ok := cm.connections.LoadAndDelete(connectionID)
+	if !ok {
+		return nil, false
+	}
+	connection := value.(*Connection)
+	atomic.AddInt64(&cm.connectionCount, -1)
+	removeOwnership := false
+	if connection.IsAuthenticated() && connection.UserID != "" {
+		if mapped, exists := cm.userConnections.Load(connection.UserID); exists && mapped.(string) == connectionID {
 			cm.userConnections.Delete(connection.UserID)
 			atomic.AddInt64(&cm.loggedInCount, -1)
-			// 更新在线用户数指标（删除后）
-			metrics.UpdateOnlineUsers(cm.GetLoggedInUserCount())
-
-			// 清理全局会话（需要检查是否为当前会话）
-			dsm := &redisClient.DistributedSessionManager{}
-			existingSession, err := dsm.GetUserSession(connection.UserID)
-			if err == nil && existingSession != "" {
-				existingConnID, _ := dsm.ParseSessionData(existingSession)
-				// 只有当当前连接是全局会话中的连接时才清理
-				if existingConnID == connectionID {
-					dsm.RemoveUserSession(connection.UserID)
-					logger.Sugar().Debugf("清理全局会话: %s", connection.UserID)
-				}
-			}
-
-			// 清理连接映射
-			currentContainerID := os.Getenv("HOSTNAME")
-			if currentContainerID == "" {
-				currentContainerID = "local"
-			}
-			err = redisClient.UnregisterConnection(connection.UserID, currentContainerID)
-			if err != nil {
-				logger.Sugar().Warnf("清理连接映射失败: %v", err)
-			}
+			removeOwnership = true
 		}
-
-		// 从连接池中移除
-		cm.connections.Delete(connectionID)
-		atomic.AddInt64(&cm.connectionCount, -1)
-		connection.Close()
-
-		logger.Sugar().Debugf("连接已移除: %s", connectionID)
 	}
+	return connection, removeOwnership
 }
 
-// GetConnectionByUserID 通过用户ID获取连接
 func (cm *ConnectionManager) GetConnectionByUserID(userID string) (*Connection, bool) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
-
 	if connectionID, ok := cm.userConnections.Load(userID); ok {
-		if conn, ok := cm.connections.Load(connectionID); ok {
-			return conn.(*Connection), true
+		if value, exists := cm.connections.Load(connectionID); exists {
+			return value.(*Connection), true
 		}
 	}
-
 	return nil, false
 }
 
-// GetConnectionByID 通过连接ID获取连接
 func (cm *ConnectionManager) GetConnectionByID(connectionID string) (*Connection, bool) {
 	cm.mutex.RLock()
 	defer cm.mutex.RUnlock()
-
-	if conn, ok := cm.connections.Load(connectionID); ok {
-		return conn.(*Connection), true
+	value, ok := cm.connections.Load(connectionID)
+	if !ok {
+		return nil, false
 	}
-
-	return nil, false
+	return value.(*Connection), true
 }
 
-// GetInstanceID 获取连接管理器实例ID
-func (cm *ConnectionManager) GetInstanceID() string {
-	return cm.instanceID
-}
+func (cm *ConnectionManager) GetInstanceID() string { return cm.instanceID }
 
-// SendMessageToUser 向指定用户发送消息
 func (cm *ConnectionManager) SendMessageToUser(userID string, message []byte) error {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	logger.Sugar().Debugf("[%s] SendMessageToUser: 查找用户 %s", cm.instanceID, userID)
-
-	// 调试：打印所有用户连接
-	cm.userConnections.Range(func(key, value interface{}) bool {
-		logger.Sugar().Debugf("[%s] 用户连接映射: %s -> %s", cm.instanceID, key, value)
-		return true
-	})
-
-	if connectionID, ok := cm.userConnections.Load(userID); ok {
-		logger.Sugar().Debugf("[%s] 找到用户连接: %s -> %s", cm.instanceID, userID, connectionID)
-		if conn, ok := cm.connections.Load(connectionID); ok {
-			connection := conn.(*Connection)
-			if err := connection.EnqueueMessage(message); err != nil {
-				return err
-			}
-			logger.Sugar().Debugf("[%s] 消息发送成功: %s", cm.instanceID, userID)
-			return nil
-		}
+	connection, ok := cm.GetConnectionByUserID(userID)
+	if !ok {
+		return fmt.Errorf("用户未连接: %s", userID)
 	}
-
-	logger.Sugar().Errorf("[%s] 用户未连接: %s", cm.instanceID, userID)
-	return fmt.Errorf("用户未连接: %s", userID)
+	return connection.EnqueueMessage(message)
 }
 
-// IsUserLoggedIn 检查用户是否已登录
 func (cm *ConnectionManager) IsUserLoggedIn(userID string) bool {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-
-	_, exists := cm.userConnections.Load(userID)
+	_, exists := cm.GetConnectionByUserID(userID)
 	return exists
 }
 
-// GetConnectionCount 获取当前连接数 (O(1) using atomic counter)
+func (cm *ConnectionManager) IsCurrentUserConnection(userID, connectionID string) bool {
+	cm.mutex.RLock()
+	defer cm.mutex.RUnlock()
+	mapped, exists := cm.userConnections.Load(userID)
+	return exists && mapped.(string) == connectionID
+}
+
 func (cm *ConnectionManager) GetConnectionCount() int {
 	return int(atomic.LoadInt64(&cm.connectionCount))
 }
-
-// GetLoggedInUserCount 获取已登录用户数 (O(1) using atomic counter)
 func (cm *ConnectionManager) GetLoggedInUserCount() int {
 	return int(atomic.LoadInt64(&cm.loggedInCount))
+}
+
+func (cm *ConnectionManager) StopUserIfOwner(userID, ownerToken string) bool {
+	connection, ok := cm.GetConnectionByUserID(userID)
+	if !ok || ownerToken != "*" && connection.OwnerToken != ownerToken {
+		return false
+	}
+	cm.RemoveConnection(connection.ID)
+	return true
 }
 
 func (c *Connection) EnqueueMessage(message []byte) error {
 	c.sendMu.RLock()
 	defer c.sendMu.RUnlock()
-
 	if c.closed.Load() {
 		return fmt.Errorf("连接已关闭: %s", c.ID)
 	}
-
 	select {
 	case c.SendChan <- message:
 		return nil
@@ -382,30 +326,20 @@ func (c *Connection) Close() {
 			close(c.done)
 		}
 		c.sendMu.Unlock()
-
 		if c.Conn != nil {
 			_ = c.Conn.Close()
 		}
 	})
 }
 
-func (c *Connection) IsClosed() bool {
-	return c.closed.Load()
-}
+func (c *Connection) IsClosed() bool { return c.closed.Load() }
 
-func (c *Connection) MarkAuthenticated(userID string) {
+func (c *Connection) MarkAuthenticated(userID, ownerToken string) {
 	c.UserID = userID
+	c.OwnerToken = ownerToken
 	c.LoggedIn = true
 	c.authenticated.Store(true)
 }
 
-func (c *Connection) IsAuthenticated() bool {
-	return c.authenticated.Load()
-}
-
-func (c *Connection) Done() <-chan struct{} {
-	if c.done == nil {
-		return nil
-	}
-	return c.done
-}
+func (c *Connection) IsAuthenticated() bool { return c.authenticated.Load() }
+func (c *Connection) Done() <-chan struct{} { return c.done }

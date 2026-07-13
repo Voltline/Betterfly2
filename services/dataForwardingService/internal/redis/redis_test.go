@@ -1,6 +1,7 @@
 package redisClient
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ func useTestRedis(t *testing.T) *miniredis.Miniredis {
 
 func TestGetContainerByConnectionRequiresMatchingLease(t *testing.T) {
 	server := useTestRedis(t)
-	if err := RegisterConnection("1", "pod-a"); err != nil {
+	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := GetContainerByConnection("1"); err != nil || got != "pod-a" {
@@ -43,15 +44,15 @@ func TestGetContainerByConnectionRejectsMismatchedLeaseWithoutDeletingMigratedRo
 	server := useTestRedis(t)
 	server.HSet("ws_connection_mapping", "1", "pod-old")
 	server.SAdd("container_connections:pod-old", "1")
-	server.Set(routeLeaseKey("1"), "pod-new")
+	server.Set(routeLeaseKey("1"), "pod-new|owner-new")
 	if _, err := GetContainerByConnection("1"); !errors.Is(err, ErrRouteNotFound) {
 		t.Fatalf("expected mismatched route rejection, got %v", err)
 	}
 
-	if err := RegisterConnection("1", "pod-new"); err != nil {
+	if err := RegisterConnection(context.Background(), "1", "pod-new", "owner-new"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := UnregisterConnectionResultForTest("1", "pod-old"); err != nil {
+	if _, err := UnregisterConnectionResultForTest("1", "pod-old", "owner-old"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := GetContainerByConnection("1"); err != nil || got != "pod-new" {
@@ -59,16 +60,16 @@ func TestGetContainerByConnectionRejectsMismatchedLeaseWithoutDeletingMigratedRo
 	}
 }
 
-func UnregisterConnectionResultForTest(id, containerID string) (bool, error) {
+func UnregisterConnectionResultForTest(id, containerID, ownerToken string) (bool, error) {
 	result, err := unregisterConnectionScript.Run(ctx, Rdb,
-		[]string{"ws_connection_mapping", routeLeaseKey(id)}, id, containerID,
+		[]string{"ws_connection_mapping", routeLeaseKey(id)}, id, containerID, ownerToken,
 	).Int()
 	return result == 1, err
 }
 
 func TestExpiredLeaseIsNotRoutable(t *testing.T) {
 	server := useTestRedis(t)
-	if err := RegisterConnection("1", "pod-a"); err != nil {
+	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
 		t.Fatal(err)
 	}
 	server.FastForward(routeLeaseTTL + time.Second)
@@ -77,14 +78,31 @@ func TestExpiredLeaseIsNotRoutable(t *testing.T) {
 	}
 }
 
+func TestOldOwnerCannotUnregisterNewRouteInSameContainer(t *testing.T) {
+	useTestRedis(t)
+	ctx := context.Background()
+	if err := RegisterConnection(ctx, "1", "pod-a", "old-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterConnection(ctx, "1", "pod-a", "new-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UnregisterConnection(ctx, "1", "pod-a", "old-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if route, err := GetContainerByConnection("1"); err != nil || route != "pod-a" {
+		t.Fatalf("old owner removed new route: route=%q err=%v", route, err)
+	}
+}
+
 func TestGetContainersByConnectionsReturnsOnlyValidRoutes(t *testing.T) {
 	server := useTestRedis(t)
-	if err := RegisterConnection("1", "pod-a"); err != nil {
+	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
 		t.Fatal(err)
 	}
 	server.HSet("ws_connection_mapping", "2", "pod-b")
 	server.HSet("ws_connection_mapping", "3", "pod-old")
-	server.Set(routeLeaseKey("3"), "pod-new")
+	server.Set(routeLeaseKey("3"), "pod-new|owner-new")
 
 	routes, err := GetContainersByConnections([]string{"1", "2", "3", "4"})
 	if err != nil {
@@ -110,5 +128,37 @@ func TestRedisFailureIsDistinctFromOfflineRoute(t *testing.T) {
 	_, err := GetContainerByConnection("1")
 	if err == nil || errors.Is(err, ErrRouteNotFound) {
 		t.Fatalf("Redis failure was mistaken for offline route: %v", err)
+	}
+}
+
+func TestSessionAndLockCleanupRequireMatchingOwner(t *testing.T) {
+	useTestRedis(t)
+	ctx := context.Background()
+	dsm := &DistributedSessionManager{}
+	locked, err := dsm.AcquireUserLock(ctx, "9", "owner-a", time.Minute)
+	if err != nil || !locked {
+		t.Fatalf("failed to acquire lock: locked=%v err=%v", locked, err)
+	}
+	if err := dsm.ReleaseUserLock(ctx, "9", "owner-b"); err != nil {
+		t.Fatal(err)
+	}
+	if value := Rdb.Get(ctx, userLockKey("9")).Val(); value != "owner-a" {
+		t.Fatalf("foreign owner released lock: %q", value)
+	}
+
+	old := SessionData{ConnectionID: "old", ContainerID: "pod-a", OwnerToken: "owner-a"}
+	newSession := SessionData{ConnectionID: "new", ContainerID: "pod-a", OwnerToken: "owner-b"}
+	if err := dsm.ClaimSessionAndRoute(ctx, "9", old, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsm.ClaimSessionAndRoute(ctx, "9", newSession, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsm.RemoveOwnedSessionAndRoute(ctx, "9", old); err != nil {
+		t.Fatal(err)
+	}
+	current, exists, err := dsm.GetUserSession(ctx, "9")
+	if err != nil || !exists || current.OwnerToken != "owner-b" {
+		t.Fatalf("foreign cleanup removed current session: %+v exists=%v err=%v", current, exists, err)
 	}
 }

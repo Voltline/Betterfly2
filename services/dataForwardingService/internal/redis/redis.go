@@ -27,30 +27,29 @@ if previous and previous ~= ARGV[2] then
 end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
 redis.call('SADD', 'container_connections:' .. ARGV[2], ARGV[1])
-redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+redis.call('SET', KEYS[2], ARGV[2] .. '|' .. ARGV[3], 'PX', ARGV[4])
 return 1
 `)
 
 var unregisterConnectionScript = redis.NewScript(`
 local mapped = redis.call('HGET', KEYS[1], ARGV[1])
-if mapped ~= ARGV[2] then
+local leased = redis.call('GET', KEYS[2])
+if mapped ~= ARGV[2] or leased ~= ARGV[2] .. '|' .. ARGV[3] then
   return 0
 end
 redis.call('HDEL', KEYS[1], ARGV[1])
 redis.call('SREM', 'container_connections:' .. ARGV[2], ARGV[1])
-local leased = redis.call('GET', KEYS[2])
-if leased == ARGV[2] then
-  redis.call('DEL', KEYS[2])
-end
+redis.call('DEL', KEYS[2])
 return 1
 `)
 
 var refreshConnectionScript = redis.NewScript(`
 local mapped = redis.call('HGET', KEYS[1], ARGV[1])
-if mapped ~= ARGV[2] then
+local leased = redis.call('GET', KEYS[2])
+if mapped ~= ARGV[2] or leased ~= ARGV[2] .. '|' .. ARGV[3] then
   return 0
 end
-redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+redis.call('SET', KEYS[2], leased, 'PX', ARGV[4])
 return 1
 `)
 
@@ -60,7 +59,7 @@ if not mapped then
   return nil
 end
 local leased = redis.call('GET', KEYS[2])
-if leased == mapped then
+if leased and string.sub(leased, 1, string.len(mapped) + 1) == mapped .. '|' then
   return mapped
 end
 if redis.call('HGET', KEYS[1], ARGV[1]) == mapped then
@@ -76,7 +75,7 @@ for i, user_id in ipairs(ARGV) do
   local mapped = redis.call('HGET', KEYS[1], user_id)
   if mapped then
     local leased = redis.call('GET', 'ws_route_lease:' .. user_id)
-    if leased == mapped then
+    if leased and string.sub(leased, 1, string.len(mapped) + 1) == mapped .. '|' then
       table.insert(result, user_id)
       table.insert(result, mapped)
     elseif redis.call('HGET', KEYS[1], user_id) == mapped then
@@ -103,34 +102,34 @@ func InitRedis() error {
 	return nil
 }
 
-func RegisterConnection(id string, containerID string) error {
+func RegisterConnection(ctx context.Context, id, containerID, ownerToken string) error {
 	if Rdb == nil {
 		return errors.New("Redis客户端未初始化")
 	}
 	return registerConnectionScript.Run(ctx, Rdb,
 		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID, routeLeaseTTL.Milliseconds(),
+		id, containerID, ownerToken, routeLeaseTTL.Milliseconds(),
 	).Err()
 }
 
-func UnregisterConnection(id string, containerID string) error {
+func UnregisterConnection(ctx context.Context, id, containerID, ownerToken string) error {
 	if Rdb == nil {
 		return errors.New("Redis客户端未初始化")
 	}
 	_, err := unregisterConnectionScript.Run(ctx, Rdb,
 		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID,
+		id, containerID, ownerToken,
 	).Result()
 	return err
 }
 
-func RefreshConnection(id string, containerID string) error {
+func RefreshConnection(ctx context.Context, id, containerID, ownerToken string) error {
 	if Rdb == nil {
 		return errors.New("Redis客户端未初始化")
 	}
 	updated, err := refreshConnectionScript.Run(ctx, Rdb,
 		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID, routeLeaseTTL.Milliseconds(),
+		id, containerID, ownerToken, routeLeaseTTL.Milliseconds(),
 	).Int()
 	if err != nil {
 		return err

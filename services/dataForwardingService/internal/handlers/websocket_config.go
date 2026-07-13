@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -58,7 +59,19 @@ func canonicalOrigin(raw string) (string, bool) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", false
 	}
-	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), true
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return "", false
+	}
+	port := parsed.Port()
+	if port == "" {
+		if parsed.Scheme == "http" {
+			port = "80"
+		} else {
+			port = "443"
+		}
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + net.JoinHostPort(hostname, port), true
 }
 
 func (c websocketConfig) checkOrigin(r *http.Request) bool {

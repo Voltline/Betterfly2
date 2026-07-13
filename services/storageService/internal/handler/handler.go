@@ -257,13 +257,19 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 		}, nil
 	}
 
+	// 新客户端优先使用复合游标；旧客户端继续使用 timestamp 作为初始下界。
+	cursorTimestamp := query.GetCursorTimestamp()
+	if cursorTimestamp == "" {
+		cursorTimestamp = query.GetTimestamp()
+	}
+
 	// 解析时间戳，使用预定义的格式列表
 	var timestamp time.Time
 	var err error
 	parsed := false
 
 	for _, format := range timeFormats {
-		timestamp, err = time.Parse(format, query.Timestamp)
+		timestamp, err = time.Parse(format, cursorTimestamp)
 		if err == nil {
 			parsed = true
 			break
@@ -271,13 +277,19 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 	}
 
 	if !parsed {
-		sugar.Warnf("解析时间戳失败，使用默认值: 原始时间戳: %s", query.Timestamp)
+		sugar.Warnf("解析时间戳失败，使用默认值: 原始时间戳: %s", cursorTimestamp)
 		timestamp = time.Now().Add(-24 * time.Hour) // 默认查询最近24小时
 	}
 
-	// 查询该时间戳之后的消息，使用UTC时间的RFC3339格式（与数据库存储格式一致）
+	pageSize := normalizeSyncPageSize(query.GetPageSize())
+	cursorMessageID := query.GetCursorMessageId()
+	if cursorMessageID < 0 {
+		cursorMessageID = 0
+	}
+
+	// 查询该复合游标之后的消息，数据库读取 limit+1 判断 has_more。
 	start := time.Now()
-	messages, err := db.GetSyncMessagesByTimestamp(query.ToUserId, timestamp.UTC().Format(time.RFC3339))
+	page, err := db.GetSyncMessagesPage(query.ToUserId, timestamp.UTC().Format(time.RFC3339), cursorMessageID, pageSize)
 	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询同步消息失败: %v", err)
@@ -285,11 +297,11 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 		return nil, err
 	}
 
-	sugar.Debugf("查询到 %d 条同步消息", len(messages))
+	sugar.Debugf("查询到 %d 条同步消息: has_more=%t", len(page.Messages), page.HasMore)
 
 	// 转换为Protobuf格式
 	var msgResponses []*storage.MessageRsp
-	for _, msg := range messages {
+	for _, msg := range page.Messages {
 		msgResponses = append(msgResponses, &storage.MessageRsp{
 			MessageId:    msg.MessageID,
 			FromUserId:   msg.FromUserID,
@@ -307,12 +319,25 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_SyncMsgsRsp{
 			SyncMsgsRsp: &storage.SyncMessagesRsp{
-				Msgs: msgResponses,
+				Msgs:                msgResponses,
+				HasMore:             page.HasMore,
+				NextCursorTimestamp: page.NextCursorTimestamp,
+				NextCursorMessageId: page.NextCursorMessageID,
 			},
 		},
 	}
 
 	return resp, nil
+}
+
+func normalizeSyncPageSize(requested int32) int {
+	if requested <= 0 {
+		return db.DefaultSyncPageSize
+	}
+	if requested > db.MaxSyncPageSize {
+		return db.MaxSyncPageSize
+	}
+	return int(requested)
 }
 
 // handleUpdateUserName 处理更新用户名请求

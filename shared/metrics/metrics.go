@@ -73,6 +73,18 @@ var (
 		Name: "betterfly_kafka_processing_errors_total",
 		Help: "Total number of Kafka message processing errors",
 	})
+	KafkaDLQMessagesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_kafka_dlq_messages_total",
+		Help: "Total number of messages written to DLQ",
+	}, []string{"error_class", "envelope_type"})
+	KafkaDLQPublishFailuresTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "betterfly_kafka_dlq_publish_failures_total",
+		Help: "Total number of DLQ publish failures",
+	})
+	KafkaProcessingRetriesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "betterfly_kafka_processing_retries_total",
+		Help: "Total number of Kafka processing retries",
+	})
 
 	KafkaProcessingLatency = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "betterfly_kafka_processing_latency_seconds",

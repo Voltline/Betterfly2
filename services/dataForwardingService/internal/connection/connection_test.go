@@ -1,9 +1,16 @@
 package connection
 
 import (
+	"context"
+	redisClient "data_forwarding_service/internal/redis"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestConnectionClosePreventsFurtherEnqueue(t *testing.T) {
@@ -32,6 +39,120 @@ func TestConnectionClosePreventsFurtherEnqueue(t *testing.T) {
 
 	if _, ok := <-conn.SendChan; ok {
 		t.Fatal("expected send channel to be closed after draining buffered messages")
+	}
+}
+
+func useLoginTestRedis(t *testing.T) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	previous := redisClient.Rdb
+	redisClient.Rdb = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = redisClient.Rdb.Close()
+		redisClient.Rdb = previous
+	})
+}
+
+func addTestConnection(manager *ConnectionManager, id string) *Connection {
+	connection := &Connection{ID: id, SendChan: make(chan []byte, 4), done: make(chan struct{})}
+	manager.connections.Store(id, connection)
+	atomic.AddInt64(&manager.connectionCount, 1)
+	return connection
+}
+
+func TestLoginExternalWorkDoesNotBlockOtherUsersOrLocalOperations(t *testing.T) {
+	useLoginTestRedis(t)
+	manager := NewConnectionManager()
+	blocked := addTestConnection(manager, "blocked")
+	other := addTestConnection(manager, "other")
+	local := addTestConnection(manager, "local")
+	local.MarkAuthenticated("99", "local-owner")
+	manager.userConnections.Store("99", local.ID)
+	atomic.AddInt64(&manager.loggedInCount, 1)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	manager.beforeExternalLogin = func(ctx context.Context, userID string) error {
+		if userID != "1" {
+			return nil
+		}
+		close(entered)
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	blockedResult := make(chan error, 1)
+	go func() { blockedResult <- manager.Login(context.Background(), blocked.ID, "1") }()
+	<-entered
+
+	if err := manager.SendMessageToUser("99", []byte("still-responsive")); err != nil {
+		t.Fatalf("local send was blocked or failed: %v", err)
+	}
+	manager.RemoveConnection(local.ID)
+	if err := manager.Login(context.Background(), other.ID, "2"); err != nil {
+		t.Fatalf("different user login was blocked: %v", err)
+	}
+	close(release)
+	if err := <-blockedResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoginFailureAndCancellationFailClosed(t *testing.T) {
+	useLoginTestRedis(t)
+	manager := NewConnectionManager()
+	connection := addTestConnection(manager, "failed")
+	manager.beforeExternalLogin = func(context.Context, string) error { return errors.New("redis unavailable") }
+	if err := manager.Login(context.Background(), connection.ID, "10"); err == nil {
+		t.Fatal("expected external login failure")
+	}
+	if connection.IsAuthenticated() || manager.IsUserLoggedIn("10") || manager.GetLoggedInUserCount() != 0 {
+		t.Fatal("failed login left local authenticated state")
+	}
+
+	manager.beforeExternalLogin = func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := manager.Login(ctx, connection.ID, "10"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("login did not honor cancellation: %v", err)
+	}
+	if connection.IsAuthenticated() {
+		t.Fatal("canceled login authenticated connection")
+	}
+}
+
+func TestConcurrentSameUserHasOneOwnerAndOldCleanupIsFenced(t *testing.T) {
+	useLoginTestRedis(t)
+	manager := NewConnectionManager()
+	first := addTestConnection(manager, "first")
+	second := addTestConnection(manager, "second")
+	if err := manager.Login(context.Background(), first.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	firstOwner := first.OwnerToken
+	if err := manager.Login(context.Background(), second.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	if !second.IsAuthenticated() || second.OwnerToken == firstOwner || !first.IsClosed() {
+		t.Fatalf("ownership did not move cleanly: first=%q second=%q", firstOwner, second.OwnerToken)
+	}
+	manager.RemoveConnection(first.ID)
+	container, err := redisClient.GetContainerByConnection("7")
+	if err != nil || container != currentContainerID() {
+		t.Fatalf("old cleanup removed new route: container=%q err=%v", container, err)
+	}
+	session, exists, err := (&redisClient.DistributedSessionManager{}).GetUserSession(context.Background(), "7")
+	if err != nil || !exists || session.OwnerToken != second.OwnerToken {
+		t.Fatalf("unexpected final owner: %+v exists=%v err=%v", session, exists, err)
+	}
+	if len(manager.userLocks.entries) != 0 {
+		t.Fatalf("keyed lock leaked entries: %d", len(manager.userLocks.entries))
 	}
 }
 
@@ -111,7 +232,7 @@ func TestConnectionConcurrentEnqueueAndCloseDoesNotPanic(t *testing.T) {
 func TestConnectionManagerRejectsInvalidUserIDBeforeSessionRegistration(t *testing.T) {
 	manager := NewConnectionManager()
 	for _, userID := range []string{"", "-1", "0", "not-a-number"} {
-		if err := manager.Login("missing-connection", userID); err == nil {
+		if err := manager.Login(context.Background(), "missing-connection", userID); err == nil {
 			t.Fatalf("Login accepted invalid user ID %q", userID)
 		}
 	}

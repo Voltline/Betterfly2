@@ -365,8 +365,8 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery(`(?s)SELECT \*\s+FROM \(\s+SELECT\s+m\.message_id,.*FROM messages AS m\s+WHERE m\.is_group = FALSE\s+AND m\.to_user_id = \$1\s+AND m\.timestamp > \$2\s+UNION ALL\s+SELECT\s+m\.message_id,.*FROM group_members AS gm\s+JOIN messages AS m\s+ON m\.to_user_id = gm\.group_id\s+AND m\.is_group = TRUE\s+AND m\.timestamp >= COALESCE\(NULLIF\(gm\.joined_at, ''\), gm\.update_time\)\s+AND m\.timestamp > \$3\s+WHERE gm\.user_id = \$4\s+\) AS sync_messages\s+ORDER BY timestamp ASC`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(1001)).
+	mock.ExpectQuery(`(?s)SELECT \*.*m\.to_user_id = \$1.*m\.timestamp > \$2.*m\.timestamp = \$3.*m\.message_id > \$4.*m\.timestamp > \$5.*m\.timestamp = \$6.*m\.message_id > \$7.*gm\.user_id = \$8.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
 		}).
@@ -394,10 +394,13 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 		assert.Equal(t, int64(3003), syncRsp.GetMsgs()[2].GetFromUserId())
 		assert.Equal(t, int64(9001), syncRsp.GetMsgs()[2].GetToUserId())
 		assert.True(t, syncRsp.GetMsgs()[2].GetIsGroup())
+		assert.False(t, syncRsp.GetHasMore())
+		assert.Equal(t, "2026-04-17T10:07:00Z", syncRsp.GetNextCursorTimestamp())
+		assert.Equal(t, int64(20003), syncRsp.GetNextCursorMessageId())
 	}
 }
 
-func TestHandleQuerySyncMessages_DoesNotTruncateResults(t *testing.T) {
+func TestHandleQuerySyncMessages_DefaultPageIsBounded(t *testing.T) {
 	mock := useMockDB(t)
 
 	handler := &StorageHandler{
@@ -432,8 +435,8 @@ func TestHandleQuerySyncMessages_DoesNotTruncateResults(t *testing.T) {
 		)
 	}
 
-	mock.ExpectQuery(`(?s)SELECT \*\s+FROM \(\s+SELECT\s+m\.message_id,.*FROM messages AS m\s+WHERE m\.is_group = FALSE\s+AND m\.to_user_id = \$1\s+AND m\.timestamp > \$2\s+UNION ALL\s+SELECT\s+m\.message_id,.*FROM group_members AS gm\s+JOIN messages AS m\s+ON m\.to_user_id = gm\.group_id\s+AND m\.is_group = TRUE\s+AND m\.timestamp >= COALESCE\(NULLIF\(gm\.joined_at, ''\), gm\.update_time\)\s+AND m\.timestamp > \$3\s+WHERE gm\.user_id = \$4\s+\) AS sync_messages\s+ORDER BY timestamp ASC`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(1001)).
+	mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`).
+		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
 		WillReturnRows(rows)
 
 	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())
@@ -443,7 +446,54 @@ func TestHandleQuerySyncMessages_DoesNotTruncateResults(t *testing.T) {
 	syncRsp := resp.GetSyncMsgsRsp()
 	assert.NotNil(t, syncRsp)
 	if syncRsp != nil {
-		assert.Len(t, syncRsp.GetMsgs(), 101)
+		assert.Len(t, syncRsp.GetMsgs(), 100)
+		assert.True(t, syncRsp.GetHasMore())
+		assert.Equal(t, int64(30099), syncRsp.GetNextCursorMessageId())
+	}
+}
+
+func TestNormalizeSyncPageSizeDefaultsAndCaps(t *testing.T) {
+	for _, test := range []struct {
+		requested int32
+		want      int
+	}{{0, 100}, {-1, 100}, {1, 1}, {500, 500}, {501, 500}} {
+		if got := normalizeSyncPageSize(test.requested); got != test.want {
+			t.Fatalf("page_size %d normalized to %d, want %d", test.requested, got, test.want)
+		}
+	}
+}
+
+func TestSyncCompositeCursorDoesNotRepeatEqualTimestamps(t *testing.T) {
+	mock := useMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	queryPattern := `(?s)SELECT \*.*m\.timestamp = \$3 AND m\.message_id > \$4.*m\.timestamp = \$6 AND m\.message_id > \$7.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`
+	timestamp := "2026-04-17T10:00:00Z"
+	columns := []string{"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group"}
+	mock.ExpectQuery(queryPattern).
+		WithArgs(int64(1001), timestamp, timestamp, int64(0), timestamp, timestamp, int64(0), int64(1001), 3).
+		WillReturnRows(sqlmock.NewRows(columns).
+			AddRow(1, 2, 1001, "direct", timestamp, "text", "", false).
+			AddRow(2, 3, 9001, "group", timestamp, "text", "", true).
+			AddRow(3, 4, 1001, "next", timestamp, "text", "", false))
+	request := &storage.RequestMessage{TargetUserId: 1001, Payload: &storage.RequestMessage_QuerySyncMessages{QuerySyncMessages: &storage.QuerySyncMessages{ToUserId: 1001, CursorTimestamp: timestamp, PageSize: 2}}}
+	first, err := handler.handleQuerySyncMessages(request, request.GetQuerySyncMessages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.GetSyncMsgsRsp().GetMsgs()) != 2 || !first.GetSyncMsgsRsp().GetHasMore() || first.GetSyncMsgsRsp().GetNextCursorMessageId() != 2 {
+		t.Fatalf("unexpected first page: %+v", first.GetSyncMsgsRsp())
+	}
+
+	mock.ExpectQuery(queryPattern).
+		WithArgs(int64(1001), timestamp, timestamp, int64(2), timestamp, timestamp, int64(2), int64(1001), 3).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(3, 4, 1001, "next", timestamp, "text", "", false))
+	request.GetQuerySyncMessages().CursorMessageId = 2
+	second, err := handler.handleQuerySyncMessages(request, request.GetQuerySyncMessages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.GetSyncMsgsRsp().GetMsgs()) != 1 || second.GetSyncMsgsRsp().GetMsgs()[0].GetMessageId() != 3 || second.GetSyncMsgsRsp().GetHasMore() {
+		t.Fatalf("equal timestamp cursor repeated or omitted messages: %+v", second.GetSyncMsgsRsp())
 	}
 }
 

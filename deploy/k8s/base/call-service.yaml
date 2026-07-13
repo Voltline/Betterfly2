@@ -27,6 +27,8 @@ spec:
               value: call-service
             - name: KAFKA_CONSUMER_GROUP
               value: call-service-group
+            - name: KAFKA_VOIP_PUSH_TOPIC
+              value: push-service-voip
             - name: TURN_SHARED_SECRET
               valueFrom:
                 secretKeyRef:

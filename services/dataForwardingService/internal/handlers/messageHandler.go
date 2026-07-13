@@ -112,7 +112,10 @@ func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64,
 	if authServiceRsp == nil {
 		return errRsp, -1, errors.New("auth service returned an empty login response")
 	}
-	logger.Sugar().Debugf("authServiceRsp: %s", authServiceRsp.String())
+	logger.Sugar().Debugf(
+		"authService登录响应: result=%s user_id=%d account=%q",
+		authServiceRsp.GetResult(), authServiceRsp.GetUserId(), authServiceRsp.GetAccount(),
+	)
 	loginRsp := &pb.LoginRsp{}
 	var userID int64 = -1
 	switch authServiceRsp.Result {

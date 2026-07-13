@@ -37,6 +37,21 @@ type GroupMember struct {
 	UpdateTime string `gorm:"type:varchar(25);comment:上次更新时间"`
 }
 
+type RelationshipRequest struct {
+	ID              int64   `gorm:"primaryKey;autoIncrement;comment:关系申请ID"`
+	RequestType     string  `gorm:"type:varchar(20);index:idx_relationship_requests_target;comment:friend/group_join/group_invite"`
+	RequesterUserID int64   `gorm:"index;comment:发起人用户ID"`
+	TargetUserID    int64   `gorm:"index:idx_relationship_requests_target;comment:目标用户ID，入群申请时为0"`
+	GroupID         int64   `gorm:"index:idx_relationship_requests_target;comment:相关群ID，好友申请时为0"`
+	Message         string  `gorm:"type:varchar(255);comment:验证消息"`
+	Status          string  `gorm:"type:varchar(20);index:idx_relationship_requests_target;comment:pending/accepted/rejected/cancelled/expired"`
+	ActiveKey       *string `gorm:"type:varchar(160);uniqueIndex;comment:仅待处理申请持有的幂等键"`
+	CreatedAt       string  `gorm:"type:varchar(35);index;comment:创建时间RFC3339"`
+	ExpiresAt       string  `gorm:"type:varchar(35);index;comment:过期时间RFC3339"`
+	ResolvedAt      string  `gorm:"type:varchar(35);comment:处理时间RFC3339"`
+	ResolvedBy      int64   `gorm:"comment:处理人用户ID"`
+}
+
 type Message struct {
 	MessageID       int64   `gorm:"primaryKey;autoIncrement:true;comment:消息唯一ID"`
 	ClientMessageID *string `gorm:"type:varchar(128);uniqueIndex:uidx_messages_sender_client_id,priority:2;comment:客户端幂等消息ID，旧消息为空"`

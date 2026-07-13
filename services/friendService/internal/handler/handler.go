@@ -50,7 +50,7 @@ func newFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *frien
 type FriendHandler struct{}
 
 func NewFriendHandler() *FriendHandler {
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.Group{}, &db.GroupMember{})
+	_ = db.DB(&db.User{}, &db.Friend{}, &db.Group{}, &db.GroupMember{}, &db.RelationshipRequest{})
 	return &FriendHandler{}
 }
 
@@ -235,53 +235,6 @@ func (h *FriendHandler) handleUpdateFriendNotify(req *friend.RequestMessage, pay
 	}, nil
 }
 
-func (h *FriendHandler) handleAddDirectFriend(req *friend.RequestMessage, payload *friend.AddDirectFriend) (*friend.ResponseMessage, error) {
-	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 || payload.GetUserId() == payload.GetFriendId() {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_INVALID_ARGUMENT,
-			TargetUserId: req.TargetUserId,
-		}, nil
-	}
-
-	user, err := db.GetUserById(payload.GetUserId())
-	if err != nil {
-		return nil, err
-	}
-	targetUser, err := db.GetUserById(payload.GetFriendId())
-	if err != nil {
-		return nil, err
-	}
-	if user == nil || targetUser == nil {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_RECORD_NOT_EXIST,
-			TargetUserId: req.TargetUserId,
-		}, nil
-	}
-
-	alreadyFriends, updateTime, err := db.AddDirectFriendPair(payload.GetUserId(), payload.GetFriendId())
-	if err != nil {
-		return nil, err
-	}
-
-	result := friend.FriendResult_FRIEND_OK
-	if alreadyFriends {
-		result = friend.FriendResult_ALREADY_FRIEND
-	}
-
-	return &friend.ResponseMessage{
-		Result:       result,
-		TargetUserId: req.TargetUserId,
-		Payload: &friend.ResponseMessage_FriendRelationRsp{
-			FriendRelationRsp: &friend.FriendRelationRsp{
-				UserId:     payload.GetUserId(),
-				FriendId:   payload.GetFriendId(),
-				IsFriend:   true,
-				UpdateTime: updateTime,
-			},
-		},
-	}, nil
-}
-
 func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
 	if payload.GetOwnerUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetGroupName() == "" {
 		return &friend.ResponseMessage{
@@ -374,65 +327,6 @@ func (h *FriendHandler) handleQueryGroup(req *friend.RequestMessage, payload *fr
 	}, nil
 }
 
-func (h *FriendHandler) handleAddGroupMember(req *friend.RequestMessage, payload *friend.AddGroupMember) (*friend.ResponseMessage, error) {
-	if payload.GetUserId() <= 0 || payload.GetGroupId() <= 0 {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_INVALID_ARGUMENT,
-			TargetUserId: req.TargetUserId,
-			Payload: &friend.ResponseMessage_GroupOperationRsp{
-				GroupOperationRsp: &friend.GroupOperationRsp{
-					Operation: "add_group_member",
-					GroupId:   payload.GetGroupId(),
-					UserId:    payload.GetUserId(),
-				},
-			},
-		}, nil
-	}
-
-	user, err := db.GetUserById(payload.GetUserId())
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return &friend.ResponseMessage{
-			Result:       friend.FriendResult_RECORD_NOT_EXIST,
-			TargetUserId: req.TargetUserId,
-			Payload: &friend.ResponseMessage_GroupOperationRsp{
-				GroupOperationRsp: &friend.GroupOperationRsp{
-					Operation: "add_group_member",
-					GroupId:   payload.GetGroupId(),
-					UserId:    payload.GetUserId(),
-				},
-			},
-		}, nil
-	}
-
-	groupExists, added, updateTime, err := db.AddUserToGroup(payload.GetGroupId(), payload.GetUserId())
-	if err != nil {
-		return nil, err
-	}
-
-	result := friend.FriendResult_FRIEND_OK
-	if !groupExists {
-		result = friend.FriendResult_RECORD_NOT_EXIST
-	} else if !added {
-		result = friend.FriendResult_ALREADY_EXIST
-	}
-
-	return &friend.ResponseMessage{
-		Result:       result,
-		TargetUserId: req.TargetUserId,
-		Payload: &friend.ResponseMessage_GroupOperationRsp{
-			GroupOperationRsp: &friend.GroupOperationRsp{
-				Operation:  "add_group_member",
-				GroupId:    payload.GetGroupId(),
-				UserId:     payload.GetUserId(),
-				UpdateTime: updateTime,
-			},
-		},
-	}, nil
-}
-
 func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payload *friend.UpdateGroupAvatar) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetAvatarHash() == "" {
 		return &friend.ResponseMessage{
@@ -448,7 +342,7 @@ func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payl
 		}, nil
 	}
 
-	isMember, err := db.IsActiveGroupMember(payload.GetGroupId(), payload.GetRequestUserId())
+	_, isMember, err := db.RequireGroupManager(payload.GetGroupId(), payload.GetRequestUserId())
 	if err != nil {
 		return nil, err
 	}

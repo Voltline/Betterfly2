@@ -191,10 +191,15 @@ func (h *WebSocketHandler) handleAuthenticatedMessage(conn *connection.Connectio
 // handleLogin 处理登录
 func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *pb.RequestMessage) {
 	rsp, realUserID, err := HandleLoginMessage(requestMsg)
-	logger.Sugar().Infof("登录响应: %s", rsp.String())
+	logger.Sugar().Infof("登录响应: result=%s user_id=%d", rsp.GetLogin().GetResult(), realUserID)
 
 	if err != nil {
 		logger.Sugar().Errorf("登录出现错误: %v", err)
+		h.sendResponse(conn, rsp)
+		return
+	}
+	if !loginResponseAllowsBinding(rsp, realUserID) {
+		logger.Sugar().Infof("认证未通过，不创建用户会话: result=%s user_id=%d", rsp.GetLogin().GetResult(), realUserID)
 		h.sendResponse(conn, rsp)
 		return
 	}
@@ -224,6 +229,10 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 
 	// 返回登录结果
 	h.sendResponse(conn, rsp)
+}
+
+func loginResponseAllowsBinding(response *pb.ResponseMessage, userID int64) bool {
+	return response != nil && response.GetLogin() != nil && response.GetLogin().GetResult() == pb.LoginResult_LOGIN_OK && userID > 0
 }
 
 // handleSignup 处理注册

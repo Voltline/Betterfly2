@@ -67,6 +67,33 @@ func TestLoginHandlerMapsSuccessfulAuthResponse(t *testing.T) {
 	}
 }
 
+func TestFailedAuthenticationNeverAllowsSessionBinding(t *testing.T) {
+	tests := []struct {
+		name       string
+		authResult auth.AuthResult
+		wantResult pb.LoginResult
+	}{
+		{name: "password error", authResult: auth.AuthResult_PASSWORD_ERROR, wantResult: pb.LoginResult_PASSWORD_ERROR},
+		{name: "jwt error", authResult: auth.AuthResult_JWT_ERROR, wantResult: pb.LoginResult_JWT_ERROR},
+		{name: "account missing", authResult: auth.AuthResult_ACCOUNT_NOT_EXIST, wantResult: pb.LoginResult_ACCOUNT_NOT_EXIST},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withAuthClient(t, authClientStub{loginResponse: &auth.LoginRsp{Result: test.authResult, UserId: 304}})
+			response, userID, err := HandleLoginMessage(&pb.RequestMessage{Payload: &pb.RequestMessage_Login{Login: &pb.LoginReq{Account: "alice"}}})
+			if err != nil || response.GetLogin().GetResult() != test.wantResult || userID != -1 {
+				t.Fatalf("unexpected auth failure: response=%+v user_id=%d err=%v", response, userID, err)
+			}
+			if loginResponseAllowsBinding(response, userID) {
+				t.Fatal("failed authentication was allowed to bind a session")
+			}
+		})
+	}
+	if loginResponseAllowsBinding(&pb.ResponseMessage{Payload: &pb.ResponseMessage_Login{Login: &pb.LoginRsp{Result: pb.LoginResult_LOGIN_OK, UserId: 0}}}, 0) {
+		t.Fatal("LOGIN_OK with invalid user ID was allowed to bind")
+	}
+}
+
 func withAuthClient(t *testing.T, client auth.AuthServiceClient) {
 	t.Helper()
 	original := getAuthClient

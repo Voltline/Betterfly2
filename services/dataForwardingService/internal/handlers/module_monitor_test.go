@@ -61,6 +61,15 @@ func TestDecorateMonitorContactsRequiresAdminAndAddedState(t *testing.T) {
 	}
 }
 
+func TestMonitorFriendAcceptanceBypassesApprovalWithStructuredResult(t *testing.T) {
+	response := newMonitorFriendAcceptance(monitor.AdminUserID, time.Date(2026, 7, 13, 0, 0, 0, 0, time.UTC))
+	operation := response.GetRelationshipOperationRsp()
+	request := operation.GetRequest()
+	if operation.GetResult() != "FRIEND_OK" || request.GetStatus() != "accepted" || request.GetRequesterUserId() != monitor.AdminUserID || !monitor.IsMonitorID(request.GetTargetUserId()) {
+		t.Fatalf("unexpected monitor friend acceptance: %+v", operation)
+	}
+}
+
 func TestDecorateMonitorContactsDoesNotDuplicateReservedID(t *testing.T) {
 	profile := monitor.CurrentProfile()
 	original := []*pb.ContactInfo{{UserId: profile.UserID, Name: "existing"}}

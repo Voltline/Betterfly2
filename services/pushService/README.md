@@ -13,7 +13,7 @@ iOS PKPushRegistry token
 
 offline incoming call
   -> callService creates RINGING session
-  -> Kafka push-service
+  -> Kafka push-service-voip（独立高优先级通道）
   -> APNs sandbox or production
   -> PushKit wakes app
   -> app reports CallKit incoming call immediately

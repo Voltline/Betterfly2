@@ -2,6 +2,13 @@ syntax = "proto3";
 package df_interface;
 option go_package = "Betterfly2/proto/data_forwarding";
 
+enum RequestDecision {
+  REQUEST_DECISION_UNSPECIFIED = 0;
+  REQUEST_ACCEPT = 1;
+  REQUEST_REJECT = 2;
+  REQUEST_CANCEL = 3;
+}
+
 message Post {
   int64 from_id = 1;
   bool is_group = 2;

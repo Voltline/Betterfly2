@@ -137,10 +137,12 @@ type publishedDelivery struct {
 type memoryPublisher struct {
 	deliveries []publishedDelivery
 	pushes     []*pushpb.RequestMessage
+	pushTopics []string
 }
 
-func (p *memoryPublisher) PublishPush(_ context.Context, _ string, request *pushpb.RequestMessage) error {
+func (p *memoryPublisher) PublishPush(_ context.Context, topic string, request *pushpb.RequestMessage) error {
 	p.pushes = append(p.pushes, request)
+	p.pushTopics = append(p.pushTopics, topic)
 	return nil
 }
 
@@ -206,6 +208,7 @@ func TestCallLifecycle(t *testing.T) {
 }
 
 func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
+	t.Setenv("KAFKA_VOIP_PUSH_TOPIC", "push-service-voip-test")
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
 	publisher := &memoryPublisher{}
@@ -219,6 +222,9 @@ func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
 	}
 	if len(publisher.pushes) != 1 || publisher.pushes[0].GetVoipCall().GetCalleeUserId() != 2 {
 		t.Fatalf("expected VoIP push request, got %+v", publisher.pushes)
+	}
+	if len(publisher.pushTopics) != 1 || publisher.pushTopics[0] != "push-service-voip-test" {
+		t.Fatalf("expected isolated VoIP push topic, got %v", publisher.pushTopics)
 	}
 	firstCallID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
 	if err := service.HandlePushResult(context.Background(), &pushpb.VoIPPushResult{

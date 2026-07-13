@@ -102,3 +102,15 @@ func TestConnectionConcurrentEnqueueAndCloseDoesNotPanic(t *testing.T) {
 		t.Fatal("connection should be closed")
 	}
 }
+
+func TestConnectionManagerRejectsInvalidUserIDBeforeSessionRegistration(t *testing.T) {
+	manager := NewConnectionManager()
+	for _, userID := range []string{"", "-1", "0", "not-a-number"} {
+		if err := manager.Login("missing-connection", userID); err == nil {
+			t.Fatalf("Login accepted invalid user ID %q", userID)
+		}
+	}
+	if manager.GetLoggedInUserCount() != 0 {
+		t.Fatalf("invalid login changed logged-in count: %d", manager.GetLoggedInUserCount())
+	}
+}

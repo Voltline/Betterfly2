@@ -82,7 +82,7 @@ func handleInsertContact(fromID int64, message *pb.RequestMessage) error {
 
 	currentContainerID := currentContainerTopic()
 
-	if err := publishFriendRequest(buildInsertContactFriendRequest(fromID, payload.GetToInsertUserId(), currentContainerID)); err != nil {
+	if err := publishFriendRequest(buildInsertContactFriendRequestWithMessage(fromID, payload.GetToInsertUserId(), payload.GetMessage(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布InsertContact请求到friend-service失败: %v", err)
 		return err
 	}
@@ -194,7 +194,7 @@ func handleInsertGroupUser(fromID int64, message *pb.RequestMessage) error {
 
 	currentContainerID := currentContainerTopic()
 
-	if err := publishFriendRequest(buildInsertGroupUserFriendRequest(fromID, payload.GetTargetGroupId(), currentContainerID)); err != nil {
+	if err := publishFriendRequest(buildInsertGroupUserFriendRequestWithMessage(fromID, payload.GetTargetGroupId(), payload.GetMessage(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布InsertGroupUser请求到friend-service失败: %v", err)
 		return err
 	}
@@ -204,11 +204,16 @@ func handleInsertGroupUser(fromID int64, message *pb.RequestMessage) error {
 }
 
 func buildInsertGroupUserFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
+	return buildInsertGroupUserFriendRequestWithMessage(fromID, groupID, "", currentContainerID)
+}
+
+func buildInsertGroupUserFriendRequestWithMessage(fromID, groupID int64, message, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_AddGroupMember{
 		AddGroupMember: &friend.AddGroupMember{
 			UserId:  fromID,
 			GroupId: groupID,
+			Message: message,
 		},
 	}
 	return req
@@ -342,11 +347,16 @@ func buildUpdateGroupAvatarFriendRequest(fromID, groupID int64, avatarHash, curr
 }
 
 func buildInsertContactFriendRequest(fromID, targetUserID int64, currentContainerID string) *friend.RequestMessage {
+	return buildInsertContactFriendRequestWithMessage(fromID, targetUserID, "", currentContainerID)
+}
+
+func buildInsertContactFriendRequestWithMessage(fromID, targetUserID int64, message, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_AddDirectFriend{
 		AddDirectFriend: &friend.AddDirectFriend{
 			UserId:   fromID,
 			FriendId: targetUserID,
+			Message:  message,
 		},
 	}
 	return req

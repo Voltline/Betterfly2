@@ -276,6 +276,7 @@ services:
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_CALL_TOPIC: call-service
       KAFKA_CONSUMER_GROUP: call-service-group
+      KAFKA_VOIP_PUSH_TOPIC: push-service-voip
       CALL_RING_TIMEOUT_SECONDS: ${CALL_RING_TIMEOUT_SECONDS:-45}
       CALL_ACTIVE_TTL_SECONDS: ${CALL_ACTIVE_TTL_SECONDS:-21600}
       TURN_PUBLIC_HOST: ${TURN_PUBLIC_HOST:-localhost}
@@ -306,6 +307,8 @@ services:
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_PUSH_TOPIC: push-service
       KAFKA_CONSUMER_GROUP: push-service-group
+      KAFKA_VOIP_PUSH_TOPIC: push-service-voip
+      KAFKA_VOIP_CONSUMER_GROUP: push-service-voip-group
       APNS_KEY_ID: ${APNS_KEY_ID:-C6D5695Q4Y}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-8R5Q4A3RC7}
       APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-com.Voltline.Betterfly2}

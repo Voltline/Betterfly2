@@ -91,3 +91,26 @@ func TestOperationResponseUsesServerForSuccessAndWarnForFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildRelationshipResponsesPreserveStructuredResults(t *testing.T) {
+	request := &friend.RelationshipRequestInfo{
+		RequestId: 7, RequestType: "group_join", RequesterUserId: 2, RequesterName: "Alice",
+		GroupId: 10, GroupName: "Team", Status: "pending", CreatedAt: "2026-07-13T00:00:00Z", ExpiresAt: "2026-07-20T00:00:00Z",
+	}
+	operation := buildRelationshipOperationResponse(&friend.RelationshipOperationRsp{Operation: "resolve_group_join_request", Request: request}, friend.FriendResult_FORBIDDEN)
+	if got := operation.GetRelationshipOperationRsp(); got.GetResult() != "FORBIDDEN" || got.GetRequest().GetGroupName() != "Team" || got.GetRequest().GetExpiresAt() == "" {
+		t.Fatalf("relationship operation mapping mismatch: %+v", got)
+	}
+
+	list := buildRelationshipRequestListResponse(&friend.RelationshipRequestListRsp{Requests: []*friend.RelationshipRequestInfo{request}})
+	if got := list.GetRelationshipRequestListRsp().GetRequests(); len(got) != 1 || got[0].GetRequestId() != 7 {
+		t.Fatalf("relationship list mapping mismatch: %+v", got)
+	}
+
+	member := buildGroupMemberOperationResponse(&friend.GroupOperationRsp{
+		Operation: "update_group_member_role", GroupId: 10, UserId: 2, Role: "admin", UpdateTime: "2026-07-13T01:00:00Z",
+	}, friend.FriendResult_FRIEND_OK).GetGroupMemberOperationRsp()
+	if member.GetResult() != "FRIEND_OK" || member.GetRole() != "admin" || member.GetGroupId() != 10 {
+		t.Fatalf("group member operation mapping mismatch: %+v", member)
+	}
+}

@@ -342,3 +342,26 @@ func TestBuildDeleteGroupUserFriendRequestRoutesResponseToRequester(t *testing.T
 		)
 	}
 }
+
+func TestLegacyInsertAPIsNowCreateRequestsWithVerificationMessage(t *testing.T) {
+	friendReq := buildInsertContactFriendRequestWithMessage(1001, 1002, "我是 Alice", "df-pod-1")
+	friendPayload := friendReq.GetAddDirectFriend()
+	if friendPayload == nil || friendPayload.GetUserId() != 1001 || friendPayload.GetFriendId() != 1002 || friendPayload.GetMessage() != "我是 Alice" {
+		t.Fatalf("friend request bridge mismatch: %+v", friendReq)
+	}
+
+	groupReq := buildInsertGroupUserFriendRequestWithMessage(1001, 3001, "申请入群", "df-pod-1")
+	groupPayload := groupReq.GetAddGroupMember()
+	if groupPayload == nil || groupPayload.GetUserId() != 1001 || groupPayload.GetGroupId() != 3001 || groupPayload.GetMessage() != "申请入群" {
+		t.Fatalf("group join request bridge mismatch: %+v", groupReq)
+	}
+}
+
+func TestFriendDecisionMappingRejectsUnspecified(t *testing.T) {
+	if got, err := friendDecision(pb.RequestDecision_REQUEST_ACCEPT); err != nil || got != friend.RequestDecision_REQUEST_ACCEPT {
+		t.Fatalf("accept decision mapping failed: got=%s err=%v", got, err)
+	}
+	if _, err := friendDecision(pb.RequestDecision_REQUEST_DECISION_UNSPECIFIED); err == nil {
+		t.Fatal("unspecified decision must be rejected")
+	}
+}

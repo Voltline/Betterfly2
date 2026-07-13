@@ -112,38 +112,6 @@ func IsActiveGroupMember(groupID, userID int64) (bool, error) {
 	return count > 0, nil
 }
 
-func AddUserToGroup(groupID, userID int64) (bool, bool, string, error) {
-	now := utils.NowTime()
-	group, err := GetGroupByID(groupID)
-	if err != nil {
-		return false, false, "", err
-	}
-	if group == nil {
-		return false, false, "", nil
-	}
-
-	added := false
-	err = DB().Transaction(func(tx *gorm.DB) error {
-		var member GroupMember
-		err := tx.Where("group_id = ? AND user_id = ?", groupID, userID).First(&member).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			added = true
-			return tx.Create(&GroupMember{
-				GroupID:    groupID,
-				UserID:     userID,
-				Role:       "member",
-				UpdateTime: now,
-			}).Error
-		}
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-
-	return true, added, now, err
-}
-
 func GetActiveGroupMemberIDs(groupID int64) ([]int64, error) {
 	var userIDs []int64
 	err := DB().
@@ -211,6 +179,7 @@ func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
 			var successor GroupMember
 			err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("group_id = ? AND user_id <> ?", groupID, userID).
+				Order("CASE WHEN role = 'admin' THEN 0 ELSE 1 END").
 				Order("update_time ASC").
 				Order("user_id ASC").
 				First(&successor).Error

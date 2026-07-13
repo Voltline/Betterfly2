@@ -7,6 +7,8 @@ import (
 	redisClient "data_forwarding_service/internal/redis"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,6 +73,12 @@ func (cm *ConnectionManager) AddConnection(conn *websocket.Conn) *Connection {
 
 // Login 用户登录，绑定用户ID
 func (cm *ConnectionManager) Login(connectionID string, userID string) error {
+	parsedUserID, err := strconv.ParseInt(strings.TrimSpace(userID), 10, 64)
+	if err != nil || parsedUserID <= 0 {
+		return fmt.Errorf("无效用户ID: %q", userID)
+	}
+	userID = strconv.FormatInt(parsedUserID, 10)
+
 	cm.mutex.Lock()
 	defer cm.mutex.Unlock()
 

@@ -57,15 +57,24 @@ func main() {
 	store := pushservice.NewGormStore()
 	service := pushservice.NewService(store, sender, kafkaPublisher, env("APNS_BUNDLE_ID", "com.Voltline.Betterfly2"))
 
-	consumerConfig := sarama.NewConfig()
-	consumerConfig.Version = sarama.V2_1_0_0
-	consumerConfig.Consumer.Offsets.Initial = sarama.OffsetNewest
-	consumerGroup, err := sarama.NewConsumerGroup(brokers, env("KAFKA_CONSUMER_GROUP", "push-service-group"), consumerConfig)
+	messageTopic := env("KAFKA_PUSH_TOPIC", "push-service")
+	consumerGroup, err := newConsumerGroup(brokers, env("KAFKA_CONSUMER_GROUP", "push-service-group"), sarama.OffsetNewest)
 	if err != nil {
 		sugar.Fatalf("初始化Kafka消费者失败: %v", err)
 	}
 	defer consumerGroup.Close()
-	go consume(ctx, consumerGroup, env("KAFKA_PUSH_TOPIC", "push-service"), consumer.NewHandler(service))
+	go consume(ctx, consumerGroup, messageTopic, consumer.NewHandler(service))
+
+	voipTopic := env("KAFKA_VOIP_PUSH_TOPIC", "push-service-voip")
+	sugar.Infof("PushService Kafka消费者启动: message_topic=%s voip_topic=%s", messageTopic, voipTopic)
+	if voipTopic != messageTopic {
+		voipConsumerGroup, groupErr := newConsumerGroup(brokers, env("KAFKA_VOIP_CONSUMER_GROUP", "push-service-voip-group"), sarama.OffsetOldest)
+		if groupErr != nil {
+			sugar.Fatalf("初始化VoIP Kafka消费者失败: %v", groupErr)
+		}
+		defer voipConsumerGroup.Close()
+		go consume(ctx, voipConsumerGroup, voipTopic, consumer.NewHandler(service))
+	}
 
 	httpServer := &http.Server{
 		Addr: ":" + env("HTTP_PORT", "8086"), Handler: http_server.New(service).Handler(), ReadHeaderTimeout: 5 * time.Second,
@@ -82,6 +91,13 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+func newConsumerGroup(brokers []string, groupID string, initialOffset int64) (sarama.ConsumerGroup, error) {
+	config := sarama.NewConfig()
+	config.Version = sarama.V2_1_0_0
+	config.Consumer.Offsets.Initial = initialOffset
+	return sarama.NewConsumerGroup(brokers, groupID, config)
 }
 
 func consume(ctx context.Context, group sarama.ConsumerGroup, topic string, handler sarama.ConsumerGroupHandler) {

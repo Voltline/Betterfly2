@@ -155,7 +155,7 @@ func TestHandleRemoveGroupMember_LastOwnerLeavesAndClosesGroup(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
-	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END,update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows())
 	mock.ExpectExec(`UPDATE "groups" SET "is_delete"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND is_delete = \$4`).
@@ -188,7 +188,7 @@ func TestHandleRemoveGroupMember_OwnerTransfersBeforeLeaving(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
-	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END,update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1002, "member", "2026-07-11T02:00:00Z"))
 	mock.ExpectExec(`UPDATE "groups" SET "owner_user_id"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND is_delete = \$4`).

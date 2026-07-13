@@ -247,6 +247,19 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 	}
 
 	var dfResp *pb.ResponseMessage
+	switch payload := friendResp.Payload.(type) {
+	case *friend.ResponseMessage_RelationshipRequestListRsp:
+		dfResp = buildRelationshipRequestListResponse(payload.RelationshipRequestListRsp)
+	case *friend.ResponseMessage_RelationshipOperationRsp:
+		dfResp = buildRelationshipOperationResponse(payload.RelationshipOperationRsp, friendResp.GetResult())
+	case *friend.ResponseMessage_GroupOperationRsp:
+		if payload.GroupOperationRsp.GetOperation() == "kick_group_member" || payload.GroupOperationRsp.GetOperation() == "update_group_member_role" {
+			dfResp = buildGroupMemberOperationResponse(payload.GroupOperationRsp, friendResp.GetResult())
+		}
+	}
+	if dfResp != nil {
+		goto marshalFriendResponse
+	}
 	switch friendResp.Result {
 	case friend.FriendResult_FRIEND_OK:
 		switch payload := friendResp.Payload.(type) {
@@ -369,6 +382,7 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		}
 	}
 
+marshalFriendResponse:
 	respBytes, err := proto.Marshal(dfResp)
 	if err != nil {
 		return fmt.Errorf("序列化好友响应消息失败: %v", err)
@@ -379,6 +393,47 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		return fmt.Errorf("发送好友响应给用户 %s 失败: %v", targetUserID, err)
 	}
 	return nil
+}
+
+func buildRelationshipRequestListResponse(list *friend.RelationshipRequestListRsp) *pb.ResponseMessage {
+	requests := make([]*pb.RelationshipRequestInfo, 0, len(list.GetRequests()))
+	for _, request := range list.GetRequests() {
+		requests = append(requests, buildRelationshipRequestInfo(request))
+	}
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_RelationshipRequestListRsp{
+		RelationshipRequestListRsp: &pb.RelationshipRequestListRsp{Requests: requests},
+	}}
+}
+
+func buildRelationshipOperationResponse(operation *friend.RelationshipOperationRsp, result friend.FriendResult) *pb.ResponseMessage {
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_RelationshipOperationRsp{
+		RelationshipOperationRsp: &pb.RelationshipOperationRsp{
+			Operation: operation.GetOperation(), Result: result.String(), Request: buildRelationshipRequestInfo(operation.GetRequest()),
+		},
+	}}
+}
+
+func buildRelationshipRequestInfo(request *friend.RelationshipRequestInfo) *pb.RelationshipRequestInfo {
+	if request == nil {
+		return nil
+	}
+	return &pb.RelationshipRequestInfo{
+		RequestId: request.GetRequestId(), RequestType: request.GetRequestType(),
+		RequesterUserId: request.GetRequesterUserId(), RequesterName: request.GetRequesterName(), RequesterAvatar: request.GetRequesterAvatar(),
+		TargetUserId: request.GetTargetUserId(), TargetName: request.GetTargetName(), TargetAvatar: request.GetTargetAvatar(),
+		GroupId: request.GetGroupId(), GroupName: request.GetGroupName(), GroupAvatar: request.GetGroupAvatar(),
+		Message: request.GetMessage(), Status: request.GetStatus(), CreatedAt: request.GetCreatedAt(), ExpiresAt: request.GetExpiresAt(),
+		ResolvedAt: request.GetResolvedAt(), ResolvedBy: request.GetResolvedBy(),
+	}
+}
+
+func buildGroupMemberOperationResponse(operation *friend.GroupOperationRsp, result friend.FriendResult) *pb.ResponseMessage {
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_GroupMemberOperationRsp{
+		GroupMemberOperationRsp: &pb.GroupMemberOperationRsp{
+			Operation: operation.GetOperation(), Result: result.String(), GroupId: operation.GetGroupId(),
+			UserId: operation.GetUserId(), Role: operation.GetRole(), UpdateTime: operation.GetUpdateTime(),
+		},
+	}}
 }
 
 func buildGroupInfoResponse(groupInfo *friend.GroupInfoRsp) *pb.ResponseMessage {

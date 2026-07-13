@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -148,7 +149,9 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		CallType: callTypeName(session.CallType), ResultKafkaTopic: "call-service",
 		ExpiresAt: session.RingDeadline.UTC().Format(time.RFC3339Nano), Required: !calleeOnline,
 	}}}
-	if err := s.publisher.PublishPush(ctx, "push-service", pushRequest); err != nil {
+	pushTopic := voipPushTopic()
+	logger.Sugar().Debugf("发布VoIP Push请求: call_id=%s topic=%s required=%t", session.ID, pushTopic, !calleeOnline)
+	if err := s.publisher.PublishPush(ctx, pushTopic, pushRequest); err != nil {
 		if calleeOnline {
 			logger.Sugar().Warnf("在线通话的冗余VoIP Push请求失败: call_id=%s error=%v", session.ID, err)
 			return nil
@@ -160,6 +163,13 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		}
 	}
 	return nil
+}
+
+func voipPushTopic() string {
+	if topic := strings.TrimSpace(os.Getenv("KAFKA_VOIP_PUSH_TOPIC")); topic != "" {
+		return topic
+	}
+	return "push-service-voip"
 }
 
 func (s *Service) resumeCall(ctx context.Context, request *callpb.InternalRequest, payload *callpb.ResumeCall) error {

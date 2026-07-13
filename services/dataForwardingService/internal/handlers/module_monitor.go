@@ -15,6 +15,7 @@ import (
 	"time"
 
 	pb "Betterfly2/proto/data_forwarding"
+	sharedDB "Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/monitor"
 	redisClient "data_forwarding_service/internal/redis"
@@ -31,6 +32,9 @@ var monitorExecutor = monitor.NewExecutor(monitor.Actions{
 	Connections: monitorConnectionStatus,
 	Route:       monitorUserRoute,
 	Kick:        monitorKickUser,
+	User:        monitorUserSummary,
+	Group:       monitorGroupSummary,
+	Requests:    monitorRelationshipRequests,
 })
 
 func handleMonitorQueryUser(requesterUserID int64) error {
@@ -59,7 +63,21 @@ func handleMonitorAddContact(requesterUserID int64) error {
 		return sendMonitorWarning(requesterUserID, "Monitor 联系人暂时不可用")
 	}
 	logger.Sugar().Infof("Monitor审计: actor_user_id=%d action=add_contact", requesterUserID)
-	return sendMonitorServerMessage(requesterUserID, "添加好友成功")
+	return sendMonitorResponse(requesterUserID, newMonitorFriendAcceptance(requesterUserID, time.Now()))
+}
+
+func newMonitorFriendAcceptance(requesterUserID int64, now time.Time) *pb.ResponseMessage {
+	profile := monitor.CurrentProfile()
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_RelationshipOperationRsp{
+		RelationshipOperationRsp: &pb.RelationshipOperationRsp{
+			Operation: "create_friend_request", Result: "FRIEND_OK",
+			Request: &pb.RelationshipRequestInfo{
+				RequestType: "friend", RequesterUserId: requesterUserID, TargetUserId: profile.UserID,
+				TargetName: profile.Name, TargetAvatar: profile.Avatar, Status: "accepted",
+				CreatedAt: now.UTC().Format(time.RFC3339Nano), ResolvedBy: profile.UserID,
+			},
+		},
+	}}
 }
 
 func handleMonitorDeleteContact(requesterUserID int64) error {
@@ -378,6 +396,82 @@ func monitorKickUser(ctx context.Context, userID int64) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("已向 DF Pod %s 发送用户 %d 的强制断线指令。", container, userID), nil
+}
+
+func monitorUserSummary(_ context.Context, userID int64) (string, error) {
+	user, err := sharedDB.GetUserById(userID)
+	if err != nil {
+		return "", err
+	}
+	if user == nil {
+		return fmt.Sprintf("用户 %d 不存在。", userID), nil
+	}
+	friends, err := sharedDB.GetFriendList(userID)
+	if err != nil {
+		return "", err
+	}
+	groups, err := sharedDB.GetJoinedGroups(userID)
+	if err != nil {
+		return "", err
+	}
+	lines := []string{
+		fmt.Sprintf("用户 %d", user.ID),
+		fmt.Sprintf("账号: %s", user.Account),
+		fmt.Sprintf("昵称: %s", user.Name),
+		fmt.Sprintf("好友: %d", len(friends)),
+		fmt.Sprintf("群聊: %d", len(groups)),
+	}
+	for _, group := range groups {
+		role := sharedDB.GroupRoleMember
+		if memberRole, _, roleErr := sharedDB.RequireGroupManager(group.GroupID, userID); roleErr == nil && memberRole != "" {
+			role = memberRole
+		}
+		lines = append(lines, fmt.Sprintf("- %d %s (%s)", group.GroupID, group.GroupName, role))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func monitorGroupSummary(_ context.Context, groupID int64) (string, error) {
+	group, err := sharedDB.GetGroupByID(groupID)
+	if err != nil {
+		return "", err
+	}
+	if group == nil {
+		return fmt.Sprintf("群组 %d 不存在。", groupID), nil
+	}
+	members, err := sharedDB.GetGroupMembers(groupID)
+	if err != nil {
+		return "", err
+	}
+	roles := map[string]int{}
+	for _, member := range members {
+		roles[member.Role]++
+	}
+	return fmt.Sprintf("群组 %d\n名称: %s\n群主: %d\n成员: %d (owner=%d admin=%d member=%d)",
+		group.GroupID, group.Name, group.OwnerUserID, len(members), roles[sharedDB.GroupRoleOwner], roles[sharedDB.GroupRoleAdmin], roles[sharedDB.GroupRoleMember]), nil
+}
+
+func monitorRelationshipRequests(_ context.Context, userID int64) (string, error) {
+	friendRequests, err := sharedDB.ListFriendRequests(userID, true)
+	if err != nil {
+		return "", err
+	}
+	groupRequests, err := sharedDB.ListGroupInvitations(userID, true)
+	if err != nil {
+		return "", err
+	}
+	pendingFriends, pendingGroups := 0, 0
+	for _, request := range friendRequests {
+		if request.Status == sharedDB.RequestStatusPending {
+			pendingFriends++
+		}
+	}
+	for _, request := range groupRequests {
+		if request.Status == sharedDB.RequestStatusPending {
+			pendingGroups++
+		}
+	}
+	return fmt.Sprintf("用户 %d 待处理申请\n好友申请: %d\n群邀请/入群申请: %d", userID, pendingFriends, pendingGroups), nil
 }
 
 func runMonitorProbe(ctx context.Context, probe monitorProbe) error {

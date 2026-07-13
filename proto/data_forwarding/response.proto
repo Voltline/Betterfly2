@@ -102,6 +102,45 @@ message JoinedGroupsRsp {
   repeated JoinedGroupInfo groups = 1;
 }
 
+message RelationshipRequestInfo {
+  int64 request_id = 1;
+  string request_type = 2; // friend/group_join/group_invite
+  int64 requester_user_id = 3;
+  string requester_name = 4;
+  string requester_avatar = 5;
+  int64 target_user_id = 6;
+  string target_name = 7;
+  string target_avatar = 8;
+  int64 group_id = 9;
+  string group_name = 10;
+  string group_avatar = 11;
+  string message = 12;
+  string status = 13;
+  string created_at = 14;
+  string expires_at = 15;
+  string resolved_at = 16;
+  int64 resolved_by = 17;
+}
+
+message RelationshipRequestListRsp {
+  repeated RelationshipRequestInfo requests = 1;
+}
+
+message RelationshipOperationRsp {
+  string operation = 1;
+  string result = 2;
+  RelationshipRequestInfo request = 3;
+}
+
+message GroupMemberOperationRsp {
+  string operation = 1;
+  string result = 2;
+  int64 group_id = 3;
+  int64 user_id = 4;
+  string role = 5;
+  string update_time = 6;
+}
+
 // 单条消息响应
 message MessageRsp {
   int64 from_user_id = 1;

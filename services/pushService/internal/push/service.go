@@ -107,6 +107,7 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 	if request == nil || strings.TrimSpace(request.GetCallId()) == "" || request.GetCallerUserId() <= 0 || request.GetCalleeUserId() <= 0 || request.GetCallerUserId() == request.GetCalleeUserId() || strings.TrimSpace(request.GetResultKafkaTopic()) == "" {
 		return ErrInvalidRequest
 	}
+	logger.Sugar().Infof("收到VoIP Push请求: call_id=%s caller=%d callee=%d required=%t expires_at=%s", request.GetCallId(), request.GetCallerUserId(), request.GetCalleeUserId(), request.GetRequired(), request.GetExpiresAt())
 	expiresAt, err := time.Parse(time.RFC3339Nano, request.GetExpiresAt())
 	if err != nil || !expiresAt.After(s.now()) {
 		return s.publishVoIPResult(ctx, request, false, "call_expired")
@@ -116,20 +117,26 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 		return s.publishVoIPResult(ctx, request, false, "token_query_failed")
 	}
 	if len(tokens) == 0 {
+		logger.Sugar().Warnf("VoIP Push无可用token: call_id=%s callee=%d", request.GetCallId(), request.GetCalleeUserId())
 		return s.publishVoIPResult(ctx, request, false, "no_active_voip_token")
 	}
+	logger.Sugar().Debugf("VoIP Push查询到活跃token: call_id=%s count=%d", request.GetCallId(), len(tokens))
 
 	accepted := false
 	lastReason := "apns_delivery_failed"
 	for _, token := range tokens {
 		environment := parseEnvironment(token.Environment)
-		_, sendErr := s.sender.Send(ctx, Notification{
+		sendResult, sendErr := s.sender.Send(ctx, Notification{
 			Kind: NotificationVoIP, Token: token.Token, Environment: environment, CallID: request.GetCallId(),
 			CallerUserID: request.GetCallerUserId(), CalleeUserID: request.GetCalleeUserId(),
 			CallType: request.GetCallType(), ExpiresAt: expiresAt,
 		})
 		if sendErr == nil {
 			accepted = true
+			logger.Sugar().Infof(
+				"APNs已接受VoIP Push: call_id=%s token_id=%d device_id=%s environment=%s apns_id=%s",
+				request.GetCallId(), token.ID, token.DeviceID, token.Environment, sendResult.APNSID,
+			)
 			continue
 		}
 		lastReason = sendErr.Error()
@@ -144,6 +151,7 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 	if accepted {
 		lastReason = "accepted_by_apns"
 	}
+	logger.Sugar().Infof("VoIP Push处理完成: call_id=%s accepted=%t reason=%s", request.GetCallId(), accepted, lastReason)
 	return s.publishVoIPResult(ctx, request, accepted, lastReason)
 }
 

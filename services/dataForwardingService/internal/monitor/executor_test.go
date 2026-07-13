@@ -62,6 +62,21 @@ func TestExecutorProtectsAdminAndMonitorFromKick(t *testing.T) {
 	}
 }
 
+func TestExecutorSupportsReadOnlyUserInspectionForAdminOnly(t *testing.T) {
+	called := int64(0)
+	executor := NewExecutor(Actions{User: func(_ context.Context, userID int64) (string, error) {
+		called = userID
+		return "summary", nil
+	}})
+	if _, _, err := executor.Execute(context.Background(), 2, "/user 42"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("non-admin user inspection should be forbidden, got %v", err)
+	}
+	_, response, err := executor.Execute(context.Background(), AdminUserID, "/user 42")
+	if err != nil || response != "summary" || called != 42 {
+		t.Fatalf("admin user inspection failed: response=%q called=%d err=%v", response, called, err)
+	}
+}
+
 func TestExecutorAllowsKickForOrdinaryPositiveUser(t *testing.T) {
 	calledWith := int64(0)
 	executor := NewExecutor(Actions{Kick: func(_ context.Context, userID int64) (string, error) {

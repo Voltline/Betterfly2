@@ -36,6 +36,15 @@ message RequestMessage {
     QueryJoinedGroups query_joined_groups = 23;
     call_interface.ClientRequest call_request = 24;
     push_interface.ClientRequest push_request = 25;
+    QueryFriendRequests query_friend_requests = 26;
+    ResolveFriendRequest resolve_friend_request = 27;
+    QueryGroupJoinRequests query_group_join_requests = 28;
+    ResolveGroupJoinRequest resolve_group_join_request = 29;
+    InviteGroupMember invite_group_member = 30;
+    QueryGroupInvitations query_group_invitations = 31;
+    ResolveGroupInvitation resolve_group_invitation = 32;
+    KickGroupMember kick_group_member = 33;
+    UpdateGroupMemberRole update_group_member_role = 34;
   }
 }
 
@@ -59,5 +68,8 @@ message ResponseMessage {
     PostAckRsp post_ack_rsp = 15;
     call_interface.CallEvent call_event = 16;
     push_interface.ClientEvent push_event = 17;
+    RelationshipRequestListRsp relationship_request_list_rsp = 18;
+    RelationshipOperationRsp relationship_operation_rsp = 19;
+    GroupMemberOperationRsp group_member_operation_rsp = 20;
   }
 }

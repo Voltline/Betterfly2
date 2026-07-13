@@ -2,6 +2,8 @@ syntax = "proto3";
 package df_interface;
 option go_package = "Betterfly2/proto/data_forwarding";
 
+import "data_forwarding/common.proto";
+
 message LoginReq {
   string account = 1;
   string password = 2;
@@ -24,6 +26,18 @@ message QueryUser {
 message InsertContact {
   int64 from_user_id = 1;
   int64 to_insert_user_id = 2;
+  string message = 3;
+}
+
+message QueryFriendRequests {
+  int64 from_user_id = 1;
+  bool include_outgoing = 2;
+}
+
+message ResolveFriendRequest {
+  int64 from_user_id = 1;
+  int64 request_id = 2;
+  RequestDecision decision = 3;
 }
 
 message QueryContacts {
@@ -62,6 +76,49 @@ message InsertGroup {
 message InsertGroupUser { // 又名：加入群组
   int64 from_user_id = 1;
   int64 target_group_id = 2;
+  string message = 3;
+}
+
+message QueryGroupJoinRequests {
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+}
+
+message ResolveGroupJoinRequest {
+  int64 from_user_id = 1;
+  int64 request_id = 2;
+  RequestDecision decision = 3;
+}
+
+message InviteGroupMember {
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+  int64 target_user_id = 3;
+  string message = 4;
+}
+
+message QueryGroupInvitations {
+  int64 from_user_id = 1;
+  bool include_outgoing = 2;
+}
+
+message ResolveGroupInvitation {
+  int64 from_user_id = 1;
+  int64 invitation_id = 2;
+  RequestDecision decision = 3;
+}
+
+message KickGroupMember {
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+  int64 target_user_id = 3;
+}
+
+message UpdateGroupMemberRole {
+  int64 from_user_id = 1;
+  int64 target_group_id = 2;
+  int64 target_user_id = 3;
+  string role = 4; // admin/member
 }
 
 message QueryGroupMembers {

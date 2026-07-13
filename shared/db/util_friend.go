@@ -2,7 +2,6 @@ package db
 
 import (
 	"Betterfly2/shared/utils"
-	"errors"
 
 	"gorm.io/gorm"
 )
@@ -15,87 +14,6 @@ type FriendContact struct {
 	Alias      string `gorm:"column:alias"`
 	IsNotify   bool   `gorm:"column:is_notify"`
 	UpdateTime string `gorm:"column:update_time"`
-}
-
-func MakeFriend(userID, friendID int64, alias string) error {
-	return DB().Create(&Friend{
-		UserID:     userID,
-		FriendID:   friendID,
-		IsNotify:   true,
-		Alias:      alias,
-		IsDelete:   false,
-		UpdateTime: utils.NowTime(),
-	}).Error
-}
-
-func Unfriend(userID, friendID int64) error {
-	return DB().Model(&Friend{}).
-		Where("user_id = ? AND friend_id = ?", userID, friendID).
-		Updates(map[string]interface{}{
-			"is_delete":   true,
-			"update_time": utils.NowTime()}).Error
-}
-
-func GetFriendship(userID, friendID int64) (*Friend, error) {
-	var friendship Friend
-	err := DB().Where("user_id = ? AND friend_id = ?", userID, friendID).First(&friendship).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &friendship, nil
-}
-
-func AddDirectFriendPair(userID, friendID int64) (bool, string, error) {
-	now := utils.NowTime()
-	alreadyFriends := true
-
-	err := DB().Transaction(func(tx *gorm.DB) error {
-		pairs := [][2]int64{
-			{userID, friendID},
-			{friendID, userID},
-		}
-
-		for _, pair := range pairs {
-			var relation Friend
-			err := tx.Where("user_id = ? AND friend_id = ?", pair[0], pair[1]).First(&relation).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				alreadyFriends = false
-				if err := tx.Create(&Friend{
-					UserID:     pair[0],
-					FriendID:   pair[1],
-					IsNotify:   true,
-					Alias:      "",
-					IsDelete:   false,
-					UpdateTime: now,
-				}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
-				return err
-			}
-
-			if relation.IsDelete {
-				alreadyFriends = false
-				if err := tx.Model(&Friend{}).
-					Where("user_id = ? AND friend_id = ?", pair[0], pair[1]).
-					Updates(map[string]interface{}{
-						"is_delete":   false,
-						"update_time": now,
-					}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-		}
-		return nil
-	})
-
-	return alreadyFriends, now, err
 }
 
 func RemoveDirectFriendPair(userID, friendID int64) (bool, string, error) {

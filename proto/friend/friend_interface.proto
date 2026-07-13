@@ -5,6 +5,25 @@ option go_package = "Betterfly2/proto/friend";
 message AddDirectFriend {
   int64 user_id = 1;
   int64 friend_id = 2;
+  string message = 3;
+}
+
+enum RequestDecision {
+  REQUEST_DECISION_UNSPECIFIED = 0;
+  REQUEST_ACCEPT = 1;
+  REQUEST_REJECT = 2;
+  REQUEST_CANCEL = 3;
+}
+
+message QueryFriendRequests {
+  int64 user_id = 1;
+  bool include_outgoing = 2;
+}
+
+message ResolveFriendRequest {
+  int64 user_id = 1;
+  int64 request_id = 2;
+  RequestDecision decision = 3;
 }
 
 message QueryFriendList {
@@ -43,6 +62,49 @@ message QueryGroup {
 message AddGroupMember {
   int64 user_id = 1;
   int64 group_id = 2;
+  string message = 3;
+}
+
+message QueryGroupJoinRequests {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+}
+
+message ResolveGroupJoinRequest {
+  int64 request_user_id = 1;
+  int64 request_id = 2;
+  RequestDecision decision = 3;
+}
+
+message InviteGroupMember {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+  string message = 4;
+}
+
+message QueryGroupInvitations {
+  int64 user_id = 1;
+  bool include_outgoing = 2;
+}
+
+message ResolveGroupInvitation {
+  int64 user_id = 1;
+  int64 invitation_id = 2;
+  RequestDecision decision = 3;
+}
+
+message KickGroupMember {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+}
+
+message UpdateGroupMemberRole {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+  string role = 4;
 }
 
 message QueryGroupMembers {
@@ -108,6 +170,7 @@ message GroupOperationRsp {
   int64 group_id = 2;
   int64 user_id = 3;
   string update_time = 4;
+  string role = 5;
 }
 
 message GroupMemberContact {
@@ -136,12 +199,45 @@ message JoinedGroupListRsp {
   repeated JoinedGroupContact groups = 1;
 }
 
+message RelationshipRequestInfo {
+  int64 request_id = 1;
+  string request_type = 2;
+  int64 requester_user_id = 3;
+  string requester_name = 4;
+  string requester_avatar = 5;
+  int64 target_user_id = 6;
+  string target_name = 7;
+  string target_avatar = 8;
+  int64 group_id = 9;
+  string group_name = 10;
+  string group_avatar = 11;
+  string message = 12;
+  string status = 13;
+  string created_at = 14;
+  string expires_at = 15;
+  string resolved_at = 16;
+  int64 resolved_by = 17;
+}
+
+message RelationshipRequestListRsp {
+  repeated RelationshipRequestInfo requests = 1;
+}
+
+message RelationshipOperationRsp {
+  string operation = 1;
+  RelationshipRequestInfo request = 2;
+}
+
 enum FriendResult {
   FRIEND_OK = 0;
   RECORD_NOT_EXIST = 1;
   ALREADY_FRIEND = 2;
   INVALID_ARGUMENT = 3;
   ALREADY_EXIST = 4;
+  REQUEST_PENDING = 5;
+  REQUEST_EXPIRED = 6;
+  FORBIDDEN = 7;
+  INVALID_STATE = 8;
   SERVICE_ERROR = 10;
 }
 
@@ -162,6 +258,15 @@ message RequestMessage {
     QueryGroupMembers query_group_members = 12;
     RemoveGroupMember remove_group_member = 13;
     QueryJoinedGroups query_joined_groups = 14;
+    QueryFriendRequests query_friend_requests = 15;
+    ResolveFriendRequest resolve_friend_request = 16;
+    QueryGroupJoinRequests query_group_join_requests = 17;
+    ResolveGroupJoinRequest resolve_group_join_request = 18;
+    InviteGroupMember invite_group_member = 19;
+    QueryGroupInvitations query_group_invitations = 20;
+    ResolveGroupInvitation resolve_group_invitation = 21;
+    KickGroupMember kick_group_member = 22;
+    UpdateGroupMemberRole update_group_member_role = 23;
   }
 }
 
@@ -177,5 +282,7 @@ message ResponseMessage {
     GroupOperationRsp group_operation_rsp = 7;
     GroupMemberListRsp group_member_list_rsp = 8;
     JoinedGroupListRsp joined_group_list_rsp = 9;
+    RelationshipRequestListRsp relationship_request_list_rsp = 10;
+    RelationshipOperationRsp relationship_operation_rsp = 11;
   }
 }

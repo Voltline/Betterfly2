@@ -321,9 +321,47 @@ func TestEvaluateSnapshotReloadUsesSingleflight(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	evaluationLoads, _ := store.counts()
-	if evaluationLoads != 1 {
-		t.Fatalf("cache miss stampede loaded snapshot %d times", evaluationLoads)
+	evaluationLoads, overrideLoads := store.counts()
+	if evaluationLoads != 1 || overrideLoads != 1 {
+		t.Fatalf("cache miss stampede loaded snapshot=%d overrides=%d times", evaluationLoads, overrideLoads)
+	}
+}
+
+func TestEvaluateNegativeOverrideCacheAvoidsRepeatedDatabaseQuery(t *testing.T) {
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	service := NewServiceWithInvalidation(store, nil, time.Second)
+	defer service.Close()
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-without-overrides"}
+	for index := 0; index < 3; index++ {
+		if _, err := service.Evaluate(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, overrideLoads := store.counts()
+	if overrideLoads != 1 {
+		t.Fatalf("negative override result was not cached: queries=%d", overrideLoads)
+	}
+}
+
+func TestEvaluateUsesConfiguredMaximumStaleness(t *testing.T) {
+	t.Setenv("ABTEST_CACHE_MAX_STALENESS", "20ms")
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	service := NewService(store)
+	defer service.Close()
+	if service.cacheTTL != 20*time.Millisecond {
+		t.Fatalf("ABTEST_CACHE_MAX_STALENESS was ignored: cache_ttl=%s", service.cacheTTL)
+	}
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-staleness"}
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	loads, _ := store.counts()
+	if loads != 2 {
+		t.Fatalf("snapshot remained stale beyond configured maximum: loads=%d", loads)
 	}
 }
 
@@ -350,6 +388,36 @@ func TestAdminWriteImmediatelyInvalidatesLocalSnapshot(t *testing.T) {
 type memoryInvalidationBus struct {
 	mu          sync.Mutex
 	subscribers []func()
+}
+
+type lifecycleInvalidationBus struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (b *lifecycleInvalidationBus) Publish(context.Context) error { return nil }
+
+func (b *lifecycleInvalidationBus) Subscribe(ctx context.Context, _ func()) error {
+	close(b.started)
+	<-ctx.Done()
+	close(b.stopped)
+	return nil
+}
+
+func TestServiceCloseStopsInvalidationSubscription(t *testing.T) {
+	bus := &lifecycleInvalidationBus{started: make(chan struct{}), stopped: make(chan struct{})}
+	service := NewServiceWithContext(context.Background(), &memoryStore{}, bus, time.Second)
+	select {
+	case <-bus.started:
+	case <-time.After(time.Second):
+		t.Fatal("invalidation subscription did not start")
+	}
+	service.Close()
+	select {
+	case <-bus.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("service close did not cancel invalidation subscription")
+	}
 }
 
 func (b *memoryInvalidationBus) Publish(context.Context) error {

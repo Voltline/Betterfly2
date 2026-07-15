@@ -20,9 +20,11 @@ func main() {
 			sugar.Errorf("同步日志失败: %v", err)
 		}
 	}()
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	defer lifecycleCancel()
 
 	store := abtest.NewGormStore()
-	redisCtx, redisCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	redisCtx, redisCancel := context.WithTimeout(lifecycleCtx, 3*time.Second)
 	bus, busErr := abtest.NewRedisInvalidationBus(redisCtx, os.Getenv("REDIS_ADDR"))
 	redisCancel()
 	if busErr != nil {
@@ -31,7 +33,7 @@ func main() {
 	if bus != nil {
 		defer bus.Close()
 	}
-	service := abtest.NewServiceWithInvalidation(store, bus, 0)
+	service := abtest.NewServiceWithContext(lifecycleCtx, store, bus, 0)
 	defer service.Close()
 	server := http_server.NewServer(service)
 
@@ -63,6 +65,7 @@ func main() {
 			sugar.Fatalf("ABTestService HTTP服务异常退出: %v", err)
 		}
 	}
+	lifecycleCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -206,3 +206,67 @@ func TestRefreshOwnedSessionAndRouteFencesOldOwner(t *testing.T) {
 		t.Fatalf("old refresh changed current owner: %+v exists=%v err=%v", current, exists, err)
 	}
 }
+
+func TestKickSubscriptionUsesLifecycleContextAndStopsOnClose(t *testing.T) {
+	useTestRedis(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	received := make(chan struct{}, 1)
+	dsm := &DistributedSessionManager{}
+	go func() {
+		done <- dsm.SubscribeKickNotifications(ctx, "pod-lifecycle", func(userID, ownerToken string) {
+			if userID == "42" && ownerToken == "owner-42" {
+				received <- struct{}{}
+			}
+		})
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if err := dsm.PublishOwnedKickNotification(context.Background(), "42", "pod-lifecycle", "owner-42"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-received:
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("subscription did not stop after lifecycle cancellation")
+			}
+			return
+		case <-time.After(10 * time.Millisecond):
+			if time.Now().After(deadline) {
+				cancel()
+				t.Fatal("kick subscription did not receive published event")
+			}
+		}
+	}
+}
+
+func TestDisconnectedKickSubscriptionCancelsDuringBackoff(t *testing.T) {
+	previous := Rdb
+	Rdb = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: 10 * time.Millisecond, ReadTimeout: 10 * time.Millisecond})
+	t.Cleanup(func() {
+		_ = Rdb.Close()
+		Rdb = previous
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- (&DistributedSessionManager{}).SubscribeKickNotifications(ctx, "pod-disconnected", func(string, string) {})
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disconnected subscription ignored lifecycle cancellation")
+	}
+}

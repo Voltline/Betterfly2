@@ -48,10 +48,14 @@ func BackfillGroupMemberJoinedAtWithDB(database *gorm.DB) error {
 }
 
 func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, string, error) {
+	return CreateGroupWithOwnerWithDB(DB(), ownerUserID, groupID, groupName)
+}
+
+func CreateGroupWithOwnerWithDB(database *gorm.DB, ownerUserID, groupID int64, groupName string) (bool, string, error) {
 	now := utils.NowTime()
 	alreadyExists := false
 
-	err := DB().Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var group Group
 		err := tx.Where("group_id = ?", groupID).First(&group).Error
 		if err == nil && !group.IsDelete {
@@ -104,8 +108,12 @@ func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, s
 }
 
 func GetGroupByID(groupID int64) (*Group, error) {
+	return GetGroupByIDWithDB(DB(), groupID)
+}
+
+func GetGroupByIDWithDB(database *gorm.DB, groupID int64) (*Group, error) {
 	var group Group
-	err := DB().Where("group_id = ? AND is_delete = ?", groupID, false).First(&group).Error
+	err := database.Where("group_id = ? AND is_delete = ?", groupID, false).First(&group).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -116,8 +124,12 @@ func GetGroupByID(groupID int64) (*Group, error) {
 }
 
 func IsActiveGroupMember(groupID, userID int64) (bool, error) {
+	return IsActiveGroupMemberWithDB(DB(), groupID, userID)
+}
+
+func IsActiveGroupMemberWithDB(database *gorm.DB, groupID, userID int64) (bool, error) {
 	var count int64
-	err := DB().Model(&GroupMember{}).
+	err := database.Model(&GroupMember{}).
 		Where("group_id = ? AND user_id = ?", groupID, userID).
 		Count(&count).Error
 	if err != nil {
@@ -127,8 +139,12 @@ func IsActiveGroupMember(groupID, userID int64) (bool, error) {
 }
 
 func GetActiveGroupMemberIDs(groupID int64) ([]int64, error) {
+	return GetActiveGroupMemberIDsWithDB(DB(), groupID)
+}
+
+func GetActiveGroupMemberIDsWithDB(database *gorm.DB, groupID int64) ([]int64, error) {
 	var userIDs []int64
-	err := DB().
+	err := database.
 		Model(&GroupMember{}).
 		Where("group_id = ?", groupID).
 		Order("user_id ASC").
@@ -137,8 +153,12 @@ func GetActiveGroupMemberIDs(groupID int64) ([]int64, error) {
 }
 
 func GetGroupMembers(groupID int64) ([]GroupMemberContact, error) {
+	return GetGroupMembersWithDB(DB(), groupID)
+}
+
+func GetGroupMembersWithDB(database *gorm.DB, groupID int64) ([]GroupMemberContact, error) {
 	var members []GroupMemberContact
-	err := DB().
+	err := database.
 		Table("group_members").
 		Select("group_members.user_id, users.account, users.name, users.avatar, group_members.role, group_members.update_time").
 		Joins("JOIN users ON users.id = group_members.user_id").
@@ -149,8 +169,12 @@ func GetGroupMembers(groupID int64) ([]GroupMemberContact, error) {
 }
 
 func GetJoinedGroups(userID int64) ([]JoinedGroupContact, error) {
+	return GetJoinedGroupsWithDB(DB(), userID)
+}
+
+func GetJoinedGroupsWithDB(database *gorm.DB, userID int64) ([]JoinedGroupContact, error) {
 	var groups []JoinedGroupContact
-	err := DB().
+	err := database.
 		Table("group_members").
 		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time").
 		Joins("JOIN groups ON groups.group_id = group_members.group_id").
@@ -161,11 +185,15 @@ func GetJoinedGroups(userID int64) ([]JoinedGroupContact, error) {
 }
 
 func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
+	return RemoveUserFromGroupWithDB(DB(), groupID, userID)
+}
+
+func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, bool, string, error) {
 	now := utils.NowTime()
 	groupExists := false
 	removed := false
 
-	err := DB().Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var group Group
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("group_id = ? AND is_delete = ?", groupID, false).
@@ -238,8 +266,12 @@ func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
 }
 
 func UpdateGroupAvatar(groupID int64, avatar string) (bool, string, error) {
+	return UpdateGroupAvatarWithDB(DB(), groupID, avatar)
+}
+
+func UpdateGroupAvatarWithDB(database *gorm.DB, groupID int64, avatar string) (bool, string, error) {
 	now := utils.NowTime()
-	result := DB().Model(&Group{}).
+	result := database.Model(&Group{}).
 		Where("group_id = ? AND is_delete = ?", groupID, false).
 		Updates(map[string]interface{}{
 			"avatar":      avatar,

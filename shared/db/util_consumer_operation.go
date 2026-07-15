@@ -2,14 +2,11 @@ package db
 
 import (
 	"errors"
-	"sync/atomic"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
-
-var consumerOperationWrites atomic.Uint64
 
 func LoadConsumerOperationResult(service, operationKey string) ([]byte, error) {
 	var result ConsumerOperationResult
@@ -28,13 +25,9 @@ func SaveConsumerOperationResult(service, operationKey string, payload []byte) e
 	if err := database.Clauses(clause.OnConflict{DoNothing: true}).Create(&ConsumerOperationResult{
 		Service: service, OperationKey: operationKey,
 		ResponsePayload: append([]byte(nil), payload...),
-		CreatedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+		CreatedAt:       FormatReliabilityTime(time.Now()),
 	}).Error; err != nil {
 		return err
-	}
-	if consumerOperationWrites.Add(1)%1000 == 0 {
-		cutoff := time.Now().UTC().Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)
-		_ = database.Where("created_at < ?", cutoff).Delete(&ConsumerOperationResult{}).Error
 	}
 	return nil
 }

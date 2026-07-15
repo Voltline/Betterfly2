@@ -25,7 +25,7 @@ Not production-ready yet:
 - PostgreSQL is expected to be external through `PGSQL_DSN`.
 - RustFS is single-replica in this base.
 - Ingress host and TLS settings are placeholders.
-- ABTest Service、Prometheus、Grafana 与 Kafka UI 尚未包含在这套 base manifests 中。
+- Prometheus、Grafana 与 Kafka UI 尚未包含在这套 base manifests 中。
 - 这些清单是单集群验证基线，不提供多地域数据复制或跨集群服务发现。
 
 ## Build Local Images
@@ -77,9 +77,19 @@ encoded value. Worker nodes need outbound access to APNs on `443/tcp`.
 
 ## Deploy
 
+Run the versioned database migration before applying or rolling business Pods:
+
 ```bash
+kubectl apply -f deploy/k8s/base/namespace.yaml
+kubectl apply -f deploy/k8s/base/configmap.yaml -f /tmp/betterfly2-secret.yaml
+kubectl apply -k deploy/k8s/migrations
+kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v4 --timeout=5m
 kubectl apply -k deploy/k8s/base
 ```
+
+The migration image tag is tied to schema v4 and the Job is an Argo CD `PreSync`
+hook. Replace the tag with your registry digest in production. Do not add a
+completed migration Job back to the ordinary base apply path.
 
 Check rollout status:
 

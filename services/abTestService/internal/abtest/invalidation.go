@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -43,23 +44,61 @@ func (b *RedisInvalidationBus) Publish(ctx context.Context) error {
 }
 
 func (b *RedisInvalidationBus) Subscribe(ctx context.Context, invalidate func()) error {
-	pubsub := b.client.Subscribe(ctx, abTestInvalidationChannel)
-	defer pubsub.Close()
-	if _, err := pubsub.Receive(ctx); err != nil {
-		return err
-	}
-	channel := pubsub.Channel()
+	backoff := 100 * time.Millisecond
 	for {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
 			return nil
-		case _, ok := <-channel:
-			if !ok {
+		}
+		pubsub := b.client.Subscribe(ctx, abTestInvalidationChannel)
+		if _, err := pubsub.Receive(ctx); err != nil {
+			_ = pubsub.Close()
+			if !waitInvalidationReconnect(ctx, backoff) {
 				return nil
 			}
-			invalidate()
+			backoff = nextInvalidationBackoff(backoff)
+			continue
 		}
+		backoff = 100 * time.Millisecond
+		channel := pubsub.Channel()
+		connected := true
+		for connected {
+			select {
+			case <-ctx.Done():
+				_ = pubsub.Close()
+				return nil
+			case _, ok := <-channel:
+				if !ok {
+					connected = false
+					continue
+				}
+				invalidate()
+			}
+		}
+		_ = pubsub.Close()
+		if !waitInvalidationReconnect(ctx, backoff) {
+			return nil
+		}
+		backoff = nextInvalidationBackoff(backoff)
 	}
+}
+
+func waitInvalidationReconnect(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextInvalidationBackoff(current time.Duration) time.Duration {
+	current *= 2
+	if current > 5*time.Second {
+		return 5 * time.Second
+	}
+	return current
 }
 
 func (b *RedisInvalidationBus) Close() error {

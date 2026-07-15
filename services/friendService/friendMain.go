@@ -1,7 +1,9 @@
 package main
 
 import (
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/outbox"
 	"context"
 	"errors"
 	"net/http"
@@ -48,6 +50,22 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	database := db.DB()
+	relay := outbox.New(database, func(publishCtx context.Context, event db.OutboxEvent) error {
+		headers := []sarama.RecordHeader{
+			{Key: []byte("event_id"), Value: []byte(event.EventID)},
+			{Key: []byte("operation_key"), Value: []byte(event.OperationKey)},
+			{Key: []byte("outbox_service"), Value: []byte(event.Service)},
+		}
+		return publisher.PublishRawMessageContext(publishCtx, event.Payload, event.Topic, headers)
+	}, outbox.LoadConfig("friend", "FRIEND"))
+	go func() {
+		if err := relay.Run(ctx); err != nil && ctx.Err() == nil {
+			sugar.Errorf("Friend Outbox relay退出: %v", err)
+			cancel()
+		}
+	}()
+	go db.RunReliabilityCleanup(ctx, database, db.LoadRetentionConfig())
 
 	consumerErrCh := make(chan error, 1)
 	go func() {

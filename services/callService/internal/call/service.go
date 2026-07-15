@@ -12,9 +12,11 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
+	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/mq"
 )
 
 type Service struct {
@@ -39,6 +41,15 @@ func (s *Service) Ready(ctx context.Context) error {
 func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) error {
 	if request.GetUserId() <= 0 || request.GetFromKafkaTopic() == "" || request.GetRequest() == nil {
 		return ErrInvalidInput
+	}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		completed, err := atomicStore.OperationCompleted(ctx, operationKey(ctx))
+		if err != nil {
+			return err
+		}
+		if completed {
+			return nil
+		}
 	}
 
 	var err error
@@ -125,29 +136,40 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		CreatedAt:    now,
 		RingDeadline: now.Add(s.ringTTL),
 	}
-	if err := s.store.CreateSession(ctx, session); err != nil {
-		return err
-	}
-
 	callerEvent := s.sessionEvent(callpb.CallEventType_OUTGOING_CALL, session, session.CalleeUserID)
 	callerEvent.SessionDescription = descriptionToProto(session.Offer)
 	callerEvent.IceServers = s.ice.Servers(session.CallerUserID, now)
+	pushRequest := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_VoipCall{VoipCall: &pushpb.VoIPCallRequest{
+		CallId: session.ID, CallerUserId: session.CallerUserID, CalleeUserId: session.CalleeUserID,
+		CallType: callTypeName(session.CallType), ResultKafkaTopic: "call-service",
+		ExpiresAt: session.RingDeadline.UTC().Format(time.RFC3339Nano), Required: !calleeOnline,
+	}}}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		events, eventErr := s.initiatePendingEvents(ctx, request, session, calleeOnline, calleeTopic, callerEvent, pushRequest)
+		if eventErr != nil {
+			return eventErr
+		}
+		replayed, commitErr := atomicStore.CreateSessionWithEvents(ctx, session, operationKey(ctx), events)
+		if commitErr != nil {
+			return commitErr
+		}
+		if replayed {
+			logger.Sugar().Debugw("重放Call initiate，复用已有Redis事件", "call_id", session.ID, "operation_key", operationKey(ctx))
+		}
+		return nil
+	}
+	if err := s.store.CreateSession(ctx, session); err != nil {
+		return err
+	}
 	if err := s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, callerEvent); err != nil {
 		return fmt.Errorf("publish outgoing call: %w", err)
 	}
-
 	if calleeOnline {
 		calleeEvent := s.incomingEvent(session, now)
 		if err := s.publishToTopic(ctx, calleeTopic, session.CalleeUserID, calleeEvent); err != nil {
 			return fmt.Errorf("publish incoming call: %w", err)
 		}
 	}
-
-	pushRequest := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_VoipCall{VoipCall: &pushpb.VoIPCallRequest{
-		CallId: session.ID, CallerUserId: session.CallerUserID, CalleeUserId: session.CalleeUserID,
-		CallType: callTypeName(session.CallType), ResultKafkaTopic: "call-service",
-		ExpiresAt: session.RingDeadline.UTC().Format(time.RFC3339Nano), Required: !calleeOnline,
-	}}}
 	pushTopic := voipPushTopic()
 	logger.Sugar().Debugf("发布VoIP Push请求: call_id=%s topic=%s required=%t", session.ID, pushTopic, !calleeOnline)
 	if err := s.publisher.PublishPush(ctx, pushTopic, pushRequest); err != nil {
@@ -192,6 +214,9 @@ func (s *Service) HandlePushResult(ctx context.Context, result *pushpb.VoIPPushR
 	if result.GetAccepted() || !result.GetRequired() {
 		return nil
 	}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		return s.handlePushResultAtomic(ctx, atomicStore, result)
+	}
 	session, err := s.store.GetSession(ctx, result.GetCallId())
 	if errors.Is(err, ErrCallNotFound) {
 		return nil
@@ -216,6 +241,9 @@ func (s *Service) HandlePushResult(ctx context.Context, result *pushpb.VoIPPushR
 func (s *Service) accept(ctx context.Context, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
 	if payload == nil || strings.TrimSpace(payload.GetCallId()) == "" || !validDescription(payload.GetAnswer(), "answer") {
 		return ErrInvalidInput
+	}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		return s.acceptAtomic(ctx, atomicStore, request, payload)
 	}
 	session, err := s.store.AcceptSession(ctx, payload.GetCallId(), request.GetUserId(), descriptionFromProto(payload.GetAnswer()))
 	if err != nil {
@@ -247,6 +275,9 @@ func (s *Service) reject(ctx context.Context, request *callpb.InternalRequest, p
 	if payload == nil || strings.TrimSpace(payload.GetCallId()) == "" {
 		return ErrInvalidInput
 	}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		return s.rejectAtomic(ctx, atomicStore, request, payload)
+	}
 	session, err := s.store.RejectSession(ctx, payload.GetCallId(), request.GetUserId(), callpb.CallEndReason_REJECTED, payload.GetMessage())
 	if err != nil {
 		return err
@@ -261,6 +292,9 @@ func (s *Service) hangup(ctx context.Context, request *callpb.InternalRequest, p
 	reason := payload.GetReason()
 	if reason == callpb.CallEndReason_CALL_END_REASON_UNSPECIFIED || reason == callpb.CallEndReason_REJECTED || reason == callpb.CallEndReason_TIMEOUT {
 		reason = callpb.CallEndReason_HANGUP
+	}
+	if atomicStore, ok := s.atomicStore(ctx); ok {
+		return s.hangupAtomic(ctx, atomicStore, request, payload.GetCallId(), reason)
 	}
 	session, err := s.store.EndSession(ctx, payload.GetCallId(), request.GetUserId(), reason, "")
 	if err != nil {
@@ -345,6 +379,236 @@ func (s *Service) publishToUser(ctx context.Context, userID int64, fallbackTopic
 
 func (s *Service) publishToTopic(ctx context.Context, topic string, userID int64, event *callpb.CallEvent) error {
 	return asDeliveryError(s.publisher.Publish(ctx, topic, &callpb.Delivery{TargetUserId: userID, Event: event}))
+}
+
+func (s *Service) atomicStore(ctx context.Context) (AtomicStore, bool) {
+	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
+	if !hasOperationKey || operationKey == "" {
+		return nil, false
+	}
+	store, ok := s.store.(AtomicStore)
+	return store, ok
+}
+
+func operationKey(ctx context.Context) string {
+	value, _ := kafkaconsumer.OperationKeyFromContext(ctx)
+	return value
+}
+
+func (s *Service) initiatePendingEvents(
+	ctx context.Context,
+	request *callpb.InternalRequest,
+	session Session,
+	calleeOnline bool,
+	calleeTopic string,
+	callerEvent *callpb.CallEvent,
+	pushRequest *pushpb.RequestMessage,
+) ([]PendingEvent, error) {
+	operation := operationKey(ctx)
+	events := make([]PendingEvent, 0, 3)
+	caller, err := pendingCallDelivery(operation, "outgoing", request.GetFromKafkaTopic(), session.CallerUserID, callerEvent)
+	if err != nil {
+		return nil, err
+	}
+	events = append(events, caller)
+	if calleeOnline {
+		incoming, err := pendingCallDelivery(operation, "incoming", calleeTopic, session.CalleeUserID, s.incomingEvent(session, s.now().UTC()))
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, incoming)
+	}
+	push, err := pendingPushRequest(operation, "voip-push", voipPushTopic(), pushRequest)
+	if err != nil {
+		return nil, err
+	}
+	return append(events, push), nil
+}
+
+func (s *Service) acceptAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
+	expected, err := s.store.GetSession(ctx, payload.GetCallId())
+	if err != nil {
+		return err
+	}
+	if expected.CalleeUserID != request.GetUserId() {
+		return ErrForbidden
+	}
+	if expected.State != StateRinging || !s.now().Before(expected.RingDeadline) {
+		return ErrInvalidState
+	}
+	now := s.now().UTC()
+	updated := expected
+	answer := descriptionFromProto(payload.GetAnswer())
+	updated.State = StateActive
+	updated.Answer = &answer
+	updated.AcceptedAt = &now
+	operation := operationKey(ctx)
+	events := make([]PendingEvent, 0, 2)
+	callerTopic, routeErr := s.store.UserTopic(ctx, expected.CallerUserID)
+	if routeErr != nil && !errors.Is(routeErr, ErrUserOffline) {
+		return routeErr
+	}
+	if errors.Is(routeErr, ErrUserOffline) {
+		updated.State = StateEnded
+		updated.EndReason = callpb.CallEndReason_DISCONNECTED
+		updated.EndMessage = "caller unavailable after accept"
+		updated.EndedAt = &now
+		ended := s.sessionEvent(callpb.CallEventType_CALL_ENDED, updated, expected.CallerUserID)
+		pending, err := pendingCallDelivery(operation, "callee-ended", request.GetFromKafkaTopic(), expected.CalleeUserID, ended)
+		if err != nil {
+			return err
+		}
+		events = append(events, pending)
+	} else {
+		calleeEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, updated, expected.CallerUserID)
+		calleePending, err := pendingCallDelivery(operation, "callee-accepted", request.GetFromKafkaTopic(), expected.CalleeUserID, calleeEvent)
+		if err != nil {
+			return err
+		}
+		callerEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, updated, expected.CalleeUserID)
+		callerEvent.SessionDescription = descriptionToProto(answer)
+		callerPending, err := pendingCallDelivery(operation, "caller-accepted", callerTopic, expected.CallerUserID, callerEvent)
+		if err != nil {
+			return err
+		}
+		events = append(events, calleePending, callerPending)
+	}
+	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, updated.State == StateEnded, operation, events)
+	return err
+}
+
+func (s *Service) rejectAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, payload *callpb.RejectCall) error {
+	expected, err := s.store.GetSession(ctx, payload.GetCallId())
+	if err != nil {
+		return err
+	}
+	if expected.CalleeUserID != request.GetUserId() {
+		return ErrForbidden
+	}
+	if expected.State != StateRinging {
+		return ErrInvalidState
+	}
+	updated := expected
+	now := s.now().UTC()
+	updated.State = StateEnded
+	updated.EndReason = callpb.CallEndReason_REJECTED
+	updated.EndMessage = payload.GetMessage()
+	updated.EndedAt = &now
+	operation := operationKey(ctx)
+	events, err := s.terminalPendingEvents(ctx, operation, request.GetFromKafkaTopic(), request.GetUserId(), updated, callpb.CallEventType_CALL_REJECTED)
+	if err != nil {
+		return err
+	}
+	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	return err
+}
+
+func (s *Service) hangupAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, callID string, reason callpb.CallEndReason) error {
+	expected, err := s.store.GetSession(ctx, callID)
+	if err != nil {
+		return err
+	}
+	if _, err := expected.Peer(request.GetUserId()); err != nil {
+		return err
+	}
+	if expected.State != StateRinging && expected.State != StateActive {
+		return ErrInvalidState
+	}
+	updated := expected
+	now := s.now().UTC()
+	updated.State = StateEnded
+	updated.EndReason = reason
+	updated.EndMessage = ""
+	updated.EndedAt = &now
+	operation := operationKey(ctx)
+	events, err := s.terminalPendingEvents(ctx, operation, request.GetFromKafkaTopic(), request.GetUserId(), updated, callpb.CallEventType_CALL_ENDED)
+	if err != nil {
+		return err
+	}
+	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	return err
+}
+
+func (s *Service) terminalPendingEvents(ctx context.Context, operation, requesterTopic string, requesterID int64, session Session, eventType callpb.CallEventType) ([]PendingEvent, error) {
+	peerID, err := session.Peer(requesterID)
+	if err != nil {
+		return nil, err
+	}
+	requesterEvent := s.sessionEvent(eventType, session, peerID)
+	requesterPending, err := pendingCallDelivery(operation, "requester-terminal", requesterTopic, requesterID, requesterEvent)
+	if err != nil {
+		return nil, err
+	}
+	events := []PendingEvent{requesterPending}
+	peerTopic, routeErr := s.store.UserTopic(ctx, peerID)
+	if routeErr != nil {
+		if errors.Is(routeErr, ErrUserOffline) {
+			return events, nil
+		}
+		return nil, routeErr
+	}
+	peerEvent := s.sessionEvent(eventType, session, requesterID)
+	peerPending, err := pendingCallDelivery(operation, "peer-terminal", peerTopic, peerID, peerEvent)
+	if err != nil {
+		return nil, err
+	}
+	return append(events, peerPending), nil
+}
+
+func (s *Service) handlePushResultAtomic(ctx context.Context, store AtomicStore, result *pushpb.VoIPPushResult) error {
+	expected, err := s.store.GetSession(ctx, result.GetCallId())
+	if errors.Is(err, ErrCallNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if expected.CallerUserID != result.GetCallerUserId() || expected.CalleeUserID != result.GetCalleeUserId() || expected.State != StateRinging {
+		return nil
+	}
+	updated := expected
+	now := s.now().UTC()
+	updated.State = StateEnded
+	updated.EndReason = callpb.CallEndReason_CANCELLED
+	updated.EndMessage = result.GetReason()
+	updated.EndedAt = &now
+	operation := operationKey(ctx)
+	events := make([]PendingEvent, 0, 1)
+	topic, routeErr := s.store.UserTopic(ctx, expected.CallerUserID)
+	if routeErr != nil && !errors.Is(routeErr, ErrUserOffline) {
+		return routeErr
+	}
+	if routeErr == nil {
+		event := s.sessionEvent(callpb.CallEventType_CALL_ENDED, updated, expected.CalleeUserID)
+		pending, err := pendingCallDelivery(operation, "push-failure-ended", topic, expected.CallerUserID, event)
+		if err != nil {
+			return err
+		}
+		events = append(events, pending)
+	}
+	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	return err
+}
+
+func pendingCallDelivery(operation, suffix, topic string, userID int64, event *callpb.CallEvent) (PendingEvent, error) {
+	payload, err := mq.MarshalEnvelope(envelope.MessageType_CALL_RESPONSE, &callpb.Delivery{TargetUserId: userID, Event: event})
+	if err != nil {
+		return PendingEvent{}, err
+	}
+	return PendingEvent{EventID: callEventID(operation, suffix), OperationKey: operation, Topic: topic, Payload: payload}, nil
+}
+
+func pendingPushRequest(operation, suffix, topic string, request *pushpb.RequestMessage) (PendingEvent, error) {
+	payload, err := mq.MarshalEnvelope(envelope.MessageType_PUSH_REQUEST, request)
+	if err != nil {
+		return PendingEvent{}, err
+	}
+	return PendingEvent{EventID: callEventID(operation, suffix), OperationKey: operation, Topic: topic, Payload: payload}, nil
+}
+
+func callEventID(operation, suffix string) string {
+	digest := sha256.Sum256([]byte("betterfly-call-event:" + operation + ":" + suffix))
+	return "call-" + hex.EncodeToString(digest[:])
 }
 
 func (s *Service) sessionEvent(eventType callpb.CallEventType, session Session, peerID int64) *callpb.CallEvent {

@@ -2,7 +2,9 @@ package main
 
 import (
 	_ "Betterfly2/proto/storage"
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/outbox"
 	"context"
 	"errors"
 	"fmt"
@@ -54,6 +56,24 @@ func main() {
 	// 2. 初始化缓存
 	sugar.Infoln("初始化缓存...")
 	initCache()
+
+	// Inbox事务提交后由Outbox后台投递响应，Kafka offset不再依赖同步网络发布。
+	database := db.DB()
+	relay := outbox.New(database, func(publishCtx context.Context, event db.OutboxEvent) error {
+		headers := []sarama.RecordHeader{
+			{Key: []byte("event_id"), Value: []byte(event.EventID)},
+			{Key: []byte("operation_key"), Value: []byte(event.OperationKey)},
+			{Key: []byte("outbox_service"), Value: []byte(event.Service)},
+		}
+		return publisher.PublishRawMessageContext(publishCtx, event.Payload, event.Topic, headers)
+	}, outbox.LoadConfig("storage", "STORAGE"))
+	go func() {
+		if err := relay.Run(ctx); err != nil && ctx.Err() == nil {
+			sugar.Errorf("Storage Outbox relay退出: %v", err)
+			cancel()
+		}
+	}()
+	go db.RunReliabilityCleanup(ctx, database, db.LoadRetentionConfig())
 
 	// 3. 初始化HTTP服务器
 	sugar.Infoln("初始化HTTP服务器...")

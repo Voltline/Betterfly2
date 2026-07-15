@@ -57,6 +57,13 @@ func main() {
 		credentialTTL,
 	)
 	service := callservice.NewService(store, kafkaPublisher, ice, ringTTL)
+	eventRelay := callservice.NewEventRelay(redisClient, kafkaPublisher.PublishRaw)
+	go func() {
+		if err := eventRelay.Run(ctx); err != nil && ctx.Err() == nil {
+			sugar.Errorf("Call Redis事件relay退出: %v", err)
+			cancel()
+		}
+	}()
 
 	consumerGroup, err := sarama.NewConsumerGroup(brokers, env("KAFKA_CONSUMER_GROUP", "call-service-group"), sarama.NewConfig())
 	if err != nil {

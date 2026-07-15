@@ -10,14 +10,14 @@ import (
 	"Betterfly2/shared/metrics"
 	"Betterfly2/shared/mq"
 	"context"
+	"errors"
 	"fmt"
 	"storageService/internal/cache"
 	"sync"
 	"time"
 
-	"storageService/internal/publisher"
-
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 // Pre-defined time formats for efficient parsing (ordered by expected frequency)
@@ -30,8 +30,9 @@ var timeFormats = []string{
 }
 
 type storageRequestContext struct {
-	handler *StorageHandler
-	request *storage.RequestMessage
+	handler  *StorageHandler
+	request  *storage.RequestMessage
+	database *gorm.DB
 }
 
 type storageRequestModule func(*dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage])
@@ -63,8 +64,9 @@ func newStorageRequestRouter() *dispatch.OneofRouter[storageRequestContext, *sto
 
 // StorageHandler 存储服务处理器
 type StorageHandler struct {
-	l1Cache cache.Cache
-	l2Cache cache.Cache // L2 Redis缓存，可能为nil
+	l1Cache  cache.Cache
+	l2Cache  cache.Cache // L2 Redis缓存，可能为nil
+	database *gorm.DB
 }
 
 type fileExistsCacheEntry struct {
@@ -92,31 +94,25 @@ func NewStorageHandler() *StorageHandler {
 	}
 
 	return &StorageHandler{
-		l1Cache: l1Cache,
-		l2Cache: l2Cache,
+		l1Cache:  l1Cache,
+		l2Cache:  l2Cache,
+		database: db.DB(),
 	}
+}
+
+func (h *StorageHandler) requestDatabase() *gorm.DB {
+	if h.database != nil {
+		return h.database
+	}
+	return db.DB()
 }
 
 // HandleMessage 处理Kafka消息
 func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) error {
 	sugar := logger.Sugar()
 	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
-	if hasOperationKey {
-		cached, err := db.LoadConsumerOperationResult("storage", operationKey)
-		if err != nil {
-			return err
-		}
-		if len(cached) > 0 {
-			resp := &storage.ResponseMessage{}
-			if err := proto.Unmarshal(cached, resp); err != nil {
-				return err
-			}
-			request := &storage.RequestMessage{}
-			if err := proto.Unmarshal(message, request); err != nil {
-				return err
-			}
-			return h.sendResponse(request.GetFromKafkaTopic(), resp)
-		}
+	if !hasOperationKey {
+		return errors.New("storage consumer operation key is required")
 	}
 
 	// 解析Protobuf请求
@@ -129,42 +125,44 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 	sugar.Debugf("收到存储请求: from_topic=%s, target_user_id=%d",
 		req.FromKafkaTopic, req.TargetUserId)
 
-	var resp *storage.ResponseMessage
-	var err error
-	resp, err = getStorageRequestRouter().Dispatch(storageRequestContext{
-		handler: h,
-		request: req,
-	}, req.Payload)
-
-	if err != nil {
-		sugar.Errorf("处理请求失败: %v", err)
-		// 返回错误响应
-		resp = &storage.ResponseMessage{
-			Result:       storage.StorageResult_SERVICE_ERROR,
-			TargetUserId: req.TargetUserId,
+	_, err := db.ExecuteInboxOutbox(ctx, h.requestDatabase(), "storage", operationKey, func(tx *gorm.DB) ([]byte, []db.PendingOutboxEvent, error) {
+		resp, dispatchErr := getStorageRequestRouter().Dispatch(storageRequestContext{
+			handler: h, request: req, database: tx,
+		}, req.Payload)
+		if dispatchErr != nil {
+			sugar.Errorw("处理存储请求暂时失败", "operation_key", operationKey, "error", dispatchErr)
+			return nil, nil, dispatchErr
 		}
-	}
-	if hasOperationKey {
+		if resp == nil {
+			return nil, nil, errors.New("storage dispatch returned nil response")
+		}
 		encoded, marshalErr := proto.Marshal(resp)
 		if marshalErr != nil {
-			return marshalErr
+			return nil, nil, marshalErr
 		}
-		if saveErr := db.SaveConsumerOperationResult("storage", operationKey, encoded); saveErr != nil {
-			return saveErr
+		envelopePayload, marshalErr := mq.MarshalEnvelope(envelope.MessageType_STORAGE_RESPONSE, resp)
+		if marshalErr != nil {
+			return nil, nil, marshalErr
 		}
-	}
-
-	// 发送响应
-	return h.sendResponse(req.FromKafkaTopic, resp)
+		return encoded, []db.PendingOutboxEvent{{
+			EventID: db.StableEventID("storage", operationKey, "response"),
+			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
+		}}, nil
+	})
+	return err
 }
 
 // handleStoreNewMessage 处理存储新消息请求
 func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg *storage.StoreNewMessage) (*storage.ResponseMessage, error) {
+	return h.handleStoreNewMessageWithDB(h.requestDatabase(), req, msg)
+}
+
+func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 保存到数据库
 	start := time.Now()
-	storedMessage, created, err := db.StoreNewMessage(
+	storedMessage, created, err := db.StoreNewMessageWithDB(database,
 		msg.FromUserId,
 		msg.ToUserId,
 		msg.Content,
@@ -210,6 +208,10 @@ func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg 
 
 // handleQueryMessage 处理查询消息请求
 func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *storage.QueryMessage) (*storage.ResponseMessage, error) {
+	return h.handleQueryMessageWithDB(h.database, req, query)
+}
+
+func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryMessage) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 先尝试从缓存获取
@@ -217,13 +219,16 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 	if cached, ok := h.getFromCache(cacheKey); ok {
 		if msg, ok := cached.(*db.Message); ok {
 			sugar.Debugf("从缓存获取消息: message_id=%d", query.MessageId)
-			return h.authorizedMessageResponse(req, msg)
+			return h.authorizedMessageResponseWithDB(database, req, msg)
 		}
 	}
 
 	// 从数据库查询
+	if database == nil {
+		database = h.requestDatabase()
+	}
 	start := time.Now()
-	message, err := db.GetMessageByID(query.MessageId)
+	message, err := db.GetMessageByIDWithDB(database, query.MessageId)
 	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询消息失败: %v", err)
@@ -240,11 +245,18 @@ func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *
 	// 存入缓存
 	h.setToCache(cacheKey, message, 5*time.Minute)
 
-	return h.authorizedMessageResponse(req, message)
+	return h.authorizedMessageResponseWithDB(database, req, message)
 }
 
 func (h *StorageHandler) authorizedMessageResponse(req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
-	allowed, err := db.CanUserReadMessage(req.GetTargetUserId(), message)
+	return h.authorizedMessageResponseWithDB(h.database, req, message)
+}
+
+func (h *StorageHandler) authorizedMessageResponseWithDB(database *gorm.DB, req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
+	if database == nil && message != nil && message.IsGroup && req.GetTargetUserId() != message.FromUserID {
+		database = h.requestDatabase()
+	}
+	allowed, err := db.CanUserReadMessageWithDB(database, req.GetTargetUserId(), message)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +280,10 @@ func messageNotFoundResponse(req *storage.RequestMessage) *storage.ResponseMessa
 
 // handleQuerySyncMessages 处理同步消息请求
 func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
+	return h.handleQuerySyncMessagesWithDB(h.requestDatabase(), req, query)
+}
+
+func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 	if req.GetTargetUserId() <= 0 || req.GetTargetUserId() != query.GetToUserId() {
 		sugar.Warnf(
@@ -313,7 +329,7 @@ func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, qu
 
 	// 查询该复合游标之后的消息，数据库读取 limit+1 判断 has_more。
 	start := time.Now()
-	page, err := db.GetSyncMessagesPage(query.ToUserId, timestamp.UTC().Format(time.RFC3339), cursorMessageID, pageSize)
+	page, err := db.GetSyncMessagesPageWithDB(database, query.ToUserId, timestamp.UTC().Format(time.RFC3339), cursorMessageID, pageSize)
 	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询同步消息失败: %v", err)
@@ -366,11 +382,15 @@ func normalizeSyncPageSize(requested int32) int {
 
 // handleUpdateUserName 处理更新用户名请求
 func (h *StorageHandler) handleUpdateUserName(req *storage.RequestMessage, update *storage.UpdateUserName) (*storage.ResponseMessage, error) {
+	return h.handleUpdateUserNameWithDB(h.requestDatabase(), req, update)
+}
+
+func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserName) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 更新数据库
 	start := time.Now()
-	err := db.UpdateUserNameByID(update.UserId, update.NewUserName)
+	err := db.UpdateUserNameByIDWithDB(database, update.UserId, update.NewUserName)
 	metrics.RecordDatabaseQuery("update", start)
 	if err != nil {
 		sugar.Errorf("更新用户名失败: %v", err)
@@ -381,7 +401,7 @@ func (h *StorageHandler) handleUpdateUserName(req *storage.RequestMessage, updat
 	// 注意：UpdateUserNameByID 不返回受影响行数
 	// 需要检查用户是否存在
 	userStart := time.Now()
-	user, err := db.GetUserById(update.UserId)
+	user, err := db.GetUserByIDWithDB(database, update.UserId)
 	metrics.RecordDatabaseQuery("select", userStart)
 	if err != nil {
 		sugar.Errorf("检查用户是否存在失败: %v", err)
@@ -411,11 +431,15 @@ func (h *StorageHandler) handleUpdateUserName(req *storage.RequestMessage, updat
 
 // handleUpdateUserAvatar 处理更新用户头像请求
 func (h *StorageHandler) handleUpdateUserAvatar(req *storage.RequestMessage, update *storage.UpdateUserAvatar) (*storage.ResponseMessage, error) {
+	return h.handleUpdateUserAvatarWithDB(h.requestDatabase(), req, update)
+}
+
+func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserAvatar) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 更新数据库
 	start := time.Now()
-	err := db.UpdateUserAvatarByID(update.UserId, update.NewAvatarUrl)
+	err := db.UpdateUserAvatarByIDWithDB(database, update.UserId, update.NewAvatarUrl)
 	metrics.RecordDatabaseQuery("update", start)
 	if err != nil {
 		sugar.Errorf("更新用户头像失败: %v", err)
@@ -425,7 +449,7 @@ func (h *StorageHandler) handleUpdateUserAvatar(req *storage.RequestMessage, upd
 
 	// 检查用户是否存在
 	userStart := time.Now()
-	user, err := db.GetUserById(update.UserId)
+	user, err := db.GetUserByIDWithDB(database, update.UserId)
 	metrics.RecordDatabaseQuery("select", userStart)
 	if err != nil {
 		sugar.Errorf("检查用户是否存在失败: %v", err)
@@ -539,6 +563,10 @@ func (h *StorageHandler) clearUserCache(userID int64) {
 
 // handleQueryUser 处理查询用户信息请求
 func (h *StorageHandler) handleQueryUser(req *storage.RequestMessage, query *storage.QueryUser) (*storage.ResponseMessage, error) {
+	return h.handleQueryUserWithDB(h.database, req, query)
+}
+
+func (h *StorageHandler) handleQueryUserWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryUser) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 先尝试从缓存获取
@@ -551,8 +579,11 @@ func (h *StorageHandler) handleQueryUser(req *storage.RequestMessage, query *sto
 	}
 
 	// 从数据库查询
+	if database == nil {
+		database = h.requestDatabase()
+	}
 	start := time.Now()
-	user, err := db.GetUserById(query.UserId)
+	user, err := db.GetUserByIDWithDB(database, query.UserId)
 	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询用户失败: %v", err)
@@ -591,6 +622,10 @@ func (h *StorageHandler) buildUserInfoResponse(req *storage.RequestMessage, user
 
 // handleQueryFileExists 处理查询文件是否存在请求
 func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, query *storage.QueryFileExists) (*storage.ResponseMessage, error) {
+	return h.handleQueryFileExistsWithDB(h.database, req, query)
+}
+
+func (h *StorageHandler) handleQueryFileExistsWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryFileExists) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	fileHash := query.FileHash
@@ -598,7 +633,7 @@ func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, quer
 		return &storage.ResponseMessage{
 			Result:       storage.StorageResult_SERVICE_ERROR,
 			TargetUserId: req.TargetUserId,
-		}, fmt.Errorf("file_hash is required")
+		}, nil
 	}
 
 	// 先尝试从缓存获取
@@ -615,8 +650,11 @@ func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, quer
 	}
 
 	// 从数据库查询
+	if database == nil {
+		database = h.requestDatabase()
+	}
 	start := time.Now()
-	fileMetadata, err := db.GetFileMetadata(fileHash)
+	fileMetadata, err := db.GetFileMetadataWithDB(database, fileHash)
 	metrics.RecordDatabaseQuery("select", start)
 	if err != nil {
 		sugar.Errorf("查询文件元数据失败: %v", err)
@@ -655,20 +693,4 @@ func (h *StorageHandler) buildFileExistsResponse(req *storage.RequestMessage, ex
 			},
 		},
 	}
-}
-
-// sendResponse 发送响应到Kafka
-func (h *StorageHandler) sendResponse(topic string, resp *storage.ResponseMessage) error {
-	sugar := logger.Sugar()
-
-	envData, err := mq.PublishEnvelope(publisher.PublishMessage, topic, envelope.MessageType_STORAGE_RESPONSE, resp)
-	if err != nil {
-		sugar.Errorf("发送Envelope响应到Kafka失败: %v", err)
-		metrics.RecordKafkaProcessingError()
-		return err
-	}
-	metrics.RecordKafkaMessageProduced(topic)
-
-	sugar.Debugf("响应发送成功到topic: %s, 数据长度: %d, Envelope类型: %v", topic, len(envData), envelope.MessageType_STORAGE_RESPONSE)
-	return nil
 }

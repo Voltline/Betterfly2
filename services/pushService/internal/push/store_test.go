@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,11 +28,15 @@ func newStoreMock(t *testing.T) (*GormStore, sqlmock.Sqlmock) {
 
 func TestListMessageTokensUsesOneBatchQuery(t *testing.T) {
 	store, mock := newStoreMock(t)
-	mock.ExpectQuery(`SELECT push_device_tokens\.\* FROM "push_device_tokens" LEFT JOIN friends`).
+	mock.ExpectQuery(`WITH targets AS .*SELECT token\.\*`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "token", "environment", "push_type", "is_active"}).
 			AddRow(1, 2, "token-a", "production", PushTypeAPNs, true).
 			AddRow(2, 3, "token-b", "production", PushTypeAPNs, true))
-	tokens, err := store.ListMessageTokens(context.Background(), []int64{2, 3, 4, 5}, 1, false)
+	targets := make([]int64, 20000)
+	for index := range targets {
+		targets[index] = int64(index + 2)
+	}
+	tokens, err := store.ListMessageTokens(context.Background(), targets, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,15 +46,18 @@ func TestListMessageTokensUsesOneBatchQuery(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("target count caused extra database queries: %v", err)
 	}
+	if placeholders := strings.Count(legacyListMessageTokensSQL, "?"); placeholders != 4 {
+		t.Fatalf("legacy token query placeholders scale with targets: %d", placeholders)
+	}
 }
 
 func TestClaimAndFinalizeMessageDeliveriesUseBatchStatements(t *testing.T) {
 	store, mock := newStoreMock(t)
 	mock.ExpectQuery(`INSERT INTO push_message_deliveries`).
 		WillReturnRows(sqlmock.NewRows([]string{"token_id", "attempt"}).AddRow(10, 1).AddRow(11, 1))
-	mock.ExpectQuery(`UPDATE push_message_deliveries.*RETURNING token_id, attempt`).
+	mock.ExpectQuery(`UPDATE push_message_deliveries.*RETURNING delivery\.token_id, delivery\.attempt`).
 		WillReturnRows(sqlmock.NewRows([]string{"token_id", "attempt"}))
-	mock.ExpectQuery(`SELECT count\(\*\) FROM "push_message_deliveries"`).
+	mock.ExpectQuery(`SELECT count\(\*\).*FROM push_message_deliveries`).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 	now := time.Now().UTC()
 	claims, pending, err := store.ClaimMessageDeliveries(context.Background(), 99, []int64{10, 11}, now, 30*time.Second)
@@ -80,7 +88,7 @@ func TestFinalizeInvalidTokenIsAtomicWithPermanentDelivery(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE push_message_deliveries AS delivery SET`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "push_device_tokens" SET .* WHERE id IN`).
+	mock.ExpectExec(`UPDATE push_device_tokens AS token SET`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := store.FinalizeMessageDeliveries(context.Background(), []DeliveryUpdate{{
@@ -99,7 +107,7 @@ func TestFinalizeInvalidTokenRollsBackWhenDeactivationFails(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE push_message_deliveries AS delivery SET`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "push_device_tokens" SET .* WHERE id IN`).
+	mock.ExpectExec(`UPDATE push_device_tokens AS token SET`).
 		WillReturnError(context.DeadlineExceeded)
 	mock.ExpectRollback()
 	err := store.FinalizeMessageDeliveries(context.Background(), []DeliveryUpdate{{

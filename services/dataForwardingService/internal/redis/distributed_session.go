@@ -136,25 +136,72 @@ func (dsm *DistributedSessionManager) PublishOwnedKickNotification(ctx context.C
 
 // PublishKickNotification keeps the administrative kick path compatible.
 func (dsm *DistributedSessionManager) PublishKickNotification(userID, targetContainerID string) error {
-	return Rdb.Publish(context.Background(), "user_kick:"+targetContainerID, "KICK:"+userID+":*").Err()
+	ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
+	defer cancel()
+	return Rdb.Publish(ctx, "user_kick:"+targetContainerID, "KICK:"+userID+":*").Err()
 }
 
-func (dsm *DistributedSessionManager) SubscribeKickNotifications(containerID string, handler func(userID, ownerToken string)) error {
+func (dsm *DistributedSessionManager) SubscribeKickNotifications(ctx context.Context, containerID string, handler func(userID, ownerToken string)) error {
 	channel := "user_kick:" + containerID
-	pubsub := Rdb.Subscribe(context.Background(), channel)
-	if _, err := pubsub.Receive(context.Background()); err != nil {
-		return err
-	}
-	go func() {
-		for msg := range pubsub.Channel() {
-			parts := strings.SplitN(msg.Payload, ":", 3)
-			if len(parts) == 3 && parts[0] == "KICK" {
-				go handler(parts[1], parts[2])
+	backoff := 100 * time.Millisecond
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		pubsub := Rdb.Subscribe(ctx, channel)
+		if _, err := pubsub.Receive(ctx); err != nil {
+			_ = pubsub.Close()
+			if !waitForSubscriptionRetry(ctx, backoff) {
+				return nil
+			}
+			backoff = nextSubscriptionBackoff(backoff)
+			continue
+		}
+		logger.Sugar().Infof("已订阅实时踢出通知: 容器 %s", containerID)
+		backoff = 100 * time.Millisecond
+		messages := pubsub.Channel()
+		connected := true
+		for connected {
+			select {
+			case <-ctx.Done():
+				_ = pubsub.Close()
+				return nil
+			case msg, ok := <-messages:
+				if !ok {
+					connected = false
+					continue
+				}
+				parts := strings.SplitN(msg.Payload, ":", 3)
+				if len(parts) == 3 && parts[0] == "KICK" {
+					handler(parts[1], parts[2])
+				}
 			}
 		}
-	}()
-	logger.Sugar().Infof("已订阅实时踢出通知: 容器 %s", containerID)
-	return nil
+		_ = pubsub.Close()
+		if !waitForSubscriptionRetry(ctx, backoff) {
+			return nil
+		}
+		backoff = nextSubscriptionBackoff(backoff)
+	}
+}
+
+func waitForSubscriptionRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextSubscriptionBackoff(current time.Duration) time.Duration {
+	current *= 2
+	if current > 5*time.Second {
+		return 5 * time.Second
+	}
+	return current
 }
 
 func ParseSessionData(value string) SessionData {

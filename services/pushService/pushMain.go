@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/outbox"
 	"pushService/internal/apns"
 	"pushService/internal/consumer"
 	"pushService/internal/http_server"
@@ -56,6 +58,28 @@ func main() {
 
 	store := pushservice.NewGormStore()
 	service := pushservice.NewService(store, sender, kafkaPublisher, env("APNS_BUNDLE_ID", "com.Voltline.Betterfly2"))
+	relay := outbox.New(db.DB(), func(publishCtx context.Context, event db.OutboxEvent) error {
+		headers := []sarama.RecordHeader{
+			{Key: []byte("event_id"), Value: []byte(event.EventID)},
+			{Key: []byte("operation_key"), Value: []byte(event.OperationKey)},
+			{Key: []byte("outbox_service"), Value: []byte(event.Service)},
+		}
+		return kafkaPublisher.PublishRaw(publishCtx, event.Topic, event.Payload, headers)
+	}, outbox.LoadConfig("push", "PUSH"))
+	go func() {
+		if err := relay.Run(ctx); err != nil && ctx.Err() == nil {
+			sugar.Errorf("Push Outbox relay退出: %v", err)
+			cancel()
+		}
+	}()
+	go func() {
+		if err := service.RunWorkers(ctx); err != nil && ctx.Err() == nil {
+			sugar.Errorf("Push持久化worker退出: %v", err)
+			cancel()
+		}
+	}()
+	go store.RunCleanup(ctx, pushservice.LoadCleanupConfig())
+	go db.RunReliabilityCleanup(ctx, db.DB(), db.LoadRetentionConfig())
 
 	messageTopic := env("KAFKA_PUSH_TOPIC", "push-service")
 	consumerGroup, err := newConsumerGroup(brokers, env("KAFKA_CONSUMER_GROUP", "push-service-group"), sarama.OffsetNewest)

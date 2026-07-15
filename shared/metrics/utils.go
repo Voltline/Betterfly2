@@ -146,6 +146,16 @@ func RecordPushAPNSLatency(start time.Time) {
 	PushAPNSLatency.Observe(time.Since(start).Seconds())
 }
 
+func RecordReliabilityCleanup(service, kind string, rows int64) {
+	if rows > 0 {
+		ReliabilityCleanupRowsTotal.WithLabelValues(service, kind).Add(float64(rows))
+	}
+}
+
+func RecordOutboxPublishFailure(service string) {
+	OutboxPublishFailuresTotal.WithLabelValues(service).Inc()
+}
+
 func RecordABTestCache(outcome string) {
 	ABTestCacheRequestsTotal.WithLabelValues(outcome).Inc()
 }

@@ -1,0 +1,304 @@
+package push
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	pushpb "Betterfly2/proto/push"
+	"Betterfly2/shared/db"
+	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
+)
+
+func TestMessageFanoutUsesFixedPlaceholderCountForTwentyThousandTargets(t *testing.T) {
+	store, mock := newStoreMock(t)
+	targets := make([]int64, 20000)
+	for index := range targets {
+		targets[index] = int64(index + 2)
+	}
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: targets, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 20000,
+	}}}
+	operationKey := "push-service/0/20000"
+	jobID := stablePushJobID(operationKey)
+
+	if placeholders := strings.Count(messageFanoutSQL, "?"); placeholders != 10 {
+		t.Fatalf("fanout SQL placeholders scale with audience: got=%d want=10", placeholders)
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`WITH targets AS`).WithArgs(
+		sqlmock.AnyArg(), int64(1), PushTypeAPNs, false, int64(20000), jobID,
+		DeliveryPending, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 20000))
+	mock.ExpectCommit()
+
+	err := store.db.Transaction(func(tx *gorm.DB) error {
+		_, _, persistErr := store.persistMessageJob(tx, operationKey, request, request.GetMessagePush())
+		return persistErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDurableFinalizeRejectsExpiredWorkerClaim(t *testing.T) {
+	store, mock := newStoreMock(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "push_jobs"`).WillReturnRows(
+		sqlmock.NewRows([]string{"job_id", "status"}).AddRow("job-1", PushJobPending),
+	)
+	mock.ExpectExec(`UPDATE "push_message_deliveries"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	err := store.FinalizeMessageDelivery(context.Background(), DurableDeliveryUpdate{
+		DurableDeliveryClaim: DurableDeliveryClaim{
+			JobID: "job-1", MessageID: 41, Token: db.PushDeviceToken{ID: 9}, Attempt: 1, ClaimToken: "expired-claim",
+		},
+		Status: DeliverySent,
+	})
+	if !errors.Is(err, ErrDeliveryFenced) {
+		t.Fatalf("expired worker updated a newer claim: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpiredFinalAttemptIsFencedIntoTerminalStateAfterRestart(t *testing.T) {
+	store, mock := newStoreMock(t)
+	now := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`UPDATE push_message_deliveries SET`).WillReturnRows(
+		sqlmock.NewRows([]string{"job_id"}).AddRow("job-exhausted"),
+	)
+	mock.ExpectQuery(`SELECT \* FROM "push_jobs"`).WillReturnRows(
+		sqlmock.NewRows([]string{"job_id", "status"}).AddRow("job-exhausted", PushJobPending),
+	)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "push_message_deliveries"`).WillReturnRows(
+		sqlmock.NewRows([]string{"count"}).AddRow(0),
+	)
+	mock.ExpectExec(`UPDATE "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`WITH candidates AS`).WillReturnRows(sqlmock.NewRows([]string{
+		"message_id", "token_id", "job_id", "attempt", "claim_token", "delivery_created_at", "user_id", "device_id", "token", "environment", "push_type", "bundle_id", "is_active", "token_created_at", "token_updated_at", "request_payload",
+	}))
+	mock.ExpectCommit()
+
+	claims, err := store.ClaimMessageDeliveryBatch(context.Background(), 10, now, 30*time.Second, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 0 {
+		t.Fatalf("exhausted delivery was sent again: %+v", claims)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFinalizeSerializesTerminalJobDecisionWithRowLock(t *testing.T) {
+	store, mock := newStoreMock(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "push_jobs"`).WillReturnRows(
+		sqlmock.NewRows([]string{"job_id", "status"}).AddRow("job-last", PushJobPending),
+	)
+	mock.ExpectExec(`UPDATE "push_message_deliveries"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "push_message_deliveries"`).WillReturnRows(
+		sqlmock.NewRows([]string{"count"}).AddRow(0),
+	)
+	mock.ExpectExec(`UPDATE "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := store.FinalizeMessageDelivery(context.Background(), DurableDeliveryUpdate{
+		DurableDeliveryClaim: DurableDeliveryClaim{
+			JobID: "job-last", MessageID: 99, Token: db.PushDeviceToken{ID: 12}, Attempt: 2, ClaimToken: "current-claim",
+		},
+		Status: DeliverySent,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("job completion was not serialized before delivery finalization: %v", err)
+	}
+}
+
+func TestRegisterTokenReplayUpdatesExistingIdentityWithoutReplacingID(t *testing.T) {
+	store, mock := newStoreMock(t)
+	now := time.Date(2026, 7, 15, 1, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "push_device_tokens"`).WillReturnRows(sqlmock.NewRows([]string{
+		"id", "user_id", "device_id", "token", "environment", "push_type", "bundle_id", "is_active", "created_at", "updated_at",
+	}).AddRow(42, 7, "iphone", "old-token", "production", PushTypeAPNs, "com.Voltline.Betterfly2", true, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)))
+	mock.ExpectExec(`DELETE FROM "push_device_tokens"`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE "push_device_tokens"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := store.db.Transaction(func(tx *gorm.DB) error {
+		return registerTokenWithDB(tx, 7, "iphone", "new-token", "production", PushTypeAPNs, "com.Voltline.Betterfly2", now)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("register replay deleted and recreated the identity instead of updating ID 42: %v", err)
+	}
+}
+
+type restartDurableStore struct {
+	*memoryStore
+	mu          sync.Mutex
+	base        DurableDeliveryClaim
+	status      string
+	attempt     int
+	claimToken  string
+	leaseUntil  time.Time
+	nextRetryAt time.Time
+}
+
+func (s *restartDurableStore) EnqueueRequest(context.Context, string, *pushpb.RequestMessage, string) error {
+	return nil
+}
+
+func (s *restartDurableStore) ClaimMessageDeliveryBatch(_ context.Context, _ int, now time.Time, lease time.Duration, _ int) ([]DurableDeliveryClaim, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	eligible := s.status == DeliveryPending || s.status == DeliveryRetryable && !s.nextRetryAt.After(now) || s.status == DeliveryClaimed && !s.leaseUntil.After(now)
+	if !eligible || s.status == DeliverySent || s.status == DeliveryPermanent || s.status == DeliveryFailed {
+		return nil, nil
+	}
+	s.attempt++
+	s.status = DeliveryClaimed
+	s.claimToken = fmt.Sprintf("claim-%d", s.attempt)
+	s.leaseUntil = now.Add(lease)
+	claim := s.base
+	claim.Attempt = s.attempt
+	claim.ClaimToken = s.claimToken
+	return []DurableDeliveryClaim{claim}, nil
+}
+
+func (s *restartDurableStore) ClaimVoIPDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error) {
+	return nil, nil
+}
+
+func (s *restartDurableStore) FinalizeMessageDelivery(_ context.Context, update DurableDeliveryUpdate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status != DeliveryClaimed || s.attempt != update.Attempt || s.claimToken != update.ClaimToken {
+		return ErrDeliveryFenced
+	}
+	s.status = update.Status
+	s.nextRetryAt = update.NextRetryAt
+	return nil
+}
+
+func (s *restartDurableStore) FinalizeVoIPDelivery(context.Context, DurableDeliveryUpdate) error {
+	return nil
+}
+
+func TestRetryableDeliveryResumesAfterServiceRestart(t *testing.T) {
+	now := time.Date(2026, 7, 15, 2, 0, 0, 0, time.UTC)
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 51,
+	}}}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &restartDurableStore{
+		memoryStore: &memoryStore{}, status: DeliveryPending,
+		base: DurableDeliveryClaim{
+			JobID: "job-restart", MessageID: 51, RequestPayload: payload,
+			Token: db.PushDeviceToken{ID: 11, UserID: 2, Token: "device-token", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+		},
+	}
+
+	first := NewService(store, &memorySender{err: errors.New("temporary APNs network error")}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	first.now = func() time.Time { return now }
+	first.retryInitial = time.Second
+	first.retryMax = time.Second
+	claims, err := store.ClaimMessageDeliveryBatch(context.Background(), 1, now, first.deliveryLease, first.maxAttempts)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("initial claim failed: claims=%d err=%v", len(claims), err)
+	}
+	if err := first.processDurableBatch(context.Background(), store, deliveryKindMessage, first.prepareDeliveries(context.Background(), deliveryKindMessage, claims)); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != DeliveryRetryable {
+		t.Fatalf("network failure was not persisted for restart: status=%s", store.status)
+	}
+
+	now = now.Add(2 * time.Second)
+	secondSender := &memorySender{}
+	second := NewService(store, secondSender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	second.now = func() time.Time { return now }
+	claims, err = store.ClaimMessageDeliveryBatch(context.Background(), 1, now, second.deliveryLease, second.maxAttempts)
+	if err != nil || len(claims) != 1 || claims[0].Attempt != 2 {
+		t.Fatalf("restarted service did not reclaim retryable row: claims=%+v err=%v", claims, err)
+	}
+	if err := second.processDurableBatch(context.Background(), store, deliveryKindMessage, second.prepareDeliveries(context.Background(), deliveryKindMessage, claims)); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != DeliverySent || len(secondSender.sent) != 1 {
+		t.Fatalf("restart recovery did not finish delivery: status=%s sends=%d", store.status, len(secondSender.sent))
+	}
+}
+
+func TestPresentationDatabaseFailureIsPersistedAsRetryable(t *testing.T) {
+	now := time.Date(2026, 7, 15, 3, 0, 0, 0, time.UTC)
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 52,
+	}}}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &restartDurableStore{
+		memoryStore: &memoryStore{presentationErr: errors.New("database temporarily unavailable")}, status: DeliveryPending,
+		base: DurableDeliveryClaim{
+			JobID: "job-presentation-retry", MessageID: 52, RequestPayload: payload,
+			Token: db.PushDeviceToken{ID: 12, UserID: 2, Token: "device-token", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+		},
+	}
+	service := NewService(store, &memorySender{}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	service.now = func() time.Time { return now }
+	service.retryInitial = time.Second
+	service.retryMax = time.Second
+
+	claims, err := store.ClaimMessageDeliveryBatch(context.Background(), 1, now, service.deliveryLease, service.maxAttempts)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("claim failed: claims=%d err=%v", len(claims), err)
+	}
+	prepared := service.prepareDeliveries(context.Background(), deliveryKindMessage, claims)
+	if len(prepared) != 1 || !prepared[0].prepareTransient {
+		t.Fatalf("database preparation failure was not classified transient: %+v", prepared)
+	}
+	if err := service.processDurableBatch(context.Background(), store, deliveryKindMessage, prepared); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != DeliveryRetryable {
+		t.Fatalf("database preparation failure became terminal: status=%s", store.status)
+	}
+
+	store.presentationErr = nil
+	now = now.Add(2 * time.Second)
+	claims, err = store.ClaimMessageDeliveryBatch(context.Background(), 1, now, service.deliveryLease, service.maxAttempts)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("retry claim failed: claims=%d err=%v", len(claims), err)
+	}
+	if err := service.processDurableBatch(context.Background(), store, deliveryKindMessage, service.prepareDeliveries(context.Background(), deliveryKindMessage, claims)); err != nil {
+		t.Fatal(err)
+	}
+	if store.status != DeliverySent {
+		t.Fatalf("delivery did not recover after database returned: status=%s", store.status)
+	}
+}

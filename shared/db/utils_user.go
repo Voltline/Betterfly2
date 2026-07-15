@@ -15,14 +15,22 @@ var (
 )
 
 func GetUserById(id int64) (*User, error) {
+	return GetUserByIDWithDB(DB(), id)
+}
+
+func GetUserByIDWithDB(database *gorm.DB, id int64) (*User, error) {
 	var user User
-	err := DB().First(&user, id).Error
+	err := database.First(&user, id).Error
 	return getUser(&user, err)
 }
 
 func GetUserByAccount(account string) (*User, error) {
+	return GetUserByAccountWithDB(DB(), account)
+}
+
+func GetUserByAccountWithDB(database *gorm.DB, account string) (*User, error) {
 	var user User
-	err := DB().Where("account = ?", account).First(&user).Error
+	err := database.Where("account = ?", account).First(&user).Error
 	return getUser(&user, err)
 }
 
@@ -64,8 +72,12 @@ func AddUser(user *User) error {
 
 // UpdateUserNameByID 用于更新用户昵称
 func UpdateUserNameByID(id int64, newName string) error {
+	return UpdateUserNameByIDWithDB(DB(), id, newName)
+}
+
+func UpdateUserNameByIDWithDB(database *gorm.DB, id int64, newName string) error {
 	nowTime := utils.NowTime()
-	return DB().Model(&User{}).
+	return database.Model(&User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"name":        newName,
@@ -75,8 +87,12 @@ func UpdateUserNameByID(id int64, newName string) error {
 
 // UpdateUserAvatarByID 用于更新用户头像
 func UpdateUserAvatarByID(id int64, newAvatarURL string) error {
+	return UpdateUserAvatarByIDWithDB(DB(), id, newAvatarURL)
+}
+
+func UpdateUserAvatarByIDWithDB(database *gorm.DB, id int64, newAvatarURL string) error {
 	nowTime := utils.NowTime()
-	return DB().Model(&User{}).
+	return database.Model(&User{}).
 		Where("id = ?", id).
 		Updates(map[string]interface{}{
 			"avatar":      newAvatarURL,

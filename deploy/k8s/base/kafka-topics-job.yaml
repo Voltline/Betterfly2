@@ -1,37 +1,6 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: betterfly-db-migrate
-  namespace: betterfly2
-spec:
-  backoffLimit: 6
-  template:
-    metadata:
-      labels:
-        app: betterfly-db-migrate
-    spec:
-      restartPolicy: OnFailure
-      containers:
-        - name: migrate
-          image: betterfly2/db-migrate:latest
-          imagePullPolicy: IfNotPresent
-          envFrom:
-            - configMapRef:
-                name: betterfly2-config
-          env:
-            - name: PGSQL_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: betterfly2-secret
-                  key: PGSQL_DSN
-            - name: DB_MAX_OPEN_CONNS
-              value: "4"
-            - name: DB_MAX_IDLE_CONNS
-              value: "1"
----
-apiVersion: batch/v1
-kind: Job
-metadata:
   name: betterfly-kafka-topics
   namespace: betterfly2
 spec:
@@ -44,7 +13,8 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: topics
-          image: apache/kafka:latest
+          image: apache/kafka:3.9.0
+          imagePullPolicy: IfNotPresent
           command:
             - /bin/bash
             - -ec

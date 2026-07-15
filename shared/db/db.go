@@ -18,7 +18,7 @@ import (
 	gologger "gorm.io/gorm/logger"
 )
 
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 type PoolConfig struct {
 	MaxOpenConns    int

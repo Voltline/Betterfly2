@@ -43,6 +43,7 @@ func main() {
 
 	// 创建并设置全局WebSocket处理器
 	globalWebSocketHandler = handlers.NewWebSocketHandler()
+	defer globalWebSocketHandler.Close()
 	// 设置handlers包中的全局实例
 	handlers.SetGlobalWebSocketHandler(globalWebSocketHandler)
 

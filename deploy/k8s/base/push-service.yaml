@@ -23,6 +23,10 @@ spec:
           env:
             - name: HTTP_PORT
               value: "8086"
+            - name: DB_MAX_OPEN_CONNS
+              value: "12"
+            - name: DB_MAX_IDLE_CONNS
+              value: "4"
             - name: KAFKA_PUSH_TOPIC
               value: push-service
             - name: KAFKA_CONSUMER_GROUP

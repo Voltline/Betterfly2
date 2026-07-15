@@ -21,6 +21,7 @@ type memoryStore struct {
 	notify              map[int64]bool
 	audits              []db.PushDebugAudit
 	presentation        MessagePresentation
+	presentationErr     error
 	messageTokenQueries int
 }
 
@@ -91,6 +92,9 @@ func (s *memoryStore) ListMessageTokens(_ context.Context, targetUserIDs []int64
 }
 
 func (s *memoryStore) MessagePresentation(_ context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
+	if s.presentationErr != nil {
+		return MessagePresentation{}, s.presentationErr
+	}
 	if s.presentation.Title != "" {
 		return s.presentation, nil
 	}

@@ -3,15 +3,57 @@ package handler
 import (
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/kafkaconsumer"
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestHandleMessageDatabaseFailureIsRetriedWithoutCompletedInbox(t *testing.T) {
+	database, mock := setupMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache(), database: database}
+	request := &storage.RequestMessage{
+		FromKafkaTopic: "df-storage-test", TargetUserId: 1001,
+		Payload: &storage.RequestMessage_QueryMessage{QueryMessage: &storage.QueryMessage{MessageId: 77}},
+	}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := kafkaconsumer.WithOperationKey(context.Background(), "storage-service/0/77")
+	injected := errors.New("database temporarily unavailable")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT \* FROM "messages"`).WillReturnError(injected)
+	mock.ExpectRollback()
+	if err := handler.HandleMessage(ctx, payload); !errors.Is(err, injected) {
+		t.Fatalf("expected transient database error, got %v", err)
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT \* FROM "messages"`).WillReturnRows(sqlmock.NewRows([]string{
+		"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "is_group",
+	}))
+	mock.ExpectExec(`INSERT INTO "outbox_events"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if err := handler.HandleMessage(ctx, payload); err != nil {
+		t.Fatalf("retry after transient failure failed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // mockCache 模拟缓存实现
 type mockCache struct {

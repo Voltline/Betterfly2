@@ -55,8 +55,12 @@ func UpsertPendingFileMetadata(fileHash string, fileSize int64, storagePath stri
 
 // GetFileMetadata 根据文件哈希获取文件元数据
 func GetFileMetadata(fileHash string) (*FileMetadata, error) {
+	return GetFileMetadataWithDB(DB(), fileHash)
+}
+
+func GetFileMetadataWithDB(database *gorm.DB, fileHash string) (*FileMetadata, error) {
 	var fileMetadata FileMetadata
-	err := DB().First(&fileMetadata, "file_hash = ?", fileHash).Error
+	err := database.First(&fileMetadata, "file_hash = ?", fileHash).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

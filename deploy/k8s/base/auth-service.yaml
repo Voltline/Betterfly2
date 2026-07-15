@@ -20,6 +20,10 @@ spec:
           env:
             - name: PORT
               value: "50051"
+            - name: DB_MAX_OPEN_CONNS
+              value: "8"
+            - name: DB_MAX_IDLE_CONNS
+              value: "2"
             - name: PGSQL_DSN
               valueFrom:
                 secretKeyRef:

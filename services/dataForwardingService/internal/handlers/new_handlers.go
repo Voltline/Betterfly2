@@ -22,26 +22,38 @@ import (
 
 // WebSocketHandler 处理WebSocket连接和消息
 type WebSocketHandler struct {
-	connManager    *connection.ConnectionManager
-	sessionManager *session.SessionManager
-	router         *router.Router
-	config         websocketConfig
-	upgrader       websocket.Upgrader
-	refreshLease   func(context.Context, string, redisClient.SessionData, time.Duration, time.Duration) error
+	connManager     *connection.ConnectionManager
+	sessionManager  *session.SessionManager
+	router          *router.Router
+	config          websocketConfig
+	upgrader        websocket.Upgrader
+	refreshLease    func(context.Context, string, redisClient.SessionData, time.Duration, time.Duration) error
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 // NewWebSocketHandler 创建新的WebSocket处理器
 func NewWebSocketHandler() *WebSocketHandler {
+	return NewWebSocketHandlerWithContext(context.TODO())
+}
+
+func NewWebSocketHandlerWithContext(parent context.Context) *WebSocketHandler {
 	logger.Sugar().Debugf("创建WebSocketHandler实例")
+	if parent == nil {
+		parent = context.TODO()
+	}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(parent)
 	connManager := connection.NewConnectionManager()
 	sessionManager := session.NewSessionManager()
 	router := router.NewRouter(connManager)
 
 	handler := &WebSocketHandler{
-		connManager:    connManager,
-		sessionManager: sessionManager,
-		router:         router,
-		config:         loadWebSocketConfig(),
+		connManager:     connManager,
+		sessionManager:  sessionManager,
+		router:          router,
+		config:          loadWebSocketConfig(),
+		lifecycleCtx:    lifecycleCtx,
+		lifecycleCancel: lifecycleCancel,
 	}
 	handler.connManager.ConfigureSessionLeases(handler.config.sessionLeaseTTL, handler.config.routeLeaseTTL)
 	handler.refreshLease = func(ctx context.Context, userID string, data redisClient.SessionData, sessionTTL, routeTTL time.Duration) error {
@@ -54,6 +66,12 @@ func NewWebSocketHandler() *WebSocketHandler {
 
 	logger.Sugar().Debugf("WebSocketHandler创建完成: %s", connManager.GetInstanceID())
 	return handler
+}
+
+func (h *WebSocketHandler) Close() {
+	if h.lifecycleCancel != nil {
+		h.lifecycleCancel()
+	}
 }
 
 // StartWebSocketServer 启动WebSocket服务器
@@ -407,12 +425,13 @@ func (h *WebSocketHandler) subscribeKickNotifications() {
 	}
 
 	dsm := &redisClient.DistributedSessionManager{}
-	err := dsm.SubscribeKickNotifications(containerID, func(userID, ownerToken string) {
-		logger.Sugar().Infof("收到实时踢出通知，执行所有权校验: 用户 %s", userID)
-		h.connManager.StopUserIfOwner(userID, ownerToken)
-	})
-
-	if err != nil {
-		logger.Sugar().Errorf("订阅实时踢出通知失败: %v", err)
-	}
+	go func() {
+		err := dsm.SubscribeKickNotifications(h.lifecycleCtx, containerID, func(userID, ownerToken string) {
+			logger.Sugar().Infof("收到实时踢出通知，执行所有权校验: 用户 %s", userID)
+			h.connManager.StopUserIfOwner(userID, ownerToken)
+		})
+		if err != nil && h.lifecycleCtx.Err() == nil {
+			logger.Sugar().Errorf("订阅实时踢出通知失败: %v", err)
+		}
+	}()
 }

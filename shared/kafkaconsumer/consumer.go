@@ -289,6 +289,13 @@ func OperationKey(message *sarama.ConsumerMessage) string {
 	if message == nil {
 		return ""
 	}
+	for _, header := range message.Headers {
+		if string(header.Key) == "event_id" {
+			if eventID := strings.TrimSpace(string(header.Value)); eventID != "" {
+				return "event/" + eventID
+			}
+		}
+	}
 	return message.Topic + "/" + strconv.FormatInt(int64(message.Partition), 10) + "/" + strconv.FormatInt(message.Offset, 10)
 }
 

@@ -14,6 +14,46 @@ type ConsumerOperationResult struct {
 	CreatedAt       string `gorm:"type:varchar(35);index:idx_consumer_operation_created;comment:完成时间RFC3339"`
 }
 
+const (
+	InboxStatusCompleted = "completed"
+
+	OutboxStatusPending   = "pending"
+	OutboxStatusClaimed   = "claimed"
+	OutboxStatusRetryable = "retryable"
+	OutboxStatusPublished = "published"
+	OutboxStatusFailed    = "failed"
+)
+
+// ConsumerInbox is the durable idempotency boundary for a Kafka operation.
+// A row is only committed together with its business changes and outbox events.
+type ConsumerInbox struct {
+	Service         string `gorm:"primaryKey;type:varchar(40);comment:消费服务名"`
+	OperationKey    string `gorm:"primaryKey;type:varchar(512);comment:source topic/partition/offset"`
+	Status          string `gorm:"type:varchar(20);index:idx_consumer_inbox_completed;comment:completed"`
+	ResponsePayload []byte `gorm:"type:bytea;comment:已完成操作的protobuf响应"`
+	CreatedAt       string `gorm:"type:varchar(35);comment:首次处理时间RFC3339"`
+	CompletedAt     string `gorm:"type:varchar(35);index:idx_consumer_inbox_completed;comment:提交完成时间RFC3339"`
+}
+
+// OutboxEvent is published at least once. EventID and OperationKey are stable
+// deduplication keys for consumers that perform downstream side effects.
+type OutboxEvent struct {
+	EventID       string `gorm:"primaryKey;type:varchar(255);comment:稳定事件ID"`
+	Service       string `gorm:"type:varchar(40);index:idx_outbox_ready,priority:1;comment:来源服务"`
+	OperationKey  string `gorm:"type:varchar(512);index;comment:来源消费操作"`
+	Topic         string `gorm:"type:varchar(255);comment:目标Kafka topic"`
+	Payload       []byte `gorm:"type:bytea;comment:完整Envelope payload"`
+	Status        string `gorm:"type:varchar(20);index:idx_outbox_ready,priority:2;comment:pending/claimed/retryable/published/failed"`
+	Attempt       int    `gorm:"default:0;comment:领取次数"`
+	ClaimToken    string `gorm:"type:varchar(64);comment:worker fencing token"`
+	LeaseUntil    string `gorm:"type:varchar(35);index:idx_outbox_ready,priority:3;comment:领取租约截止时间"`
+	NextAttemptAt string `gorm:"type:varchar(35);index:idx_outbox_ready,priority:4;comment:下次允许投递时间"`
+	LastError     string `gorm:"type:varchar(255);comment:脱敏后的最后错误"`
+	CreatedAt     string `gorm:"type:varchar(35);comment:创建时间RFC3339"`
+	UpdatedAt     string `gorm:"type:varchar(35);comment:更新时间RFC3339"`
+	PublishedAt   string `gorm:"type:varchar(35);index;comment:发布完成时间RFC3339"`
+}
+
 type User struct {
 	ID           int64  `gorm:"primaryKey;autoIncrement;comment:用户id，唯一"`
 	Account      string `gorm:"uniqueIndex;type:varchar(50);comment:用户账号，唯一"`
@@ -116,9 +156,9 @@ type ABExperimentGroup struct {
 
 type ABExperimentOverride struct {
 	ID           int64  `gorm:"primaryKey;autoIncrement:true;comment:实验例外规则ID"`
-	ExperimentID int64  `gorm:"index:idx_ab_overrides_experiment_subject,priority:1;comment:实验ID"`
-	SubjectType  string `gorm:"type:varchar(30);index:idx_ab_overrides_experiment_subject,priority:2;comment:主体类型，例如device/user/server"`
-	SubjectID    string `gorm:"type:varchar(128);index:idx_ab_overrides_experiment_subject,priority:3;comment:主体ID，例如设备号"`
+	ExperimentID int64  `gorm:"index:idx_ab_overrides_experiment_subject,priority:1;index:idx_ab_overrides_subject_experiment,priority:3;comment:实验ID"`
+	SubjectType  string `gorm:"type:varchar(30);index:idx_ab_overrides_experiment_subject,priority:2;index:idx_ab_overrides_subject_experiment,priority:1;comment:主体类型，例如device/user/server"`
+	SubjectID    string `gorm:"type:varchar(128);index:idx_ab_overrides_experiment_subject,priority:3;index:idx_ab_overrides_subject_experiment,priority:2;comment:主体ID，例如设备号"`
 	Action       string `gorm:"type:varchar(30);comment:例外动作，例如force_group/exclude/merge_config"`
 	GroupKey     string `gorm:"type:varchar(100);comment:强制命中的分组key"`
 	ConfigJSON   string `gorm:"type:text;comment:额外覆盖配置JSON"`
@@ -142,14 +182,42 @@ type PushDeviceToken struct {
 type PushMessageDelivery struct {
 	MessageID   int64  `gorm:"primaryKey;comment:消息ID"`
 	TokenID     int64  `gorm:"primaryKey;comment:APNs token记录ID"`
+	JobID       string `gorm:"type:varchar(255);index;comment:来源Push任务"`
 	Status      string `gorm:"type:varchar(20);default:sent;index:idx_push_delivery_retry;comment:claimed/sent/retryable/permanent"`
 	Attempt     int    `gorm:"default:0;comment:投递尝试次数"`
+	ClaimToken  string `gorm:"type:varchar(64);comment:当前worker fencing token"`
 	LeaseUntil  string `gorm:"type:varchar(35);index:idx_push_delivery_retry;comment:claimed租约截止时间"`
 	NextRetryAt string `gorm:"type:varchar(35);index:idx_push_delivery_retry;comment:下次允许重试时间"`
 	LastError   string `gorm:"type:varchar(255);comment:脱敏后的最后错误"`
 	APNSID      string `gorm:"type:varchar(128);comment:Apple返回的APNs ID"`
 	CreatedAt   string `gorm:"type:varchar(35);index:idx_push_message_delivery_created;comment:首次申请投递时间"`
 	UpdatedAt   string `gorm:"type:varchar(35);comment:最后状态更新时间"`
+}
+
+type PushJob struct {
+	JobID          string `gorm:"primaryKey;type:varchar(255);comment:稳定任务ID"`
+	OperationKey   string `gorm:"uniqueIndex;type:varchar(512);comment:来源Kafka操作"`
+	Kind           string `gorm:"type:varchar(20);index;comment:message/voip/client"`
+	RequestPayload []byte `gorm:"type:bytea;comment:原始Push RequestMessage"`
+	Status         string `gorm:"type:varchar(20);index;comment:pending/processing/completed/failed"`
+	CreatedAt      string `gorm:"type:varchar(35);index;comment:创建时间"`
+	UpdatedAt      string `gorm:"type:varchar(35);comment:更新时间"`
+	CompletedAt    string `gorm:"type:varchar(35);comment:完成时间"`
+}
+
+type PushVoIPDelivery struct {
+	CallID      string `gorm:"primaryKey;type:varchar(128);comment:通话ID"`
+	TokenID     int64  `gorm:"primaryKey;comment:VoIP token记录ID"`
+	JobID       string `gorm:"type:varchar(255);index;comment:来源Push任务"`
+	Status      string `gorm:"type:varchar(20);index:idx_push_voip_delivery_ready,priority:1;comment:pending/claimed/sent/retryable/permanent"`
+	Attempt     int    `gorm:"default:0;comment:投递尝试次数"`
+	ClaimToken  string `gorm:"type:varchar(64);comment:当前worker fencing token"`
+	LeaseUntil  string `gorm:"type:varchar(35);index:idx_push_voip_delivery_ready,priority:2;comment:领取租约截止时间"`
+	NextRetryAt string `gorm:"type:varchar(35);index:idx_push_voip_delivery_ready,priority:3;comment:下次重试时间"`
+	LastError   string `gorm:"type:varchar(255);comment:脱敏错误"`
+	APNSID      string `gorm:"type:varchar(128);comment:Apple APNs ID"`
+	CreatedAt   string `gorm:"type:varchar(35);comment:创建时间"`
+	UpdatedAt   string `gorm:"type:varchar(35);comment:更新时间"`
 }
 
 type PushDebugAudit struct {

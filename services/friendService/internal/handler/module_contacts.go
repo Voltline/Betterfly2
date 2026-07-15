@@ -11,18 +11,18 @@ func init() {
 
 func registerFriendContactModule(router *dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage]) {
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_AddDirectFriend) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleAddDirectFriend(ctx.request, payload.AddDirectFriend)
+		return ctx.handler.handleAddDirectFriendWithDB(ctx.database, ctx.request, payload.AddDirectFriend)
 	})
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryFriendList) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleQueryFriendList(ctx.request, payload.QueryFriendList)
+		return ctx.handler.handleQueryFriendListWithDB(ctx.database, ctx.request, payload.QueryFriendList)
 	})
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_RemoveDirectFriend) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleRemoveDirectFriend(ctx.request, payload.RemoveDirectFriend)
+		return ctx.handler.handleRemoveDirectFriendWithDB(ctx.database, ctx.request, payload.RemoveDirectFriend)
 	})
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendAlias) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleUpdateFriendAlias(ctx.request, payload.UpdateFriendAlias)
+		return ctx.handler.handleUpdateFriendAliasWithDB(ctx.database, ctx.request, payload.UpdateFriendAlias)
 	})
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateFriendNotify) (*friend.ResponseMessage, error) {
-		return ctx.handler.handleUpdateFriendNotify(ctx.request, payload.UpdateFriendNotify)
+		return ctx.handler.handleUpdateFriendNotifyWithDB(ctx.database, ctx.request, payload.UpdateFriendNotify)
 	})
 }

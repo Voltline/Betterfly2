@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: betterfly-db-migrate-v4
+  namespace: betterfly2
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: betterfly-db-migrate
+        betterfly.io/schema-version: "4"
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: betterfly2/db-migrate:schema-v4
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+            - name: DB_MAX_OPEN_CONNS
+              value: "4"
+            - name: DB_MAX_IDLE_CONNS
+              value: "1"

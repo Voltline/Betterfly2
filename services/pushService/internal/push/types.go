@@ -14,9 +14,15 @@ const (
 	PushTypeAPNs = "apns"
 
 	DeliveryClaimed   = "claimed"
+	DeliveryPending   = "pending"
 	DeliverySent      = "sent"
 	DeliveryRetryable = "retryable"
 	DeliveryPermanent = "permanent"
+	DeliveryFailed    = "failed"
+
+	PushJobPending   = "pending"
+	PushJobCompleted = "completed"
+	PushJobFailed    = "failed"
 )
 
 type NotificationKind string
@@ -31,6 +37,7 @@ var (
 	ErrInvalidRequest  = errors.New("invalid push request")
 	ErrTokenNotFound   = errors.New("push token not found")
 	ErrAPNSUnavailable = errors.New("APNs sender unavailable")
+	ErrDeliveryFenced  = errors.New("push delivery claim fenced")
 )
 
 type Notification struct {
@@ -109,9 +116,40 @@ type Store interface {
 	DeactivateTokens(context.Context, []int64) error
 }
 
+type DurableStore interface {
+	EnqueueRequest(context.Context, string, *pushpb.RequestMessage, string) error
+	ClaimMessageDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error)
+	ClaimVoIPDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error)
+	FinalizeMessageDelivery(context.Context, DurableDeliveryUpdate) error
+	FinalizeVoIPDelivery(context.Context, DurableDeliveryUpdate) error
+}
+
+type DurableDeliveryClaim struct {
+	JobID          string
+	MessageID      int64
+	CallID         string
+	Token          db.PushDeviceToken
+	QueuedAt       time.Time
+	Attempt        int
+	ClaimToken     string
+	RequestPayload []byte
+}
+
+type DurableDeliveryUpdate struct {
+	DurableDeliveryClaim
+	Status          string
+	NextRetryAt     time.Time
+	LastError       string
+	APNSID          string
+	DeactivateToken bool
+}
+
 type DeliveryUpdate struct {
 	MessageID       int64
 	TokenID         int64
+	JobID           string
+	ClaimToken      string
+	Attempt         int
 	Status          string
 	NextRetryAt     time.Time
 	LastError       string

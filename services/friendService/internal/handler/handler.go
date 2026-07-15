@@ -9,16 +9,17 @@ import (
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
 	"context"
+	"errors"
 	"sync"
 
-	"friendService/internal/publisher"
-
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 type friendRequestContext struct {
-	handler *FriendHandler
-	request *friend.RequestMessage
+	handler  *FriendHandler
+	request  *friend.RequestMessage
+	database *gorm.DB
 }
 
 type friendRequestModule func(*dispatch.OneofRouter[friendRequestContext, *friend.ResponseMessage])
@@ -48,76 +49,79 @@ func newFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *frien
 	return router
 }
 
-type FriendHandler struct{}
+type FriendHandler struct {
+	database *gorm.DB
+}
 
 func NewFriendHandler() *FriendHandler {
-	_ = db.DB()
-	return &FriendHandler{}
+	return &FriendHandler{database: db.DB()}
+}
+
+func (h *FriendHandler) requestDatabase() *gorm.DB {
+	if h.database != nil {
+		return h.database
+	}
+	return db.DB()
+}
+
+func (h *FriendHandler) resolveDatabase(database *gorm.DB) *gorm.DB {
+	if database != nil {
+		return database
+	}
+	return h.requestDatabase()
 }
 
 func (h *FriendHandler) HandleMessage(ctx context.Context, message []byte) error {
 	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
-	if hasOperationKey {
-		cached, err := db.LoadConsumerOperationResult("friend", operationKey)
-		if err != nil {
-			return err
-		}
-		if len(cached) > 0 {
-			resp := &friend.ResponseMessage{}
-			if err := proto.Unmarshal(cached, resp); err != nil {
-				return err
-			}
-			request := &friend.RequestMessage{}
-			if err := proto.Unmarshal(message, request); err != nil {
-				return err
-			}
-			return h.sendResponse(request.GetFromKafkaTopic(), resp)
-		}
+	if !hasOperationKey {
+		return errors.New("friend consumer operation key is required")
 	}
 	req := &friend.RequestMessage{}
 	if err := proto.Unmarshal(message, req); err != nil {
 		return err
 	}
 
-	var (
-		resp *friend.ResponseMessage
-		err  error
-	)
-
-	resp, err = getFriendRequestRouter().Dispatch(friendRequestContext{
-		handler: h,
-		request: req,
-	}, req.Payload)
-
-	if err != nil {
-		logger.Sugar().Errorf("处理friend请求失败: %v", err)
-		resp = &friend.ResponseMessage{
-			Result:       friend.FriendResult_SERVICE_ERROR,
-			TargetUserId: req.TargetUserId,
+	_, err := db.ExecuteInboxOutbox(ctx, h.requestDatabase(), "friend", operationKey, func(tx *gorm.DB) ([]byte, []db.PendingOutboxEvent, error) {
+		resp, dispatchErr := getFriendRequestRouter().Dispatch(friendRequestContext{
+			handler: h, request: req, database: tx,
+		}, req.Payload)
+		if dispatchErr != nil {
+			logger.Sugar().Errorw("处理friend请求暂时失败", "operation_key", operationKey, "error", dispatchErr)
+			return nil, nil, dispatchErr
 		}
-	}
-	if hasOperationKey {
+		if resp == nil {
+			return nil, nil, errors.New("friend dispatch returned nil response")
+		}
 		encoded, marshalErr := proto.Marshal(resp)
 		if marshalErr != nil {
-			return marshalErr
+			return nil, nil, marshalErr
 		}
-		if saveErr := db.SaveConsumerOperationResult("friend", operationKey, encoded); saveErr != nil {
-			return saveErr
+		envelopePayload, marshalErr := mq.MarshalEnvelope(envelope.MessageType_FRIEND_RESPONSE, resp)
+		if marshalErr != nil {
+			return nil, nil, marshalErr
 		}
-	}
-
-	return h.sendResponse(req.FromKafkaTopic, resp)
+		return encoded, []db.PendingOutboxEvent{{
+			EventID: db.StableEventID("friend", operationKey, "response"),
+			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
+		}}, nil
+	})
+	return err
 }
 
 func (h *FriendHandler) handleQueryFriendList(req *friend.RequestMessage, payload *friend.QueryFriendList) (*friend.ResponseMessage, error) {
+	return h.handleQueryFriendListWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleQueryFriendListWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryFriendList) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	contacts, err := db.GetFriendList(payload.GetUserId())
+	contacts, err := db.GetFriendListWithDB(database, payload.GetUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +151,10 @@ func (h *FriendHandler) handleQueryFriendList(req *friend.RequestMessage, payloa
 }
 
 func (h *FriendHandler) handleRemoveDirectFriend(req *friend.RequestMessage, payload *friend.RemoveDirectFriend) (*friend.ResponseMessage, error) {
+	return h.handleRemoveDirectFriendWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleRemoveDirectFriendWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.RemoveDirectFriend) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 || payload.GetUserId() == payload.GetFriendId() {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -160,8 +168,9 @@ func (h *FriendHandler) handleRemoveDirectFriend(req *friend.RequestMessage, pay
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	found, updateTime, err := db.RemoveDirectFriendPair(payload.GetUserId(), payload.GetFriendId())
+	found, updateTime, err := db.RemoveDirectFriendPairWithDB(database, payload.GetUserId(), payload.GetFriendId())
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +195,10 @@ func (h *FriendHandler) handleRemoveDirectFriend(req *friend.RequestMessage, pay
 }
 
 func (h *FriendHandler) handleUpdateFriendAlias(req *friend.RequestMessage, payload *friend.UpdateFriendAlias) (*friend.ResponseMessage, error) {
+	return h.handleUpdateFriendAliasWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleUpdateFriendAliasWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateFriendAlias) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -199,8 +212,9 @@ func (h *FriendHandler) handleUpdateFriendAlias(req *friend.RequestMessage, payl
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	found, updateTime, err := db.UpdateFriendAlias(payload.GetUserId(), payload.GetFriendId(), payload.GetAlias())
+	found, updateTime, err := db.UpdateFriendAliasWithDB(database, payload.GetUserId(), payload.GetFriendId(), payload.GetAlias())
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +239,10 @@ func (h *FriendHandler) handleUpdateFriendAlias(req *friend.RequestMessage, payl
 }
 
 func (h *FriendHandler) handleUpdateFriendNotify(req *friend.RequestMessage, payload *friend.UpdateFriendNotify) (*friend.ResponseMessage, error) {
+	return h.handleUpdateFriendNotifyWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleUpdateFriendNotifyWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateFriendNotify) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -238,8 +256,9 @@ func (h *FriendHandler) handleUpdateFriendNotify(req *friend.RequestMessage, pay
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	found, updateTime, err := db.UpdateFriendNotify(payload.GetUserId(), payload.GetFriendId(), payload.GetIsNotify())
+	found, updateTime, err := db.UpdateFriendNotifyWithDB(database, payload.GetUserId(), payload.GetFriendId(), payload.GetIsNotify())
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +283,10 @@ func (h *FriendHandler) handleUpdateFriendNotify(req *friend.RequestMessage, pay
 }
 
 func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
+	return h.handleCreateGroupWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleCreateGroupWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
 	if payload.GetOwnerUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetGroupName() == "" {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -277,8 +300,9 @@ func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *f
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	owner, err := db.GetUserById(payload.GetOwnerUserId())
+	owner, err := db.GetUserByIDWithDB(database, payload.GetOwnerUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +320,7 @@ func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *f
 		}, nil
 	}
 
-	alreadyExists, updateTime, err := db.CreateGroupWithOwner(payload.GetOwnerUserId(), payload.GetGroupId(), payload.GetGroupName())
+	alreadyExists, updateTime, err := db.CreateGroupWithOwnerWithDB(database, payload.GetOwnerUserId(), payload.GetGroupId(), payload.GetGroupName())
 	if err != nil {
 		return nil, err
 	}
@@ -321,14 +345,19 @@ func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *f
 }
 
 func (h *FriendHandler) handleQueryGroup(req *friend.RequestMessage, payload *friend.QueryGroup) (*friend.ResponseMessage, error) {
+	return h.handleQueryGroupWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryGroup) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	group, err := db.GetGroupByID(payload.GetGroupId())
+	group, err := db.GetGroupByIDWithDB(database, payload.GetGroupId())
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +385,10 @@ func (h *FriendHandler) handleQueryGroup(req *friend.RequestMessage, payload *fr
 }
 
 func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payload *friend.UpdateGroupAvatar) (*friend.ResponseMessage, error) {
+	return h.handleUpdateGroupAvatarWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleUpdateGroupAvatarWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateGroupAvatar) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetAvatarHash() == "" {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -369,8 +402,9 @@ func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payl
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	_, isMember, err := db.RequireGroupManager(payload.GetGroupId(), payload.GetRequestUserId())
+	_, isMember, err := db.RequireGroupManagerWithDB(database, payload.GetGroupId(), payload.GetRequestUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +422,7 @@ func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payl
 		}, nil
 	}
 
-	updated, updateTime, err := db.UpdateGroupAvatar(payload.GetGroupId(), payload.GetAvatarHash())
+	updated, updateTime, err := db.UpdateGroupAvatarWithDB(database, payload.GetGroupId(), payload.GetAvatarHash())
 	if err != nil {
 		return nil, err
 	}
@@ -413,14 +447,19 @@ func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payl
 }
 
 func (h *FriendHandler) handleQueryGroupMembers(req *friend.RequestMessage, payload *friend.QueryGroupMembers) (*friend.ResponseMessage, error) {
+	return h.handleQueryGroupMembersWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryGroupMembers) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	isMember, err := db.IsActiveGroupMember(payload.GetGroupId(), payload.GetRequestUserId())
+	isMember, err := db.IsActiveGroupMemberWithDB(database, payload.GetGroupId(), payload.GetRequestUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +470,7 @@ func (h *FriendHandler) handleQueryGroupMembers(req *friend.RequestMessage, payl
 		}, nil
 	}
 
-	members, err := db.GetGroupMembers(payload.GetGroupId())
+	members, err := db.GetGroupMembersWithDB(database, payload.GetGroupId())
 	if err != nil {
 		return nil, err
 	}
@@ -461,14 +500,19 @@ func (h *FriendHandler) handleQueryGroupMembers(req *friend.RequestMessage, payl
 }
 
 func (h *FriendHandler) handleQueryJoinedGroups(req *friend.RequestMessage, payload *friend.QueryJoinedGroups) (*friend.ResponseMessage, error) {
+	return h.handleQueryJoinedGroupsWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryJoinedGroups) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	groups, err := db.GetJoinedGroups(payload.GetUserId())
+	groups, err := db.GetJoinedGroupsWithDB(database, payload.GetUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -496,6 +540,10 @@ func (h *FriendHandler) handleQueryJoinedGroups(req *friend.RequestMessage, payl
 }
 
 func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payload *friend.RemoveGroupMember) (*friend.ResponseMessage, error) {
+	return h.handleRemoveGroupMemberWithDB(h.database, req, payload)
+}
+
+func (h *FriendHandler) handleRemoveGroupMemberWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.RemoveGroupMember) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetUserId() <= 0 {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
@@ -522,8 +570,9 @@ func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payl
 			},
 		}, nil
 	}
+	database = h.resolveDatabase(database)
 
-	groupExists, removed, updateTime, err := db.RemoveUserFromGroup(payload.GetGroupId(), payload.GetUserId())
+	groupExists, removed, updateTime, err := db.RemoveUserFromGroupWithDB(database, payload.GetGroupId(), payload.GetUserId())
 	if err != nil {
 		return nil, err
 	}
@@ -545,9 +594,4 @@ func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payl
 			},
 		},
 	}, nil
-}
-
-func (h *FriendHandler) sendResponse(topic string, resp *friend.ResponseMessage) error {
-	_, err := mq.PublishEnvelope(publisher.PublishMessage, topic, envelope.MessageType_FRIEND_RESPONSE, resp)
-	return err
 }

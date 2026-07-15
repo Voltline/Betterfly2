@@ -132,6 +132,14 @@ var (
 		Help:    "APNs request latency",
 		Buckets: prometheus.DefBuckets,
 	})
+	ReliabilityCleanupRowsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_reliability_cleanup_rows_total",
+		Help: "Rows removed by bounded reliability cleanup workers",
+	}, []string{"service", "kind"})
+	OutboxPublishFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_outbox_publish_failures_total",
+		Help: "Outbox publication failures by service; events remain retryable",
+	}, []string{"service"})
 	ABTestCacheRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "betterfly_abtest_cache_requests_total",
 		Help: "AB Test evaluation snapshot cache requests",

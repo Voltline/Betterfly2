@@ -3,10 +3,9 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.example.yaml
   - redis.yaml
   - kafka.yaml
-  - infrastructure-jobs.yaml
+  - kafka-topics-job.yaml
   - rustfs.yaml
   - auth-service.yaml
   - data-forwarding.yaml

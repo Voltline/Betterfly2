@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,27 +19,50 @@ import (
 )
 
 type Service struct {
-	store      Store
-	cacheTTL   time.Duration
-	now        func() time.Time
-	snapshot   atomic.Pointer[evaluationSnapshot]
-	generation atomic.Uint64
-	reload     singleflight.Group
-	bus        InvalidationBus
-	ctx        context.Context
-	cancel     context.CancelFunc
+	store          Store
+	cacheTTL       time.Duration
+	now            func() time.Time
+	snapshot       atomic.Pointer[evaluationSnapshot]
+	generation     atomic.Uint64
+	reload         singleflight.Group
+	overrideReload singleflight.Group
+	bus            InvalidationBus
+	ctx            context.Context
+	cancel         context.CancelFunc
+	overrideTTL    time.Duration
+	overrideMax    int
+	overrideMu     sync.Mutex
+	overrides      map[string]overrideCacheEntry
+}
+
+type overrideCacheEntry struct {
+	overrides []Override
+	loadedAt  time.Time
 }
 
 func NewService(store Store) *Service {
-	return NewServiceWithInvalidation(store, nil, evaluationCacheTTL())
+	return NewServiceWithContext(context.TODO(), store, nil, evaluationCacheTTL())
 }
 
 func NewServiceWithInvalidation(store Store, bus InvalidationBus, cacheTTL time.Duration) *Service {
-	if cacheTTL <= 0 || cacheTTL > 5*time.Second {
+	return NewServiceWithContext(context.TODO(), store, bus, cacheTTL)
+}
+
+func NewServiceWithContext(parent context.Context, store Store, bus InvalidationBus, cacheTTL time.Duration) *Service {
+	if parent == nil {
+		parent = context.TODO()
+	}
+	if cacheTTL <= 0 {
+		cacheTTL = evaluationCacheTTL()
+	}
+	if cacheTTL > 5*time.Second {
 		cacheTTL = 5 * time.Second
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	service := &Service{store: store, cacheTTL: cacheTTL, now: time.Now, bus: bus, ctx: ctx, cancel: cancel}
+	ctx, cancel := context.WithCancel(parent)
+	service := &Service{
+		store: store, cacheTTL: cacheTTL, now: time.Now, bus: bus, ctx: ctx, cancel: cancel,
+		overrideTTL: overrideCacheTTL(cacheTTL), overrideMax: overrideCacheMaxEntries(), overrides: make(map[string]overrideCacheEntry),
+	}
 	if bus != nil {
 		go func() {
 			if err := bus.Subscribe(ctx, service.invalidateLocal); err != nil && ctx.Err() == nil {
@@ -108,6 +132,9 @@ func (s *Service) Close() {
 func (s *Service) invalidateLocal() {
 	s.generation.Add(1)
 	s.snapshot.Store(nil)
+	s.overrideMu.Lock()
+	s.overrides = make(map[string]overrideCacheEntry)
+	s.overrideMu.Unlock()
 }
 
 func (s *Service) invalidateAfterWrite(err error) {
@@ -118,7 +145,7 @@ func (s *Service) invalidateAfterWrite(err error) {
 	if s.bus == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(s.ctx, time.Second)
 	defer cancel()
 	if publishErr := s.bus.Publish(ctx); publishErr != nil {
 		logger.Sugar().Warnw("发布AB Test缓存失效通知失败，将依赖短TTL收敛", "error", publishErr)
@@ -139,9 +166,7 @@ func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 	if err != nil {
 		return EvaluateResponse{}, err
 	}
-	overrideStarted := time.Now()
-	overrides, err := s.store.ListOverridesForSubject(req.SubjectType, req.SubjectID, snapshot.experimentIDs)
-	metrics.RecordABTestDatabaseQuery("subject_overrides", overrideStarted)
+	overrides, err := s.subjectOverrides(req.SubjectType, req.SubjectID, snapshot)
 	if err != nil {
 		return EvaluateResponse{}, err
 	}
@@ -169,6 +194,79 @@ func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 	}
 
 	return resp, nil
+}
+
+func (s *Service) subjectOverrides(subjectType, subjectID string, snapshot *evaluationSnapshot) ([]Override, error) {
+	key := fmt.Sprintf("%d:%s:%s", snapshot.generation, subjectType, subjectID)
+	now := s.now()
+	if overrides, ok := s.cachedSubjectOverrides(key, now); ok {
+		metrics.RecordABTestCache("override_hit")
+		return overrides, nil
+	}
+	metrics.RecordABTestCache("override_miss")
+
+	value, err, _ := s.overrideReload.Do(key, func() (any, error) {
+		if overrides, ok := s.cachedSubjectOverrides(key, s.now()); ok {
+			return overrides, nil
+		}
+		started := time.Now()
+		overrides, loadErr := s.store.ListOverridesForSubject(subjectType, subjectID, snapshot.experimentIDs)
+		metrics.RecordABTestDatabaseQuery("subject_overrides", started)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		immutable := cloneOverrides(overrides)
+		s.overrideMu.Lock()
+		s.evictOverrideEntryLocked(now)
+		s.overrides[key] = overrideCacheEntry{overrides: immutable, loadedAt: s.now()}
+		s.overrideMu.Unlock()
+		return immutable, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cloneOverrides(value.([]Override)), nil
+}
+
+func (s *Service) cachedSubjectOverrides(key string, now time.Time) ([]Override, bool) {
+	s.overrideMu.Lock()
+	defer s.overrideMu.Unlock()
+	cached, ok := s.overrides[key]
+	if !ok || now.Sub(cached.loadedAt) >= s.overrideTTL {
+		return nil, false
+	}
+	return cloneOverrides(cached.overrides), true
+}
+
+func (s *Service) evictOverrideEntryLocked(now time.Time) {
+	if len(s.overrides) < s.overrideMax {
+		return
+	}
+	var oldestKey string
+	var oldest time.Time
+	for key, entry := range s.overrides {
+		if now.Sub(entry.loadedAt) >= s.overrideTTL {
+			delete(s.overrides, key)
+			if len(s.overrides) < s.overrideMax {
+				return
+			}
+			continue
+		}
+		if oldestKey == "" || entry.loadedAt.Before(oldest) {
+			oldestKey, oldest = key, entry.loadedAt
+		}
+	}
+	if oldestKey != "" {
+		delete(s.overrides, oldestKey)
+	}
+}
+
+func cloneOverrides(values []Override) []Override {
+	result := make([]Override, 0, len(values))
+	for _, value := range values {
+		result = append(result, cloneOverride(value))
+	}
+	return result
 }
 
 type evaluationSnapshot struct {
@@ -222,6 +320,28 @@ func evaluationCacheTTL() time.Duration {
 	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("ABTEST_CACHE_MAX_STALENESS")))
 	if err != nil || value <= 0 || value > 5*time.Second {
 		return 5 * time.Second
+	}
+	return value
+}
+
+func overrideCacheTTL(maxStaleness time.Duration) time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("ABTEST_OVERRIDE_CACHE_TTL")))
+	if err != nil || value <= 0 {
+		value = 3 * time.Second
+	}
+	if value > maxStaleness {
+		value = maxStaleness
+	}
+	return value
+}
+
+func overrideCacheMaxEntries() int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("ABTEST_OVERRIDE_CACHE_MAX_ENTRIES")))
+	if err != nil || value <= 0 {
+		return 10000
+	}
+	if value > 100000 {
+		return 100000
 	}
 	return value
 }

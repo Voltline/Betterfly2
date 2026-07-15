@@ -3,12 +3,54 @@ package handler
 import (
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/kafkaconsumer"
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+func TestHandleMessageDatabaseFailureIsRetriedWithoutCompletedInbox(t *testing.T) {
+	database, mock := setupMockDB(t)
+	handler := &FriendHandler{database: database}
+	request := &friend.RequestMessage{
+		FromKafkaTopic: "df-friend-test", TargetUserId: 1001,
+		Payload: &friend.RequestMessage_QueryFriendList{QueryFriendList: &friend.QueryFriendList{UserId: 1001}},
+	}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := kafkaconsumer.WithOperationKey(context.Background(), "friend-service/0/19")
+	injected := errors.New("database temporarily unavailable")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT friends\.friend_id AS user_id`).WillReturnError(injected)
+	mock.ExpectRollback()
+	if err := handler.HandleMessage(ctx, payload); !errors.Is(err, injected) {
+		t.Fatalf("expected transient database error, got %v", err)
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT friends\.friend_id AS user_id`).WillReturnRows(sqlmock.NewRows([]string{
+		"user_id", "account", "name", "avatar", "alias", "is_notify", "update_time",
+	}))
+	mock.ExpectExec(`INSERT INTO "outbox_events"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	if err := handler.HandleMessage(ctx, payload); err != nil {
+		t.Fatalf("retry after transient failure failed: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func setupMockDB(t *testing.T) (*gorm.DB, sqlmock.Sqlmock) {
 	t.Helper()

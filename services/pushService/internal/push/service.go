@@ -13,6 +13,7 @@ import (
 
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
 )
@@ -25,6 +26,12 @@ type Service struct {
 	now            func() time.Time
 	maxConcurrency int
 	deliveryLease  time.Duration
+	workerBatch    int
+	workerPoll     time.Duration
+	sendTimeout    time.Duration
+	maxAttempts    int
+	retryInitial   time.Duration
+	retryMax       time.Duration
 }
 
 type deliveryClaimPendingError struct{ retryAfter time.Duration }
@@ -33,11 +40,24 @@ func (e *deliveryClaimPendingError) Error() string             { return "APNs de
 func (e *deliveryClaimPendingError) RetryAfter() time.Duration { return e.retryAfter }
 
 func NewService(store Store, sender Sender, publisher Publisher, bundleID string) *Service {
-	return &Service{
+	service := &Service{
 		store: store, sender: sender, publisher: publisher, bundleID: strings.TrimSpace(bundleID), now: time.Now,
 		maxConcurrency: envPositiveInt("PUSH_APNS_MAX_CONCURRENCY", 16),
 		deliveryLease:  envPositiveDuration("PUSH_DELIVERY_LEASE", 30*time.Second),
+		workerBatch:    envPositiveInt("PUSH_WORKER_BATCH_SIZE", 256),
+		workerPoll:     envPositiveDuration("PUSH_WORKER_POLL_INTERVAL", 250*time.Millisecond),
+		sendTimeout:    envPositiveDuration("PUSH_APNS_SEND_TIMEOUT", 10*time.Second),
+		maxAttempts:    envPositiveInt("PUSH_DELIVERY_MAX_ATTEMPTS", 10),
+		retryInitial:   envPositiveDuration("PUSH_DELIVERY_RETRY_INITIAL_BACKOFF", time.Second),
+		retryMax:       envPositiveDuration("PUSH_DELIVERY_RETRY_MAX_BACKOFF", 15*time.Minute),
 	}
+	if service.sendTimeout >= service.deliveryLease {
+		service.sendTimeout = service.deliveryLease / 2
+	}
+	if service.retryInitial > service.retryMax {
+		service.retryInitial = service.retryMax
+	}
+	return service
 }
 
 func (s *Service) Ready(ctx context.Context) error {
@@ -50,6 +70,11 @@ func (s *Service) Ready(ctx context.Context) error {
 func (s *Service) Handle(ctx context.Context, request *pushpb.RequestMessage) error {
 	if request == nil {
 		return ErrInvalidRequest
+	}
+	if operationKey, ok := kafkaconsumer.OperationKeyFromContext(ctx); ok {
+		if durable, supported := s.store.(DurableStore); supported {
+			return durable.EnqueueRequest(ctx, operationKey, request, s.bundleID)
+		}
 	}
 	switch payload := request.Payload.(type) {
 	case *pushpb.RequestMessage_ClientCommand:

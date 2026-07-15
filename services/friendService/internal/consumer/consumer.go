@@ -76,7 +76,7 @@ func (h *KafkaConsumerGroupHandler) process(ctx context.Context, message *sarama
 		return kafkaconsumer.Permanentf("incomplete friend request")
 	}
 	if err := h.handler.HandleMessage(ctx, env.GetPayload()); err != nil {
-		return kafkaconsumer.Transient(err)
+		return kafkaconsumer.ResultForError(err)
 	}
 	return kafkaconsumer.Success()
 }

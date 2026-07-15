@@ -79,6 +79,19 @@ type Store interface {
 	ExpireRinging(context.Context, time.Time, int64) ([]Session, error)
 }
 
+type PendingEvent struct {
+	EventID      string
+	OperationKey string
+	Topic        string
+	Payload      []byte
+}
+
+type AtomicStore interface {
+	OperationCompleted(context.Context, string) (bool, error)
+	CreateSessionWithEvents(context.Context, Session, string, []PendingEvent) (bool, error)
+	TransitionSessionWithEvents(context.Context, Session, Session, bool, string, []PendingEvent) (bool, error)
+}
+
 type Publisher interface {
 	Publish(context.Context, string, *callpb.Delivery) error
 	PublishPush(context.Context, string, *pushpb.RequestMessage) error

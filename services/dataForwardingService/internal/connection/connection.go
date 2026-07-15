@@ -43,6 +43,8 @@ type ConnectionManager struct {
 	loggedInCount       int64
 	userLocks           *keyedLocker
 	beforeExternalLogin func(context.Context, string) error
+	sessionLeaseTTL     time.Duration
+	routeLeaseTTL       time.Duration
 }
 
 func NewConnectionManager() *ConnectionManager {
@@ -52,6 +54,17 @@ func NewConnectionManager() *ConnectionManager {
 		userConnections: &sync.Map{},
 		instanceID:      instanceID,
 		userLocks:       newKeyedLocker(),
+		sessionLeaseTTL: 2 * time.Minute,
+		routeLeaseTTL:   90 * time.Second,
+	}
+}
+
+func (cm *ConnectionManager) ConfigureSessionLeases(sessionTTL, routeTTL time.Duration) {
+	if sessionTTL > 0 {
+		cm.sessionLeaseTTL = sessionTTL
+	}
+	if routeTTL > 0 {
+		cm.routeLeaseTTL = routeTTL
 	}
 }
 
@@ -116,7 +129,7 @@ func (cm *ConnectionManager) Login(ctx context.Context, connectionID, rawUserID 
 	}
 
 	claimed := redisClient.SessionData{ConnectionID: connectionID, ContainerID: containerID, OwnerToken: ownerToken}
-	if err := dsm.ClaimSessionAndRoute(ctx, userID, claimed, 24*time.Hour); err != nil {
+	if err := dsm.ClaimSessionAndRoute(ctx, userID, claimed, cm.sessionLeaseTTL, cm.routeLeaseTTL); err != nil {
 		return fmt.Errorf("声明会话所有权失败: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

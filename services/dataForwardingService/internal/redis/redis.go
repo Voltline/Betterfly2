@@ -17,6 +17,7 @@ var ctx = context.Background()
 const routeLeaseTTL = 90 * time.Second
 
 var ErrRouteNotFound = errors.New("无有效WebSocket路由")
+var ErrSessionOwnershipLost = errors.New("WebSocket会话所有权已失效")
 
 func routeLeaseKey(userID string) string { return "ws_route_lease:" + userID }
 

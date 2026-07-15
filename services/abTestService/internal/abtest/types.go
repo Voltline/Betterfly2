@@ -139,6 +139,7 @@ type Store interface {
 	AddGroup(experimentID int64, req GroupInput) (Group, error)
 	AddOverride(experimentID int64, req OverrideInput) (Override, error)
 	ListEvaluationExperiments() ([]Experiment, error)
+	ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]Override, error)
 }
 
 func NowString() string {

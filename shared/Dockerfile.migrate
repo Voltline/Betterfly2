@@ -1,0 +1,12 @@
+FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+COPY proto ./proto
+COPY shared ./shared
+WORKDIR /app/shared
+RUN go build -o /out/betterfly-migrate ./cmd/migrate
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/betterfly-migrate /usr/local/bin/betterfly-migrate
+ENTRYPOINT ["/usr/local/bin/betterfly-migrate"]

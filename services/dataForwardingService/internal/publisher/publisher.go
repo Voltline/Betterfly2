@@ -56,6 +56,11 @@ func InitKafkaProducer() error {
 		saramaConfig.Producer.Return.Successes = true
 		saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
 		saramaConfig.Producer.Retry.Max = 5
+		networkTimeout := envDuration("KAFKA_NETWORK_TIMEOUT", 10*time.Second)
+		saramaConfig.Net.DialTimeout = networkTimeout
+		saramaConfig.Net.ReadTimeout = networkTimeout
+		saramaConfig.Net.WriteTimeout = networkTimeout
+		saramaConfig.Producer.Timeout = networkTimeout
 
 		// 解析多个 Kafka broker 地址
 		brokerList := utils.SplitBrokers(broker)
@@ -106,12 +111,20 @@ func PublishRawMessage(payload []byte, targetTopic string, headers []sarama.Reco
 }
 
 func PublishRawMessageContext(ctx context.Context, payload []byte, targetTopic string, headers []sarama.RecordHeader) error {
-	result := make(chan error, 1)
-	go func() { result <- PublishRawMessage(payload, targetTopic, headers) }()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-result:
+	if err := ctx.Err(); err != nil {
 		return err
 	}
+	err := PublishRawMessage(payload, targetTopic, headers)
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value, err := time.ParseDuration(os.Getenv(key))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

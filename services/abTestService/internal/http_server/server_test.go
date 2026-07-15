@@ -23,6 +23,19 @@ func (s *recordingStore) ListExperiments() ([]abtest.Experiment, error) { return
 func (s *recordingStore) ListEvaluationExperiments() ([]abtest.Experiment, error) {
 	return s.experiments, nil
 }
+func (s *recordingStore) ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]abtest.Override, error) {
+	active := make(map[int64]struct{}, len(experimentIDs))
+	for _, id := range experimentIDs {
+		active[id] = struct{}{}
+	}
+	var result []abtest.Override
+	for _, override := range s.overrides {
+		if _, ok := active[override.ExperimentID]; ok && override.SubjectType == subjectType && override.SubjectID == subjectID {
+			result = append(result, override)
+		}
+	}
+	return result, nil
+}
 func (s *recordingStore) GetExperiment(id int64) (abtest.Experiment, error) {
 	for _, experiment := range s.experiments {
 		if experiment.ID == id {

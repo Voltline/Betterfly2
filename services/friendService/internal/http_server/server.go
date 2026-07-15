@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"friendService/internal/publisher"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type readinessCheck func(context.Context) error
@@ -28,6 +29,7 @@ func NewWithReadiness(addr string, ready readinessCheck) *http.Server {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+	mux.Handle("GET /metrics", promhttp.Handler())
 	return &http.Server{
 		Addr:              addr,
 		Handler:           mux,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	callpb "Betterfly2/proto/call"
@@ -16,6 +17,11 @@ import (
 const deadlinesKey = "call:ring_deadlines"
 
 var createSessionScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) == ARGV[1]
+  and redis.call('GET', KEYS[2]) == ARGV[1]
+  and redis.call('EXISTS', KEYS[3]) == 1 then
+  return 2
+end
 if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[2]) == 1 then
   return 0
 end
@@ -54,18 +60,24 @@ func (s *RedisStore) Ping(ctx context.Context) error {
 func (s *RedisStore) UserTopic(ctx context.Context, userID int64) (string, error) {
 	userIDString := strconv.FormatInt(userID, 10)
 	topic, err := s.client.HGet(ctx, "ws_connection_mapping", userIDString).Result()
-	if errors.Is(err, redis.Nil) || topic == "" {
+	if errors.Is(err, redis.Nil) {
 		return "", ErrUserOffline
 	}
 	if err != nil {
 		return "", err
+	}
+	if topic == "" {
+		return "", ErrUserOffline
 	}
 	lease, err := s.client.Get(ctx, "ws_route_lease:"+userIDString).Result()
-	if errors.Is(err, redis.Nil) || lease == "" || lease != topic {
+	if errors.Is(err, redis.Nil) {
 		return "", ErrUserOffline
 	}
 	if err != nil {
 		return "", err
+	}
+	if lease == "" || !strings.HasPrefix(lease, topic+"|") {
+		return "", ErrUserOffline
 	}
 	return topic, nil
 }
@@ -120,6 +132,9 @@ func (s *RedisStore) AcceptSession(ctx context.Context, callID string, userID in
 		if session.CalleeUserID != userID {
 			return 0, ErrForbidden
 		}
+		if session.State == StateActive && session.Answer != nil && *session.Answer == answer {
+			return s.activeTTL, nil
+		}
 		if session.State != StateRinging {
 			return 0, ErrInvalidState
 		}
@@ -139,6 +154,9 @@ func (s *RedisStore) RejectSession(ctx context.Context, callID string, userID in
 		if session.CalleeUserID != userID {
 			return 0, ErrForbidden
 		}
+		if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
+			return s.terminatedTTL, nil
+		}
 		if session.State != StateRinging {
 			return 0, ErrInvalidState
 		}
@@ -151,6 +169,9 @@ func (s *RedisStore) EndSession(ctx context.Context, callID string, userID int64
 	return s.updateSession(ctx, callID, func(session *Session) (time.Duration, error) {
 		if _, err := session.Peer(userID); err != nil {
 			return 0, err
+		}
+		if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
+			return s.terminatedTTL, nil
 		}
 		if session.State != StateRinging && session.State != StateActive {
 			return 0, ErrInvalidState

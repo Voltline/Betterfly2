@@ -37,6 +37,20 @@ redis.call('SET', KEYS[3], ARGV[3] .. '|' .. ARGV[4], 'PX', ARGV[6])
 return 1
 `)
 
+var refreshOwnedSessionAndRouteScript = redis.NewScript(`
+local session = redis.call('GET', KEYS[1])
+local mapped = redis.call('HGET', KEYS[2], ARGV[1])
+local leased = redis.call('GET', KEYS[3])
+if session ~= ARGV[2]
+  or mapped ~= ARGV[3]
+  or leased ~= ARGV[3] .. '|' .. ARGV[4] then
+  return 0
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[5])
+redis.call('PEXPIRE', KEYS[3], ARGV[6])
+return 1
+`)
+
 var removeOwnedSessionAndRouteScript = redis.NewScript(`
 local removed = 0
 if redis.call('GET', KEYS[1]) == ARGV[2] then
@@ -79,12 +93,32 @@ func (dsm *DistributedSessionManager) GetUserSession(ctx context.Context, userID
 	return ParseSessionData(value), true, nil
 }
 
-func (dsm *DistributedSessionManager) ClaimSessionAndRoute(ctx context.Context, userID string, data SessionData, sessionTTL time.Duration) error {
+func (dsm *DistributedSessionManager) ClaimSessionAndRoute(ctx context.Context, userID string, data SessionData, sessionTTL, routeTTL time.Duration) error {
 	return claimSessionAndRouteScript.Run(ctx, Rdb,
 		[]string{sessionKey(userID), "ws_connection_mapping", routeLeaseKey(userID)},
 		userID, encodeSession(data), data.ContainerID, data.OwnerToken,
-		sessionTTL.Milliseconds(), routeLeaseTTL.Milliseconds(),
+		sessionTTL.Milliseconds(), routeTTL.Milliseconds(),
 	).Err()
+}
+
+func (dsm *DistributedSessionManager) RefreshOwnedSessionAndRoute(
+	ctx context.Context,
+	userID string,
+	data SessionData,
+	sessionTTL, routeTTL time.Duration,
+) error {
+	updated, err := refreshOwnedSessionAndRouteScript.Run(ctx, Rdb,
+		[]string{sessionKey(userID), "ws_connection_mapping", routeLeaseKey(userID)},
+		userID, encodeSession(data), data.ContainerID, data.OwnerToken,
+		sessionTTL.Milliseconds(), routeTTL.Milliseconds(),
+	).Int()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		return ErrSessionOwnershipLost
+	}
+	return nil
 }
 
 func (dsm *DistributedSessionManager) RemoveOwnedSessionAndRoute(ctx context.Context, userID string, data SessionData) error {

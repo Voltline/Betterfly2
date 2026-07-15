@@ -123,7 +123,7 @@ func startKafkaConsumer(ctx context.Context) error {
 		_ = consumerGroupClient.Close()
 	}()
 
-	handler := &consumer.KafkaConsumerGroupHandler{}
+	handler := consumer.NewKafkaConsumerGroupHandler(nil)
 	for {
 		if ctx.Err() != nil {
 			return nil

@@ -212,7 +212,7 @@ func startKafkaConsumer(ctx context.Context) error {
 	}()
 
 	// 创建消息处理器
-	handler := &consumer.KafkaConsumerGroupHandler{}
+	handler := consumer.NewKafkaConsumerGroupHandler(nil)
 
 	// 消费循环遵循外部上下文，避免阻塞主启动流程。
 	sugar.Info("启动 Kafka 消息消费循环...")

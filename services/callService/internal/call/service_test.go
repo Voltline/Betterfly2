@@ -10,6 +10,7 @@ import (
 
 	callpb "Betterfly2/proto/call"
 	pushpb "Betterfly2/proto/push"
+	"Betterfly2/shared/kafkaconsumer"
 )
 
 type memoryStore struct {
@@ -35,6 +36,9 @@ func (s *memoryStore) UserTopic(_ context.Context, userID int64) (string, error)
 func (s *memoryStore) CreateSession(_ context.Context, session Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, exists := s.sessions[session.ID]; exists {
+		return nil
+	}
 	for _, existing := range s.sessions {
 		if existing.State == StateEnded {
 			continue
@@ -67,6 +71,9 @@ func (s *memoryStore) AcceptSession(_ context.Context, callID string, userID int
 	if session.CalleeUserID != userID {
 		return Session{}, ErrForbidden
 	}
+	if session.State == StateActive && session.Answer != nil && *session.Answer == answer {
+		return session, nil
+	}
 	if session.State != StateRinging {
 		return Session{}, ErrInvalidState
 	}
@@ -88,6 +95,9 @@ func (s *memoryStore) RejectSession(_ context.Context, callID string, userID int
 	if session.CalleeUserID != userID {
 		return Session{}, ErrForbidden
 	}
+	if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
+		return session, nil
+	}
 	if session.State != StateRinging {
 		return Session{}, ErrInvalidState
 	}
@@ -105,6 +115,9 @@ func (s *memoryStore) EndSession(_ context.Context, callID string, userID int64,
 	}
 	if _, err := session.Peer(userID); err != nil {
 		return Session{}, err
+	}
+	if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
+		return session, nil
 	}
 	if session.State == StateEnded {
 		return Session{}, ErrInvalidState
@@ -135,20 +148,86 @@ type publishedDelivery struct {
 }
 
 type memoryPublisher struct {
-	deliveries []publishedDelivery
-	pushes     []*pushpb.RequestMessage
-	pushTopics []string
+	deliveries  []publishedDelivery
+	pushes      []*pushpb.RequestMessage
+	pushTopics  []string
+	failPublish int
+	failPush    int
 }
 
 func (p *memoryPublisher) PublishPush(_ context.Context, topic string, request *pushpb.RequestMessage) error {
+	if p.failPush > 0 {
+		p.failPush--
+		return errors.New("temporary push publish failure")
+	}
 	p.pushes = append(p.pushes, request)
 	p.pushTopics = append(p.pushTopics, topic)
 	return nil
 }
 
 func (p *memoryPublisher) Publish(_ context.Context, topic string, delivery *callpb.Delivery) error {
+	if p.failPublish > 0 {
+		p.failPublish--
+		return errors.New("temporary delivery publish failure")
+	}
 	p.deliveries = append(p.deliveries, publishedDelivery{topic: topic, delivery: delivery})
 	return nil
+}
+
+func TestInitiateRetryUsesStableCallIDAfterResponsePublishFailure(t *testing.T) {
+	store := newMemoryStore()
+	store.topics[1] = "df-a"
+	publisher := &memoryPublisher{failPublish: 1}
+	service := NewService(store, publisher, testICE{}, time.Minute)
+	ctx := kafkaconsumer.WithOperationKey(context.Background(), "call-service/0/42")
+
+	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err == nil {
+		t.Fatal("response publication failure was committed as success")
+	}
+	if len(store.sessions) != 1 {
+		t.Fatalf("first attempt created %d sessions", len(store.sessions))
+	}
+	var firstCallID string
+	for id := range store.sessions {
+		firstCallID = id
+	}
+	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatalf("idempotent retry failed: %v", err)
+	}
+	if len(store.sessions) != 1 {
+		t.Fatalf("retry created duplicate sessions: %d", len(store.sessions))
+	}
+	if len(publisher.deliveries) == 0 || publisher.deliveries[0].delivery.GetEvent().GetCallId() != firstCallID {
+		t.Fatalf("retry did not reuse stable call ID: first=%s deliveries=%+v", firstCallID, publisher.deliveries)
+	}
+}
+
+func TestAcceptRetryReplaysAfterStateChangedButResponsePublishFailed(t *testing.T) {
+	store := newMemoryStore()
+	store.topics[1] = "df-a"
+	store.topics[2] = "df-b"
+	publisher := &memoryPublisher{}
+	service := NewService(store, publisher, testICE{}, time.Minute)
+	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+		t.Fatal(err)
+	}
+	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
+	request := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
+		CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
+	}}}}
+	publisher.failPublish = 1
+	if err := service.Handle(context.Background(), request); err == nil {
+		t.Fatal("accepted side effect with failed response publication was committed")
+	}
+	if store.sessions[callID].State != StateActive {
+		t.Fatal("first accept did not apply state transition")
+	}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatalf("idempotent accept retry failed: %v", err)
+	}
+	if countEvents(publisher, callpb.CallEventType_CALL_ACCEPTED) != 2 {
+		t.Fatalf("retry did not publish accepted responses: %+v", publisher.deliveries)
+	}
 }
 
 type testICE struct{}

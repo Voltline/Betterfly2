@@ -25,7 +25,7 @@ func NewHTTPServer() (*HTTPServer, error) {
 	sugar := logger.Sugar()
 
 	// 初始化数据库连接并自动迁移表（确保FileMetadata表存在）
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.Message{}, &db.FileMetadata{})
+	_ = db.DB()
 
 	// 初始化RustFS客户端
 	rustfsClient, err := rustfs.NewRustFSClient()

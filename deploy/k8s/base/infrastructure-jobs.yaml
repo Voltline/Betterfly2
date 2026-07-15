@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: betterfly-db-migrate
+  namespace: betterfly2
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app: betterfly-db-migrate
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: betterfly2/db-migrate:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+            - name: DB_MAX_OPEN_CONNS
+              value: "4"
+            - name: DB_MAX_IDLE_CONNS
+              value: "1"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: betterfly-kafka-topics
+  namespace: betterfly2
+spec:
+  backoffLimit: 12
+  template:
+    metadata:
+      labels:
+        app: betterfly-kafka-topics
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: topics
+          image: apache/kafka:latest
+          command:
+            - /bin/bash
+            - -ec
+            - |
+              until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; do sleep 2; done
+              for topic in data-forwarding-dlq storage-service-dlq friend-service-dlq call-service-dlq push-service-dlq; do
+                /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic "$topic" --partitions 3 --replication-factor 1
+                /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka:9092 --alter --entity-type topics --entity-name "$topic" --add-config cleanup.policy=delete,retention.ms=604800000,min.insync.replicas=1
+              done

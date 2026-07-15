@@ -8,6 +8,8 @@ import (
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
 	"data_forwarding_service/internal/session"
+	"errors"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -25,6 +27,7 @@ type WebSocketHandler struct {
 	router         *router.Router
 	config         websocketConfig
 	upgrader       websocket.Upgrader
+	refreshLease   func(context.Context, string, redisClient.SessionData, time.Duration, time.Duration) error
 }
 
 // NewWebSocketHandler 创建新的WebSocket处理器
@@ -39,6 +42,10 @@ func NewWebSocketHandler() *WebSocketHandler {
 		sessionManager: sessionManager,
 		router:         router,
 		config:         loadWebSocketConfig(),
+	}
+	handler.connManager.ConfigureSessionLeases(handler.config.sessionLeaseTTL, handler.config.routeLeaseTTL)
+	handler.refreshLease = func(ctx context.Context, userID string, data redisClient.SessionData, sessionTTL, routeTTL time.Duration) error {
+		return (&redisClient.DistributedSessionManager{}).RefreshOwnedSessionAndRoute(ctx, userID, data, sessionTTL, routeTTL)
 	}
 	handler.upgrader.CheckOrigin = handler.config.checkOrigin
 
@@ -106,22 +113,50 @@ func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *WebSocketHandler) refreshRouteLease(conn *connection.Connection, userID string) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	consecutiveFailures := 0
 	for {
+		delay := h.config.leaseRefresh
+		if h.config.leaseJitter > 0 {
+			delay += time.Duration(rand.Int63n(int64(2*h.config.leaseJitter)+1)) - h.config.leaseJitter
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-conn.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			containerID := os.Getenv("HOSTNAME")
 			if containerID == "" {
 				containerID = "local"
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), h.config.writeTimeout)
-			err := redisClient.RefreshConnection(ctx, userID, containerID, conn.OwnerToken)
+			refresh := h.refreshLease
+			if refresh == nil {
+				refresh = func(ctx context.Context, userID string, data redisClient.SessionData, sessionTTL, routeTTL time.Duration) error {
+					return (&redisClient.DistributedSessionManager{}).RefreshOwnedSessionAndRoute(ctx, userID, data, sessionTTL, routeTTL)
+				}
+			}
+			err := refresh(ctx, userID, redisClient.SessionData{
+				ConnectionID: conn.ID,
+				ContainerID:  containerID,
+				OwnerToken:   conn.OwnerToken,
+			}, h.config.sessionLeaseTTL, h.config.routeLeaseTTL)
 			cancel()
-			if err != nil {
-				logger.Sugar().Warnf("刷新WebSocket路由租约失败: user_id=%s error=%v", userID, err)
+			if err == nil {
+				consecutiveFailures = 0
+				continue
+			}
+			if errors.Is(err, redisClient.ErrSessionOwnershipLost) {
+				logger.Sugar().Infow("WebSocket会话ownership已迁移，关闭旧连接", "user_id", userID, "connection_id", conn.ID)
+				conn.Close()
+				return
+			}
+			consecutiveFailures++
+			logger.Sugar().Warnw("刷新WebSocket会话租约失败", "user_id", userID, "connection_id", conn.ID, "consecutive_failures", consecutiveFailures, "error", err)
+			if consecutiveFailures > h.config.redisFailureGrace {
+				logger.Sugar().Errorw("Redis故障超过会话续租宽限，关闭连接", "user_id", userID, "connection_id", conn.ID, "consecutive_failures", consecutiveFailures)
+				conn.Close()
+				return
 			}
 		}
 	}

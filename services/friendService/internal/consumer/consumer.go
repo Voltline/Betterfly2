@@ -1,46 +1,82 @@
 package consumer
 
 import (
+	"context"
+
 	envelope "Betterfly2/proto/envelope"
-	"Betterfly2/shared/logger"
+	friendpb "Betterfly2/proto/friend"
+	"Betterfly2/shared/kafkaconsumer"
 	"friendService/internal/handler"
+	"friendService/internal/publisher"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 )
 
-type KafkaConsumerGroupHandler struct {
-	handler *handler.FriendHandler
+type messageHandler interface {
+	HandleMessage(context.Context, []byte) error
 }
 
-func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+type KafkaConsumerGroupHandler struct {
+	handler  messageHandler
+	reliable *kafkaconsumer.Handler
+}
+
+func NewKafkaConsumerGroupHandler(friendHandler messageHandler) *KafkaConsumerGroupHandler {
+	return &KafkaConsumerGroupHandler{handler: friendHandler}
+}
+
+func (h *KafkaConsumerGroupHandler) Setup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Setup(session)
+}
+
+func (h *KafkaConsumerGroupHandler) Cleanup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Cleanup(session)
+}
 
 func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	h.initialize()
+	return h.reliable.ConsumeClaim(session, claim)
+}
+
+func (h *KafkaConsumerGroupHandler) initialize() {
 	if h.handler == nil {
 		h.handler = handler.NewFriendHandler()
 	}
-
-	for msg := range claim.Messages() {
-		env := &envelope.Envelope{}
-		payload := msg.Value
-		if err := proto.Unmarshal(msg.Value, env); err == nil {
-			switch env.Type {
-			case envelope.MessageType_FRIEND_REQUEST:
-				payload = env.Payload
-			default:
-				logger.Sugar().Debugf("friendService忽略非FRIEND_REQUEST消息: type=%v", env.Type)
-				session.MarkMessage(msg, "")
-				continue
-			}
-		}
-
-		if err := h.handler.HandleMessage(session.Context(), payload); err != nil {
-			logger.Sugar().Errorf("处理friend消息失败: %v", err)
-			continue
-		}
-
-		session.MarkMessage(msg, "")
+	if h.reliable != nil {
+		return
 	}
-	return nil
+	h.reliable = kafkaconsumer.New(
+		kafkaconsumer.LoadConfig("friend", "FRIEND", "friend-service-dlq"),
+		h.process,
+		func(ctx context.Context, topic string, payload []byte, headers []sarama.RecordHeader) error {
+			return publisher.PublishRawMessageContext(ctx, payload, topic, headers)
+		},
+	)
+}
+
+func (h *KafkaConsumerGroupHandler) process(ctx context.Context, message *sarama.ConsumerMessage) kafkaconsumer.Result {
+	env := &envelope.Envelope{}
+	if err := proto.Unmarshal(message.Value, env); err != nil {
+		return kafkaconsumer.Permanentf("decode friend envelope: %v", err)
+	}
+	if env.GetType() != envelope.MessageType_FRIEND_REQUEST {
+		return kafkaconsumer.Permanentf("unexpected friend envelope type: %s", env.GetType())
+	}
+	request := &friendpb.RequestMessage{}
+	if len(env.GetPayload()) == 0 {
+		return kafkaconsumer.Permanentf("empty friend request payload")
+	}
+	if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
+		return kafkaconsumer.Permanentf("decode friend request: %v", err)
+	}
+	if request.GetPayload() == nil || request.GetFromKafkaTopic() == "" {
+		return kafkaconsumer.Permanentf("incomplete friend request")
+	}
+	if err := h.handler.HandleMessage(ctx, env.GetPayload()); err != nil {
+		return kafkaconsumer.Transient(err)
+	}
+	return kafkaconsumer.Success()
 }

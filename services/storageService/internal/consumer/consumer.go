@@ -1,76 +1,82 @@
 package consumer
 
 import (
+	"context"
+
 	envelope "Betterfly2/proto/envelope"
-	"Betterfly2/shared/logger"
-	"Betterfly2/shared/metrics"
+	storagepb "Betterfly2/proto/storage"
+	"Betterfly2/shared/kafkaconsumer"
 	"storageService/internal/handler"
-	"time"
+	"storageService/internal/publisher"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 )
 
-type KafkaConsumerGroupHandler struct {
-	handler *handler.StorageHandler
+type messageHandler interface {
+	HandleMessage(context.Context, []byte) error
 }
 
-func (h *KafkaConsumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (h *KafkaConsumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+type KafkaConsumerGroupHandler struct {
+	handler  messageHandler
+	reliable *kafkaconsumer.Handler
+}
 
-// ConsumeClaim 实现samara的消费处理器协议
+func NewKafkaConsumerGroupHandler(storageHandler messageHandler) *KafkaConsumerGroupHandler {
+	return &KafkaConsumerGroupHandler{handler: storageHandler}
+}
+
+func (h *KafkaConsumerGroupHandler) Setup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Setup(session)
+}
+
+func (h *KafkaConsumerGroupHandler) Cleanup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Cleanup(session)
+}
+
 func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	sugar := logger.Sugar()
+	h.initialize()
+	return h.reliable.ConsumeClaim(session, claim)
+}
 
-	// 初始化处理器
+func (h *KafkaConsumerGroupHandler) initialize() {
 	if h.handler == nil {
 		h.handler = handler.NewStorageHandler()
 	}
-
-	for msg := range claim.Messages() {
-		sugar.Debugf("Kafka 收到消息, topic: %s, partition: %d, offset: %d",
-			msg.Topic, msg.Partition, msg.Offset)
-		metrics.RecordKafkaMessageConsumed()
-		start := time.Now()
-
-		// 尝试解析为Envelope
-		env := &envelope.Envelope{}
-		payload := msg.Value
-		if err := proto.Unmarshal(msg.Value, env); err == nil {
-			// 成功解析为Envelope，根据类型处理
-			sugar.Debugf("收到Envelope消息: type=%v", env.Type)
-			switch env.Type {
-			case envelope.MessageType_STORAGE_REQUEST:
-				payload = env.Payload
-				sugar.Debugf("提取STORAGE_REQUEST payload，长度: %d", len(payload))
-			case envelope.MessageType_DF_REQUEST:
-				// 可能是离线消息转发，尝试处理payload作为storage请求
-				sugar.Debugf("收到DF_REQUEST类型Envelope，尝试处理payload作为storage请求")
-				payload = env.Payload
-			case envelope.MessageType_TEXT:
-				sugar.Debugf("收到TEXT类型Envelope，内容: %s", string(env.Payload))
-				// 文本消息，可能不需要处理
-				continue
-			default:
-				sugar.Warnf("未知的Envelope类型: %v，跳过", env.Type)
-				continue
-			}
-		} else {
-			sugar.Debugf("消息不是Envelope格式，按原始消息处理")
-		}
-
-		// 处理消息
-		err := h.handler.HandleMessage(session.Context(), payload)
-		metrics.RecordKafkaProcessingLatency(start)
-		if err != nil {
-			sugar.Errorf("处理消息失败: %v", err)
-			metrics.RecordKafkaProcessingError()
-			// 继续处理下一条消息，不终止消费循环
-			continue
-		}
-
-		// 标记消息已消费
-		session.MarkMessage(msg, "")
+	if h.reliable != nil {
+		return
 	}
-	return nil
+	h.reliable = kafkaconsumer.New(
+		kafkaconsumer.LoadConfig("storage", "STORAGE", "storage-service-dlq"),
+		h.process,
+		func(ctx context.Context, topic string, payload []byte, headers []sarama.RecordHeader) error {
+			return publisher.PublishRawMessageContext(ctx, payload, topic, headers)
+		},
+	)
+}
+
+func (h *KafkaConsumerGroupHandler) process(ctx context.Context, message *sarama.ConsumerMessage) kafkaconsumer.Result {
+	env := &envelope.Envelope{}
+	if err := proto.Unmarshal(message.Value, env); err != nil {
+		return kafkaconsumer.Permanentf("decode storage envelope: %v", err)
+	}
+	if env.GetType() != envelope.MessageType_STORAGE_REQUEST && env.GetType() != envelope.MessageType_DF_REQUEST {
+		return kafkaconsumer.Permanentf("unexpected storage envelope type: %s", env.GetType())
+	}
+	request := &storagepb.RequestMessage{}
+	if len(env.GetPayload()) == 0 {
+		return kafkaconsumer.Permanentf("empty storage request payload")
+	}
+	if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
+		return kafkaconsumer.Permanentf("decode storage request: %v", err)
+	}
+	if request.GetPayload() == nil || request.GetFromKafkaTopic() == "" {
+		return kafkaconsumer.Permanentf("incomplete storage request")
+	}
+	if err := h.handler.HandleMessage(ctx, env.GetPayload()); err != nil {
+		return kafkaconsumer.Transient(err)
+	}
+	return kafkaconsumer.Success()
 }

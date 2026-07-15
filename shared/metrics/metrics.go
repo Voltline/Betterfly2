@@ -91,6 +91,64 @@ var (
 		Help:    "Latency of Kafka message processing in seconds",
 		Buckets: prometheus.DefBuckets,
 	})
+	KafkaConsumerMessagesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_kafka_consumer_messages_total",
+		Help: "Kafka consumer outcomes by service and outcome",
+	}, []string{"service", "outcome"})
+	KafkaConsumerRetriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_kafka_consumer_retries_total",
+		Help: "Kafka consumer processing retries by service",
+	}, []string{"service"})
+	KafkaConsumerDLQMessagesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_kafka_consumer_dlq_messages_total",
+		Help: "Kafka messages written to a service DLQ",
+	}, []string{"service", "error_class", "envelope_type"})
+	KafkaConsumerDLQPublishFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_kafka_consumer_dlq_publish_failures_total",
+		Help: "Kafka service DLQ publication failures",
+	}, []string{"service"})
+	KafkaConsumerProcessingLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "betterfly_kafka_consumer_processing_seconds",
+		Help:    "End-to-end Kafka message processing latency by service",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"service"})
+
+	PushBatchSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "betterfly_push_batch_size",
+		Help:    "Number of APNs device tokens handled in one message batch",
+		Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024},
+	})
+	PushDeliveriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_push_deliveries_total",
+		Help: "APNs delivery outcomes",
+	}, []string{"outcome"})
+	PushQueueDelay = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "betterfly_push_queue_delay_seconds",
+		Help:    "Time an APNs notification waits for a bounded worker",
+		Buckets: prometheus.DefBuckets,
+	})
+	PushAPNSLatency = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "betterfly_push_apns_latency_seconds",
+		Help:    "APNs request latency",
+		Buckets: prometheus.DefBuckets,
+	})
+	ABTestCacheRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "betterfly_abtest_cache_requests_total",
+		Help: "AB Test evaluation snapshot cache requests",
+	}, []string{"outcome"})
+	ABTestCacheReloadsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "betterfly_abtest_cache_reloads_total",
+		Help: "AB Test evaluation snapshot reloads",
+	})
+	ABTestSnapshotAgeSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "betterfly_abtest_snapshot_age_seconds",
+		Help: "Age of the current AB Test immutable snapshot",
+	})
+	ABTestDatabaseLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "betterfly_abtest_database_query_seconds",
+		Help:    "AB Test evaluation database query latency",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"query"})
 
 	// 连接指标
 	WebSocketConnectionsTotal = promauto.NewGauge(prometheus.GaugeOpts{

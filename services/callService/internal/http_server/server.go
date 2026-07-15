@@ -7,6 +7,7 @@ import (
 	"time"
 
 	callservice "callService/internal/call"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
@@ -23,6 +24,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /ready", s.ready)
+	mux.Handle("GET /metrics", promhttp.Handler())
 	return mux
 }
 

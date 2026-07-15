@@ -63,7 +63,7 @@ func main() {
 		sugar.Fatalf("初始化Kafka消费者失败: %v", err)
 	}
 	defer consumerGroup.Close()
-	go consume(ctx, consumerGroup, env("KAFKA_CALL_TOPIC", "call-service"), consumer.NewHandler(service))
+	go consume(ctx, consumerGroup, env("KAFKA_CALL_TOPIC", "call-service"), consumer.NewHandler(service, kafkaPublisher.PublishRaw))
 	go sweep(ctx, service)
 
 	httpServer := &http.Server{

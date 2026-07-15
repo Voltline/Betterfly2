@@ -5,6 +5,7 @@ import (
 	"Betterfly2/proto/storage"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/dispatch"
+	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
 	"Betterfly2/shared/mq"
@@ -74,11 +75,7 @@ type fileExistsCacheEntry struct {
 
 // NewStorageHandler 创建新的存储处理器
 func NewStorageHandler() *StorageHandler {
-	// 初始化数据库连接并自动迁移表
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.GroupMember{}, &db.Message{}, &db.FileMetadata{})
-	if err := db.BackfillGroupMemberJoinedAt(); err != nil {
-		logger.Sugar().Fatalf("回填群成员入群时间失败: %v", err)
-	}
+	_ = db.DB()
 
 	// 初始化L1缓存
 	l1Cache := cache.NewL1Cache()
@@ -103,6 +100,24 @@ func NewStorageHandler() *StorageHandler {
 // HandleMessage 处理Kafka消息
 func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) error {
 	sugar := logger.Sugar()
+	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
+	if hasOperationKey {
+		cached, err := db.LoadConsumerOperationResult("storage", operationKey)
+		if err != nil {
+			return err
+		}
+		if len(cached) > 0 {
+			resp := &storage.ResponseMessage{}
+			if err := proto.Unmarshal(cached, resp); err != nil {
+				return err
+			}
+			request := &storage.RequestMessage{}
+			if err := proto.Unmarshal(message, request); err != nil {
+				return err
+			}
+			return h.sendResponse(request.GetFromKafkaTopic(), resp)
+		}
+	}
 
 	// 解析Protobuf请求
 	req := &storage.RequestMessage{}
@@ -127,6 +142,15 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 		resp = &storage.ResponseMessage{
 			Result:       storage.StorageResult_SERVICE_ERROR,
 			TargetUserId: req.TargetUserId,
+		}
+	}
+	if hasOperationKey {
+		encoded, marshalErr := proto.Marshal(resp)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if saveErr := db.SaveConsumerOperationResult("storage", operationKey, encoded); saveErr != nil {
+			return saveErr
 		}
 	}
 

@@ -1,52 +1,88 @@
 package consumer
 
 import (
+	"context"
+	"errors"
+
 	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
-	"Betterfly2/shared/logger"
-	"errors"
+	"Betterfly2/shared/kafkaconsumer"
 	pushservice "pushService/internal/push"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 )
 
-type Handler struct {
-	service *pushservice.Service
+type pushHandler interface {
+	Handle(context.Context, *pushpb.RequestMessage) error
 }
 
-func NewHandler(service *pushservice.Service) *Handler { return &Handler{service: service} }
+type Handler struct {
+	service  pushHandler
+	reliable *kafkaconsumer.Handler
+	publish  kafkaconsumer.DLQPublisher
+}
 
-func (h *Handler) Setup(sarama.ConsumerGroupSession) error   { return nil }
-func (h *Handler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func NewHandler(service pushHandler, publish ...kafkaconsumer.DLQPublisher) *Handler {
+	handler := &Handler{service: service}
+	if len(publish) > 0 {
+		handler.publish = publish[0]
+	}
+	return handler
+}
+
+func (h *Handler) Setup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Setup(session)
+}
+
+func (h *Handler) Cleanup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Cleanup(session)
+}
 
 func (h *Handler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for message := range claim.Messages() {
-		env := &envelope.Envelope{}
-		if err := proto.Unmarshal(message.Value, env); err != nil {
-			logger.Sugar().Warnf("pushService忽略无法解析的Envelope: %v", err)
-			session.MarkMessage(message, "")
-			continue
-		}
-		if env.GetType() != envelope.MessageType_PUSH_REQUEST {
-			logger.Sugar().Debugf("pushService忽略非PUSH_REQUEST消息: %v", env.GetType())
-			session.MarkMessage(message, "")
-			continue
-		}
-		request := &pushpb.RequestMessage{}
-		if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
-			logger.Sugar().Warnf("pushService无法解析请求: %v", err)
-			session.MarkMessage(message, "")
-			continue
-		}
-		if err := h.service.Handle(session.Context(), request); err != nil {
-			logger.Sugar().Errorf("pushService处理请求失败: %v", err)
-			if errors.Is(err, pushservice.ErrInvalidRequest) {
-				session.MarkMessage(message, "")
-			}
-			continue
-		}
-		session.MarkMessage(message, "")
+	h.initialize()
+	return h.reliable.ConsumeClaim(session, claim)
+}
+
+func (h *Handler) initialize() {
+	if h.reliable != nil {
+		return
 	}
-	return nil
+	h.reliable = kafkaconsumer.New(
+		kafkaconsumer.LoadConfig("push", "PUSH", "push-service-dlq"),
+		h.process,
+		h.publish,
+	)
+}
+
+func (h *Handler) process(ctx context.Context, message *sarama.ConsumerMessage) kafkaconsumer.Result {
+	if h.service == nil {
+		return kafkaconsumer.Transientf("push service is not configured")
+	}
+	env := &envelope.Envelope{}
+	if err := proto.Unmarshal(message.Value, env); err != nil {
+		return kafkaconsumer.Permanentf("decode push envelope: %v", err)
+	}
+	if env.GetType() != envelope.MessageType_PUSH_REQUEST {
+		return kafkaconsumer.Permanentf("unexpected push envelope type: %s", env.GetType())
+	}
+	request := &pushpb.RequestMessage{}
+	if len(env.GetPayload()) == 0 {
+		return kafkaconsumer.Permanentf("empty push request payload")
+	}
+	if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
+		return kafkaconsumer.Permanentf("decode push request: %v", err)
+	}
+	if request.GetPayload() == nil {
+		return kafkaconsumer.Permanentf("push request has no payload")
+	}
+	if err := h.service.Handle(ctx, request); err != nil {
+		if errors.Is(err, pushservice.ErrInvalidRequest) {
+			return kafkaconsumer.Permanent(err)
+		}
+		return kafkaconsumer.Transient(err)
+	}
+	return kafkaconsumer.Success()
 }

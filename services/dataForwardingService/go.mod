@@ -12,7 +12,7 @@ require (
 	Betterfly2/proto/push v0.0.0
 	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
-	github.com/IBM/sarama v1.45.1
+	github.com/IBM/sarama v1.45.2
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.21.0

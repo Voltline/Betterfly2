@@ -148,10 +148,10 @@ func TestSessionAndLockCleanupRequireMatchingOwner(t *testing.T) {
 
 	old := SessionData{ConnectionID: "old", ContainerID: "pod-a", OwnerToken: "owner-a"}
 	newSession := SessionData{ConnectionID: "new", ContainerID: "pod-a", OwnerToken: "owner-b"}
-	if err := dsm.ClaimSessionAndRoute(ctx, "9", old, time.Hour); err != nil {
+	if err := dsm.ClaimSessionAndRoute(ctx, "9", old, time.Hour, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := dsm.ClaimSessionAndRoute(ctx, "9", newSession, time.Hour); err != nil {
+	if err := dsm.ClaimSessionAndRoute(ctx, "9", newSession, time.Hour, time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if err := dsm.RemoveOwnedSessionAndRoute(ctx, "9", old); err != nil {
@@ -160,5 +160,49 @@ func TestSessionAndLockCleanupRequireMatchingOwner(t *testing.T) {
 	current, exists, err := dsm.GetUserSession(ctx, "9")
 	if err != nil || !exists || current.OwnerToken != "owner-b" {
 		t.Fatalf("foreign cleanup removed current session: %+v exists=%v err=%v", current, exists, err)
+	}
+}
+
+func TestRefreshOwnedSessionAndRouteSurvivesOriginal24HourBoundary(t *testing.T) {
+	server := useTestRedis(t)
+	ctx := context.Background()
+	dsm := &DistributedSessionManager{}
+	owner := SessionData{ConnectionID: "connection-a", ContainerID: "pod-a", OwnerToken: "owner-a"}
+	if err := dsm.ClaimSessionAndRoute(ctx, "10", owner, 2*time.Hour, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for hour := 0; hour < 25; hour++ {
+		server.FastForward(time.Hour)
+		if err := dsm.RefreshOwnedSessionAndRoute(ctx, "10", owner, 2*time.Hour, 2*time.Hour); err != nil {
+			t.Fatalf("renewal failed after %d hours: %v", hour+1, err)
+		}
+	}
+	server.FastForward(90 * time.Minute)
+	if _, exists, err := dsm.GetUserSession(ctx, "10"); err != nil || !exists {
+		t.Fatalf("renewed session expired: exists=%v err=%v", exists, err)
+	}
+	if route, err := GetContainerByConnection("10"); err != nil || route != "pod-a" {
+		t.Fatalf("renewed route expired: route=%q err=%v", route, err)
+	}
+}
+
+func TestRefreshOwnedSessionAndRouteFencesOldOwner(t *testing.T) {
+	useTestRedis(t)
+	ctx := context.Background()
+	dsm := &DistributedSessionManager{}
+	oldOwner := SessionData{ConnectionID: "old", ContainerID: "pod-a", OwnerToken: "owner-old"}
+	newOwner := SessionData{ConnectionID: "new", ContainerID: "pod-b", OwnerToken: "owner-new"}
+	if err := dsm.ClaimSessionAndRoute(ctx, "11", oldOwner, time.Minute, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsm.ClaimSessionAndRoute(ctx, "11", newOwner, time.Minute, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := dsm.RefreshOwnedSessionAndRoute(ctx, "11", oldOwner, time.Minute, time.Minute); !errors.Is(err, ErrSessionOwnershipLost) {
+		t.Fatalf("old owner renewed migrated session: %v", err)
+	}
+	current, exists, err := dsm.GetUserSession(ctx, "11")
+	if err != nil || !exists || current.OwnerToken != newOwner.OwnerToken {
+		t.Fatalf("old refresh changed current owner: %+v exists=%v err=%v", current, exists, err)
 	}
 }

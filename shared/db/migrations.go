@@ -1,6 +1,46 @@
 package db
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+func RunMigrations(database *gorm.DB) error {
+	models := []interface{}{
+		&SchemaMigration{},
+		&ConsumerOperationResult{},
+		&User{}, &Friend{}, &Group{}, &GroupMember{}, &RelationshipRequest{},
+		&Message{}, &FileMetadata{},
+		&ABExperiment{}, &ABExperimentGroup{}, &ABExperimentOverride{},
+		&PushDeviceToken{}, &PushMessageDelivery{}, &PushDebugAudit{},
+	}
+	if err := database.AutoMigrate(models...); err != nil {
+		return err
+	}
+	if database.Dialector.Name() == "postgres" {
+		if err := MigratePostgresSchema(database); err != nil {
+			return err
+		}
+	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := BackfillGroupMemberJoinedAtWithDB(tx); err != nil {
+			return err
+		}
+		if err := tx.Model(&PushMessageDelivery{}).
+			Where("status IS NULL OR status = ''").
+			Updates(map[string]interface{}{
+				"status":     "sent",
+				"updated_at": gorm.Expr("created_at"),
+			}).Error; err != nil {
+			return err
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
+			Version: CurrentSchemaVersion, AppliedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}).Error
+	})
+}
 
 // MigratePostgresSchema repairs defaults and indexes that AutoMigrate cannot
 // reliably add to databases created by older Betterfly2 versions.

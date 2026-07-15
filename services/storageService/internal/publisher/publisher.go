@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"Betterfly2/shared/logger"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -66,6 +67,11 @@ func InitKafkaProducer() error {
 		saramaConfig.Producer.Return.Successes = true
 		saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
 		saramaConfig.Producer.Retry.Max = 5
+		networkTimeout := kafkaNetworkTimeout()
+		saramaConfig.Net.DialTimeout = networkTimeout
+		saramaConfig.Net.ReadTimeout = networkTimeout
+		saramaConfig.Net.WriteTimeout = networkTimeout
+		saramaConfig.Producer.Timeout = networkTimeout
 
 		// 解析多个 Kafka broker 地址
 		brokerList := splitBrokers(broker)
@@ -91,22 +97,41 @@ func InitKafkaProducer() error {
 	return initErr
 }
 
+func kafkaNetworkTimeout() time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("KAFKA_NETWORK_TIMEOUT")))
+	if err != nil || value <= 0 {
+		return 10 * time.Second
+	}
+	return value
+}
+
 // PublishMessage 发布消息到 Kafka
 func PublishMessage(message string, targetTopic string) error {
+	return PublishRawMessageContext(context.Background(), []byte(message), targetTopic, nil)
+}
+
+func PublishRawMessageContext(ctx context.Context, payload []byte, targetTopic string, headers []sarama.RecordHeader) error {
 	sugar := logger.Sugar()
 
 	if KafkaProducer == nil {
 		return fmt.Errorf("尚未初始化 Kafka Producer")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: targetTopic,
-		Value: sarama.ByteEncoder(message),
+		Topic:   targetTopic,
+		Value:   sarama.ByteEncoder(payload),
+		Headers: headers,
 	}
 
 	partition, offset, err := KafkaProducer.SendMessage(msg)
 	if err != nil {
 		return fmt.Errorf("向 Kafka 发布消息失败: %v", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	sugar.Infof("Kafka 消息发布成功 - Partition: %d, Offset: %d", partition, offset)
 	return nil

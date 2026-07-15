@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,29 +15,79 @@ import (
 )
 
 type memoryStore struct {
-	tokens            []db.PushDeviceToken
-	deactivated       []int64
-	messageDeliveries map[string]bool
-	notify            map[int64]bool
-	audits            []db.PushDebugAudit
-	presentation      MessagePresentation
+	tokens              []db.PushDeviceToken
+	deactivated         []int64
+	messageDeliveries   map[string]memoryDelivery
+	notify              map[int64]bool
+	audits              []db.PushDebugAudit
+	presentation        MessagePresentation
+	messageTokenQueries int
 }
 
-func (s *memoryStore) ClaimMessageDelivery(_ context.Context, messageID, tokenID int64) (bool, error) {
+type memoryDelivery struct {
+	status  string
+	attempt int
+}
+
+func (s *memoryStore) ClaimMessageDeliveries(_ context.Context, messageID int64, tokenIDs []int64, _ time.Time, _ time.Duration) (map[int64]int, bool, error) {
 	if s.messageDeliveries == nil {
-		s.messageDeliveries = make(map[string]bool)
+		s.messageDeliveries = make(map[string]memoryDelivery)
 	}
-	key := fmt.Sprintf("%d:%d", messageID, tokenID)
-	if s.messageDeliveries[key] {
-		return false, nil
+	claims := make(map[int64]int)
+	pending := false
+	for _, tokenID := range tokenIDs {
+		key := fmt.Sprintf("%d:%d", messageID, tokenID)
+		delivery, exists := s.messageDeliveries[key]
+		if !exists {
+			delivery = memoryDelivery{status: DeliveryClaimed, attempt: 1}
+			s.messageDeliveries[key] = delivery
+			claims[tokenID] = delivery.attempt
+			continue
+		}
+		if delivery.status == DeliveryRetryable {
+			delivery.status = DeliveryClaimed
+			delivery.attempt++
+			s.messageDeliveries[key] = delivery
+			claims[tokenID] = delivery.attempt
+		} else if delivery.status == DeliveryClaimed {
+			pending = true
+		}
 	}
-	s.messageDeliveries[key] = true
-	return true, nil
+	return claims, pending, nil
 }
 
-func (s *memoryStore) ReleaseMessageDelivery(_ context.Context, messageID, tokenID int64) error {
-	delete(s.messageDeliveries, fmt.Sprintf("%d:%d", messageID, tokenID))
+func (s *memoryStore) FinalizeMessageDeliveries(ctx context.Context, updates []DeliveryUpdate) error {
+	for _, update := range updates {
+		key := fmt.Sprintf("%d:%d", update.MessageID, update.TokenID)
+		delivery := s.messageDeliveries[key]
+		delivery.status = update.Status
+		s.messageDeliveries[key] = delivery
+		if update.DeactivateToken {
+			_ = s.DeactivateToken(ctx, update.TokenID)
+		}
+	}
 	return nil
+}
+
+func (s *memoryStore) ListMessageTokens(_ context.Context, targetUserIDs []int64, senderUserID int64, isGroup bool) ([]db.PushDeviceToken, error) {
+	s.messageTokenQueries++
+	targets := make(map[int64]struct{}, len(targetUserIDs))
+	for _, userID := range targetUserIDs {
+		targets[userID] = struct{}{}
+	}
+	var result []db.PushDeviceToken
+	for _, token := range s.tokens {
+		if _, selected := targets[token.UserID]; !selected || token.PushType != PushTypeAPNs || !token.IsActive {
+			continue
+		}
+		if !isGroup && s.notify != nil {
+			if enabled, configured := s.notify[token.UserID]; configured && !enabled {
+				continue
+			}
+		}
+		result = append(result, token)
+	}
+	return result, nil
 }
 
 func (s *memoryStore) MessagePresentation(_ context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
@@ -216,20 +268,162 @@ func TestRegisterStandardTokenAndDispatchMessagePush(t *testing.T) {
 		t.Fatalf("standard APNs token was not unregistered: tokens=%+v responses=%+v", store.tokens, publisher.responses)
 	}
 }
+
+func TestMessagePushBatchLookupDoesNotScaleWithUserCount(t *testing.T) {
+	tokens := make([]db.PushDeviceToken, 0, 128)
+	targets := make([]int64, 0, 128)
+	for index := int64(2); index < 130; index++ {
+		tokens = append(tokens, db.PushDeviceToken{ID: index, UserID: index, Token: fmt.Sprintf("token-%d", index), Environment: "production", PushType: PushTypeAPNs, IsActive: true})
+		targets = append(targets, index)
+	}
+	store := &memoryStore{tokens: tokens}
+	service := NewService(store, &memorySender{}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	service.maxConcurrency = 8
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: targets, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 9001,
+	}}}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if store.messageTokenQueries != 1 {
+		t.Fatalf("batch target lookup used %d queries for %d users", store.messageTokenQueries, len(targets))
+	}
+}
+
+func TestMessagePushHonorsConfiguredConcurrencyLimit(t *testing.T) {
+	const limit = 4
+	tokens := make([]db.PushDeviceToken, 0, 32)
+	targets := make([]int64, 0, 32)
+	for index := int64(2); index < 34; index++ {
+		tokens = append(tokens, db.PushDeviceToken{ID: index, UserID: index, Token: fmt.Sprintf("token-%d", index), Environment: "production", PushType: PushTypeAPNs, IsActive: true})
+		targets = append(targets, index)
+	}
+	sender := &memorySender{sendFunc: func(Notification) (SendResult, error) {
+		time.Sleep(5 * time.Millisecond)
+		return SendResult{APNSID: "accepted"}, nil
+	}}
+	service := NewService(&memoryStore{tokens: tokens}, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	service.maxConcurrency = limit
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: targets, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 9002,
+	}}}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if got := sender.maxActive.Load(); got > limit || got < 2 {
+		t.Fatalf("unexpected APNs concurrency: got=%d limit=%d", got, limit)
+	}
+}
+
+func TestMessagePushPartialRetryDoesNotResendSuccessfulToken(t *testing.T) {
+	store := &memoryStore{tokens: []db.PushDeviceToken{
+		{ID: 1, UserID: 2, Token: "stable", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+		{ID: 2, UserID: 3, Token: "flaky", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+	}}
+	var mu sync.Mutex
+	attempts := map[string]int{}
+	sender := &memorySender{sendFunc: func(notification Notification) (SendResult, error) {
+		mu.Lock()
+		attempts[notification.Token]++
+		attempt := attempts[notification.Token]
+		mu.Unlock()
+		if notification.Token == "flaky" && attempt == 1 {
+			return SendResult{}, errors.New("temporary network failure")
+		}
+		return SendResult{APNSID: "accepted-" + notification.Token}, nil
+	}}
+	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2, 3}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 9003,
+	}}}
+	if err := service.Handle(context.Background(), request); err == nil {
+		t.Fatal("retryable partial failure was treated as committed success")
+	}
+	if err := service.Handle(context.Background(), request); err != nil {
+		t.Fatalf("partial retry failed: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts["stable"] != 1 || attempts["flaky"] != 2 {
+		t.Fatalf("successful token was resent or retryable token was skipped: %+v", attempts)
+	}
+	if store.messageDeliveries["9003:1"].status != DeliverySent || store.messageDeliveries["9003:2"].status != DeliverySent {
+		t.Fatalf("unexpected final delivery ledger: %+v", store.messageDeliveries)
+	}
+}
+
+func TestMessagePushPendingClaimExposesLeaseRetryBoundary(t *testing.T) {
+	store := &memoryStore{
+		tokens:            []db.PushDeviceToken{{ID: 1, UserID: 2, Token: "leased", PushType: PushTypeAPNs, IsActive: true}},
+		messageDeliveries: map[string]memoryDelivery{"9100:1": {status: DeliveryClaimed, attempt: 1}},
+	}
+	service := NewService(store, &memorySender{}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	service.deliveryLease = 75 * time.Millisecond
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 9100,
+	}}}
+	err := service.Handle(context.Background(), request)
+	var retryAfter interface{ RetryAfter() time.Duration }
+	if !errors.As(err, &retryAfter) || retryAfter.RetryAfter() != service.deliveryLease {
+		t.Fatalf("pending claim did not preserve its lease boundary: err=%v", err)
+	}
+}
+
+func TestMessagePushRequiresStableMessageID(t *testing.T) {
+	service := NewService(&memoryStore{}, &memorySender{}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text",
+	}}}
+	if err := service.Handle(context.Background(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("message push without id bypassed delivery ledger: %v", err)
+	}
+}
+
 func (s *memoryStore) DeactivateToken(_ context.Context, id int64) error {
 	s.deactivated = append(s.deactivated, id)
+	for index := range s.tokens {
+		if s.tokens[index].ID == id {
+			s.tokens[index].IsActive = false
+		}
+	}
+	return nil
+}
+
+func (s *memoryStore) DeactivateTokens(ctx context.Context, ids []int64) error {
+	for _, id := range ids {
+		if err := s.DeactivateToken(ctx, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 type sentNotification struct{ notification Notification }
 type memorySender struct {
-	sent []sentNotification
-	err  error
+	mu        sync.Mutex
+	sent      []sentNotification
+	err       error
+	sendFunc  func(Notification) (SendResult, error)
+	active    atomic.Int32
+	maxActive atomic.Int32
 }
 
 func (s *memorySender) Ready() error { return nil }
 func (s *memorySender) Send(_ context.Context, notification Notification) (SendResult, error) {
+	active := s.active.Add(1)
+	defer s.active.Add(-1)
+	for {
+		maximum := s.maxActive.Load()
+		if active <= maximum || s.maxActive.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	s.mu.Lock()
 	s.sent = append(s.sent, sentNotification{notification: notification})
+	s.mu.Unlock()
+	if s.sendFunc != nil {
+		return s.sendFunc(notification)
+	}
 	return SendResult{APNSID: "test"}, s.err
 }
 
@@ -305,7 +499,7 @@ func TestDirectMessagePushHonorsNotificationPreference(t *testing.T) {
 	sender := &memorySender{}
 	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
 	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
-		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text",
+		MessageId: 9201, TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text",
 	}}}
 	if err := service.Handle(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -323,7 +517,7 @@ func TestBusinessGroupMessagePushUsesGroupPresentationAndPreview(t *testing.T) {
 	sender := &memorySender{}
 	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
 	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
-		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 88, IsGroup: true,
+		MessageId: 9202, TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 88, IsGroup: true,
 		MessageType: "text", Preview: "今晚八点开会",
 	}}}
 	if err := service.Handle(context.Background(), request); err != nil {
@@ -346,7 +540,7 @@ func TestBusinessDirectMessagePushUsesSenderPresentation(t *testing.T) {
 	sender := &memorySender{}
 	service := NewService(store, sender, &memoryPublisher{}, "com.Voltline.Betterfly2")
 	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
-		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1,
+		MessageId: 9203, TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1,
 		MessageType: "text", Preview: "你好",
 	}}}
 	if err := service.Handle(context.Background(), request); err != nil {

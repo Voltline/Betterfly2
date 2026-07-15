@@ -4,23 +4,40 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	pushpb "Betterfly2/proto/push"
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
 )
 
 type Service struct {
-	store     Store
-	sender    Sender
-	publisher Publisher
-	bundleID  string
-	now       func() time.Time
+	store          Store
+	sender         Sender
+	publisher      Publisher
+	bundleID       string
+	now            func() time.Time
+	maxConcurrency int
+	deliveryLease  time.Duration
 }
 
+type deliveryClaimPendingError struct{ retryAfter time.Duration }
+
+func (e *deliveryClaimPendingError) Error() string             { return "APNs delivery claim is still leased" }
+func (e *deliveryClaimPendingError) RetryAfter() time.Duration { return e.retryAfter }
+
 func NewService(store Store, sender Sender, publisher Publisher, bundleID string) *Service {
-	return &Service{store: store, sender: sender, publisher: publisher, bundleID: strings.TrimSpace(bundleID), now: time.Now}
+	return &Service{
+		store: store, sender: sender, publisher: publisher, bundleID: strings.TrimSpace(bundleID), now: time.Now,
+		maxConcurrency: envPositiveInt("PUSH_APNS_MAX_CONCURRENCY", 16),
+		deliveryLease:  envPositiveDuration("PUSH_DELIVERY_LEASE", 30*time.Second),
+	}
 }
 
 func (s *Service) Ready(ctx context.Context) error {
@@ -156,7 +173,7 @@ func (s *Service) handleVoIPCall(ctx context.Context, request *pushpb.VoIPCallRe
 }
 
 func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.MessagePushRequest) error {
-	if request == nil || request.GetSenderUserId() <= 0 || request.GetConversationId() <= 0 || strings.TrimSpace(request.GetMessageType()) == "" || len(request.GetTargetUserIds()) == 0 {
+	if request == nil || request.GetMessageId() <= 0 || request.GetSenderUserId() <= 0 || request.GetConversationId() <= 0 || strings.TrimSpace(request.GetMessageType()) == "" || len(request.GetTargetUserIds()) == 0 {
 		return ErrInvalidRequest
 	}
 	sentAt, err := time.Parse(time.RFC3339Nano, request.GetSentAt())
@@ -175,67 +192,185 @@ func (s *Service) handleMessagePush(ctx context.Context, request *pushpb.Message
 	if request.GetIsGroup() && strings.TrimSpace(presentation.SenderName) != "" {
 		body = presentation.SenderName + "：" + preview
 	}
-	seen := make(map[int64]struct{}, len(request.GetTargetUserIds()))
-	for _, targetUserID := range request.GetTargetUserIds() {
-		if targetUserID <= 0 || targetUserID == request.GetSenderUserId() {
-			continue
-		}
-		if _, exists := seen[targetUserID]; exists {
-			continue
-		}
-		seen[targetUserID] = struct{}{}
-		enabled, policyErr := s.store.MessageNotificationsEnabled(ctx, targetUserID, request.GetSenderUserId(), request.GetIsGroup())
-		if policyErr != nil {
-			return policyErr
-		}
-		if !enabled {
-			continue
-		}
-		tokens, queryErr := s.store.ListActiveTokens(ctx, targetUserID, PushTypeAPNs)
-		if queryErr != nil {
-			return queryErr
-		}
+	targetUserIDs := uniquePushTargets(request.GetTargetUserIds(), request.GetSenderUserId())
+	tokens, err := s.store.ListMessageTokens(ctx, targetUserIDs, request.GetSenderUserId(), request.GetIsGroup())
+	if err != nil {
+		return err
+	}
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	selected := tokens
+	pendingClaim := false
+	claimAttempts := make(map[int64]int, len(tokens))
+	if request.GetMessageId() > 0 {
+		tokenIDs := make([]int64, 0, len(tokens))
 		for _, token := range tokens {
-			claimed := true
-			if request.GetMessageId() > 0 && token.ID > 0 {
-				claimed, queryErr = s.store.ClaimMessageDelivery(ctx, request.GetMessageId(), token.ID)
-				if queryErr != nil {
-					return queryErr
-				}
+			tokenIDs = append(tokenIDs, token.ID)
+		}
+		claimAttempts, pendingClaim, err = s.store.ClaimMessageDeliveries(ctx, request.GetMessageId(), tokenIDs, s.now(), s.deliveryLease)
+		if err != nil {
+			return err
+		}
+		selected = selected[:0]
+		for _, token := range tokens {
+			if _, claimed := claimAttempts[token.ID]; claimed {
+				selected = append(selected, token)
 			}
-			if !claimed {
-				logger.Sugar().Debugf("跳过重复消息APNs投递: message_id=%d token_id=%d", request.GetMessageId(), token.ID)
-				continue
-			}
-			_, sendErr := s.sender.Send(ctx, Notification{
-				Kind: NotificationMessage, Token: token.Token, Environment: parseEnvironment(token.Environment),
-				SenderUserID: request.GetSenderUserId(), TargetUserID: targetUserID,
-				ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
-				MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
-				MessageID: request.GetMessageId(),
-				ExpiresAt: sentAt.Add(24 * time.Hour),
-				Title:     presentation.Title, Body: body, SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar,
-				GroupName: presentation.GroupName, Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
-				ConversationName: presentation.ConversationName, ConversationAvatar: presentation.ConversationAvatar,
-			})
-			if sendErr == nil {
-				continue
-			}
-			if request.GetMessageId() > 0 && token.ID > 0 {
-				if releaseErr := s.store.ReleaseMessageDelivery(ctx, request.GetMessageId(), token.ID); releaseErr != nil {
-					logger.Sugar().Warnf("释放失败的消息投递记录失败: message_id=%d token_id=%d error=%v", request.GetMessageId(), token.ID, releaseErr)
-				}
-			}
-			var apnsErr *APNSError
-			if errors.As(sendErr, &apnsErr) && apnsErr.InvalidatesToken() {
-				if deactivateErr := s.store.DeactivateToken(ctx, token.ID); deactivateErr != nil {
-					logger.Sugar().Warnf("停用无效APNs token失败: token_id=%d error=%v", token.ID, deactivateErr)
-				}
-			}
-			logger.Sugar().Warnf("消息APNs推送失败: sender_user_id=%d target_user_id=%d conversation_id=%d token_id=%d error=%v", request.GetSenderUserId(), targetUserID, request.GetConversationId(), token.ID, sendErr)
 		}
 	}
+	metrics.RecordPushBatchSize(len(selected))
+	if len(selected) == 0 {
+		if pendingClaim {
+			return &deliveryClaimPendingError{retryAfter: s.deliveryLease}
+		}
+		return nil
+	}
+
+	type deliveryJob struct {
+		token    db.PushDeviceToken
+		queuedAt time.Time
+	}
+	workerCount := s.maxConcurrency
+	if workerCount > len(selected) {
+		workerCount = len(selected)
+	}
+	jobs := make(chan deliveryJob, workerCount)
+	results := make(chan deliveryResult, len(selected))
+	var workers sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for job := range jobs {
+				metrics.RecordPushQueueDelay(time.Since(job.queuedAt))
+				start := time.Now()
+				sendResult, sendErr := s.sender.Send(ctx, Notification{
+					Kind: NotificationMessage, Token: job.token.Token, Environment: parseEnvironment(job.token.Environment),
+					SenderUserID: request.GetSenderUserId(), TargetUserID: job.token.UserID,
+					ConversationID: request.GetConversationId(), IsGroup: request.GetIsGroup(),
+					MessageType: strings.TrimSpace(request.GetMessageType()), SentAt: sentAt,
+					MessageID: request.GetMessageId(), ExpiresAt: sentAt.Add(24 * time.Hour),
+					Title: presentation.Title, Body: body, SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar,
+					GroupName: presentation.GroupName, Avatar: presentation.Avatar, AvatarIsGroup: presentation.AvatarIsGroup,
+					ConversationName: presentation.ConversationName, ConversationAvatar: presentation.ConversationAvatar,
+				})
+				metrics.RecordPushAPNSLatency(start)
+				result := classifyMessageDelivery(request.GetMessageId(), job.token.ID, sendResult, sendErr, s.now())
+				results <- result
+			}
+		}()
+	}
+	for _, token := range selected {
+		select {
+		case jobs <- deliveryJob{token: token, queuedAt: time.Now()}:
+		case <-ctx.Done():
+			close(jobs)
+			workers.Wait()
+			return ctx.Err()
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	close(results)
+
+	updates := make([]DeliveryUpdate, 0, len(selected))
+	retryableCount := 0
+	for result := range results {
+		updates = append(updates, result.update)
+		if result.retryable {
+			retryableCount++
+		}
+	}
+	if request.GetMessageId() > 0 {
+		if err := s.store.FinalizeMessageDeliveries(ctx, updates); err != nil {
+			return err
+		}
+	}
+	if pendingClaim {
+		return &deliveryClaimPendingError{retryAfter: s.deliveryLease}
+	}
+	if retryableCount > 0 {
+		return fmt.Errorf("%d APNs deliveries remain retryable", retryableCount)
+	}
 	return nil
+}
+
+func uniquePushTargets(values []int64, senderUserID int64) []int64 {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 || value == senderUserID {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func classifyMessageDelivery(messageID, tokenID int64, sendResult SendResult, sendErr error, now time.Time) deliveryResult {
+	update := DeliveryUpdate{MessageID: messageID, TokenID: tokenID, APNSID: sendResult.APNSID}
+	if sendErr == nil {
+		update.Status = DeliverySent
+		metrics.RecordPushDelivery(DeliverySent)
+		return deliveryResult{update: update}
+	}
+	update.LastError = sanitizedPushError(sendErr)
+	var apnsErr *APNSError
+	if errors.As(sendErr, &apnsErr) && apnsErr.InvalidatesToken() {
+		update.Status = DeliveryPermanent
+		update.APNSID = apnsErr.APNSID
+		update.DeactivateToken = true
+		metrics.RecordPushDelivery(DeliveryPermanent)
+		return deliveryResult{update: update}
+	}
+	if errors.As(sendErr, &apnsErr) && !apnsErr.Retryable() || errors.Is(sendErr, ErrInvalidRequest) {
+		update.Status = DeliveryPermanent
+		metrics.RecordPushDelivery(DeliveryPermanent)
+		return deliveryResult{update: update}
+	}
+	update.Status = DeliveryRetryable
+	update.NextRetryAt = now.UTC()
+	metrics.RecordPushDelivery(DeliveryRetryable)
+	return deliveryResult{update: update, retryable: true}
+}
+
+type deliveryResult struct {
+	update    DeliveryUpdate
+	retryable bool
+}
+
+func sanitizedPushError(err error) string {
+	var apnsErr *APNSError
+	if errors.As(err, &apnsErr) {
+		value := fmt.Sprintf("apns_status=%d reason=%s", apnsErr.StatusCode, apnsErr.Reason)
+		if len(value) > 255 {
+			return value[:255]
+		}
+		return value
+	}
+	return "network_or_sender_error"
+}
+
+func envPositiveInt(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func envPositiveDuration(key string, fallback time.Duration) time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func defaultMessagePreview(messageType string) string {

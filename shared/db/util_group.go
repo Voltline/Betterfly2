@@ -38,7 +38,11 @@ func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
 // BackfillGroupMemberJoinedAt migrates legacy rows without changing their
 // effective join time. It is idempotent and safe during rolling upgrades.
 func BackfillGroupMemberJoinedAt() error {
-	return DB().Model(&GroupMember{}).
+	return BackfillGroupMemberJoinedAtWithDB(DB())
+}
+
+func BackfillGroupMemberJoinedAtWithDB(database *gorm.DB) error {
+	return database.Model(&GroupMember{}).
 		Where("joined_at IS NULL OR joined_at = ''").
 		Update("joined_at", gorm.Expr("update_time")).Error
 }

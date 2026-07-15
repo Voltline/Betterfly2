@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	pushservice "pushService/internal/push"
 )
 
@@ -38,6 +39,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /ready", s.ready)
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /push/admin", s.adminPanel)
 	mux.HandleFunc("GET /push/admin/", s.adminPanel)
 	mux.HandleFunc("GET /push/admin/api/summary", s.requireAdmin(s.summary))

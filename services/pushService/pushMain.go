@@ -63,7 +63,7 @@ func main() {
 		sugar.Fatalf("初始化Kafka消费者失败: %v", err)
 	}
 	defer consumerGroup.Close()
-	go consume(ctx, consumerGroup, messageTopic, consumer.NewHandler(service))
+	go consume(ctx, consumerGroup, messageTopic, consumer.NewHandler(service, kafkaPublisher.PublishRaw))
 
 	voipTopic := env("KAFKA_VOIP_PUSH_TOPIC", "push-service-voip")
 	sugar.Infof("PushService Kafka消费者启动: message_topic=%s voip_topic=%s", messageTopic, voipTopic)
@@ -73,7 +73,7 @@ func main() {
 			sugar.Fatalf("初始化VoIP Kafka消费者失败: %v", groupErr)
 		}
 		defer voipConsumerGroup.Close()
-		go consume(ctx, voipConsumerGroup, voipTopic, consumer.NewHandler(service))
+		go consume(ctx, voipConsumerGroup, voipTopic, consumer.NewHandler(service, kafkaPublisher.PublishRaw))
 	}
 
 	httpServer := &http.Server{

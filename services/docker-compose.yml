@@ -1,4 +1,28 @@
+x-database-env: &database-env
+  PGSQL_DSN: ${PGSQL_DSN}
+  DB_AUTO_MIGRATE: "false"
+  DB_SCHEMA_CHECK: "true"
+  DB_MAX_OPEN_CONNS: ${DB_MAX_OPEN_CONNS:-50}
+  DB_MAX_IDLE_CONNS: ${DB_MAX_IDLE_CONNS:-10}
+  DB_CONN_MAX_LIFETIME: ${DB_CONN_MAX_LIFETIME:-1h}
+  DB_CONN_MAX_IDLE_TIME: ${DB_CONN_MAX_IDLE_TIME:-10m}
+
 services:
+  db_migrate:
+    build:
+      context: ..
+      dockerfile: shared/Dockerfile.migrate
+    container_name: betterfly-db-migrate
+    environment:
+      PGSQL_DSN: ${PGSQL_DSN}
+      DB_MAX_OPEN_CONNS: ${DB_MIGRATE_MAX_OPEN_CONNS:-4}
+      DB_MAX_IDLE_CONNS: ${DB_MIGRATE_MAX_IDLE_CONNS:-1}
+      DB_CONN_MAX_LIFETIME: ${DB_CONN_MAX_LIFETIME:-1h}
+      DB_CONN_MAX_IDLE_TIME: ${DB_CONN_MAX_IDLE_TIME:-10m}
+    restart: "no"
+    networks:
+      - backend
+
   redis:
     image: redis:7
     container_name: redis
@@ -59,11 +83,20 @@ services:
       - kafka1
       - kafka2
     environment:
-      DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
+      DF_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
+      STORAGE_DLQ_TOPIC: ${STORAGE_KAFKA_DLQ_TOPIC:-storage-service-dlq}
+      FRIEND_DLQ_TOPIC: ${FRIEND_KAFKA_DLQ_TOPIC:-friend-service-dlq}
+      CALL_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
+      PUSH_DLQ_TOPIC: ${PUSH_KAFKA_DLQ_TOPIC:-push-service-dlq}
       DLQ_PARTITIONS: ${DF_KAFKA_DLQ_PARTITIONS:-3}
       DLQ_REPLICATION_FACTOR: ${DF_KAFKA_DLQ_REPLICATION_FACTOR:-2}
       DLQ_MIN_ISR: ${DF_KAFKA_DLQ_MIN_ISR:-1}
-      DLQ_RETENTION_MS: ${DF_KAFKA_DLQ_RETENTION_MS:-604800000}
+      DF_DLQ_RETENTION_MS: ${DF_KAFKA_DLQ_RETENTION_MS:-604800000}
+      STORAGE_DLQ_RETENTION_MS: ${STORAGE_KAFKA_DLQ_RETENTION_MS:-604800000}
+      FRIEND_DLQ_RETENTION_MS: ${FRIEND_KAFKA_DLQ_RETENTION_MS:-604800000}
+      CALL_DLQ_RETENTION_MS: ${CALL_KAFKA_DLQ_RETENTION_MS:-604800000}
+      PUSH_DLQ_RETENTION_MS: ${PUSH_KAFKA_DLQ_RETENTION_MS:-604800000}
+      KAFKA_ACL_ENABLED: ${KAFKA_ACL_ENABLED:-false}
     command:
       - /bin/bash
       - -ec
@@ -73,19 +106,32 @@ services:
           echo "waiting for Kafka quorum"
           sleep 2
         done
-        /opt/kafka/bin/kafka-topics.sh \
-          --bootstrap-server kafka1:9092,kafka2:9094 \
-          --create --if-not-exists \
-          --topic "$${DLQ_TOPIC}" \
-          --partitions "$${DLQ_PARTITIONS}" \
-          --replication-factor "$${DLQ_REPLICATION_FACTOR}"
-        /opt/kafka/bin/kafka-configs.sh \
-          --bootstrap-server kafka1:9092,kafka2:9094 \
-          --alter --entity-type topics --entity-name "$${DLQ_TOPIC}" \
-          --add-config "cleanup.policy=delete,retention.ms=$${DLQ_RETENTION_MS},min.insync.replicas=$${DLQ_MIN_ISR}"
-        /opt/kafka/bin/kafka-topics.sh \
-          --bootstrap-server kafka1:9092,kafka2:9094 \
-          --describe --topic "$${DLQ_TOPIC}"
+        create_dlq() {
+          topic="$$1"
+          retention="$$2"
+          principal="$$3"
+          /opt/kafka/bin/kafka-topics.sh \
+            --bootstrap-server kafka1:9092,kafka2:9094 \
+            --create --if-not-exists \
+            --topic "$${topic}" \
+            --partitions "$${DLQ_PARTITIONS}" \
+            --replication-factor "$${DLQ_REPLICATION_FACTOR}"
+          /opt/kafka/bin/kafka-configs.sh \
+            --bootstrap-server kafka1:9092,kafka2:9094 \
+            --alter --entity-type topics --entity-name "$${topic}" \
+            --add-config "cleanup.policy=delete,retention.ms=$${retention},min.insync.replicas=$${DLQ_MIN_ISR}"
+          if [ "$${KAFKA_ACL_ENABLED}" = "true" ]; then
+            /opt/kafka/bin/kafka-acls.sh \
+              --bootstrap-server kafka1:9092,kafka2:9094 \
+              --add --allow-principal "User:$${principal}" \
+              --operation WRITE --operation DESCRIBE --topic "$${topic}"
+          fi
+        }
+        create_dlq "$${DF_DLQ_TOPIC}" "$${DF_DLQ_RETENTION_MS}" data-forwarding
+        create_dlq "$${STORAGE_DLQ_TOPIC}" "$${STORAGE_DLQ_RETENTION_MS}" storage-service
+        create_dlq "$${FRIEND_DLQ_TOPIC}" "$${FRIEND_DLQ_RETENTION_MS}" friend-service
+        create_dlq "$${CALL_DLQ_TOPIC}" "$${CALL_DLQ_RETENTION_MS}" call-service
+        create_dlq "$${PUSH_DLQ_TOPIC}" "$${PUSH_DLQ_RETENTION_MS}" push-service
     restart: "no"
     networks:
       - backend
@@ -112,13 +158,15 @@ services:
       dockerfile: services/dataForwardingService/Dockerfile
     container_name: df
     depends_on:
+      db_migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
       kafka-init:
         condition: service_completed_successfully
     environment:
+      <<: *database-env
       PORT: 54342
-      PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
@@ -136,6 +184,12 @@ services:
       WS_READ_HEADER_TIMEOUT: ${WS_READ_HEADER_TIMEOUT:-5s}
       WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-60s}
       WS_MAX_HEADER_BYTES: ${WS_MAX_HEADER_BYTES:-1048576}
+      WS_SESSION_LEASE_TTL: ${WS_SESSION_LEASE_TTL:-2m}
+      WS_ROUTE_LEASE_TTL: ${WS_ROUTE_LEASE_TTL:-90s}
+      WS_LEASE_REFRESH_INTERVAL: ${WS_LEASE_REFRESH_INTERVAL:-30s}
+      WS_LEASE_REFRESH_JITTER: ${WS_LEASE_REFRESH_JITTER:-5s}
+      WS_REDIS_FAILURE_GRACE: ${WS_REDIS_FAILURE_GRACE:-3}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
@@ -153,13 +207,15 @@ services:
       dockerfile: services/dataForwardingService/Dockerfile
     container_name: df2
     depends_on:
+      db_migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
       kafka-init:
         condition: service_completed_successfully
     environment:
+      <<: *database-env
       PORT: 54343
-      PGSQL_DSN: ${PGSQL_DSN}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       AUTH_RPC_ADDR: auth_service:50051
@@ -177,6 +233,12 @@ services:
       WS_READ_HEADER_TIMEOUT: ${WS_READ_HEADER_TIMEOUT:-5s}
       WS_IDLE_TIMEOUT: ${WS_IDLE_TIMEOUT:-60s}
       WS_MAX_HEADER_BYTES: ${WS_MAX_HEADER_BYTES:-1048576}
+      WS_SESSION_LEASE_TTL: ${WS_SESSION_LEASE_TTL:-2m}
+      WS_ROUTE_LEASE_TTL: ${WS_ROUTE_LEASE_TTL:-90s}
+      WS_LEASE_REFRESH_INTERVAL: ${WS_LEASE_REFRESH_INTERVAL:-30s}
+      WS_LEASE_REFRESH_JITTER: ${WS_LEASE_REFRESH_JITTER:-5s}
+      WS_REDIS_FAILURE_GRACE: ${WS_REDIS_FAILURE_GRACE:-3}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
@@ -193,8 +255,11 @@ services:
       dockerfile: services/authService/Dockerfile
     container_name: authService
     environment:
+      <<: *database-env
       PORT: 50051
-      PGSQL_DSN: ${PGSQL_DSN}
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
     ports:
       - "50051:50051"
     networks:
@@ -238,20 +303,25 @@ services:
       dockerfile: services/storageService/Dockerfile
     container_name: storageService
     depends_on:
+      db_migrate:
+        condition: service_completed_successfully
       rustfs:
         condition: service_started
       redis:
         condition: service_started
-      kafka1:
-        condition: service_started
-      kafka2:
-        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
     environment:
-      PGSQL_DSN: ${PGSQL_DSN}
+      <<: *database-env
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_STORAGE_TOPIC: storage-service
       KAFKA_CONSUMER_GROUP: storage-service-group
+      STORAGE_KAFKA_DLQ_TOPIC: ${STORAGE_KAFKA_DLQ_TOPIC:-storage-service-dlq}
+      STORAGE_KAFKA_PROCESS_MAX_RETRIES: ${STORAGE_KAFKA_PROCESS_MAX_RETRIES:-3}
+      STORAGE_KAFKA_RETRY_INITIAL_BACKOFF: ${STORAGE_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      STORAGE_KAFKA_RETRY_MAX_BACKOFF: ${STORAGE_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
       AUTH_RPC_ADDR: auth_service:50051
       HTTP_PORT: ${HTTP_PORT:-8081}
       # RustFS配置
@@ -309,9 +379,19 @@ services:
       dockerfile: services/friendService/Dockerfile
     container_name: friendService
     environment:
+      <<: *database-env
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       PORT: 54401
-      PGSQL_DSN: ${PGSQL_DSN}
+      FRIEND_KAFKA_DLQ_TOPIC: ${FRIEND_KAFKA_DLQ_TOPIC:-friend-service-dlq}
+      FRIEND_KAFKA_PROCESS_MAX_RETRIES: ${FRIEND_KAFKA_PROCESS_MAX_RETRIES:-3}
+      FRIEND_KAFKA_RETRY_INITIAL_BACKOFF: ${FRIEND_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      FRIEND_KAFKA_RETRY_MAX_BACKOFF: ${FRIEND_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "54401:54401"
     networks:
@@ -324,10 +404,17 @@ services:
       dockerfile: services/abTestService/Dockerfile
     container_name: abTestService
     environment:
+      <<: *database-env
       PORT: ${ABTEST_HTTP_PORT:-8082}
-      PGSQL_DSN: ${PGSQL_DSN}
+      REDIS_ADDR: redis:6379
+      ABTEST_CACHE_MAX_STALENESS: ${ABTEST_CACHE_MAX_STALENESS:-5s}
       ABTEST_ADMIN_TOKEN: ${ABTEST_ADMIN_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
     ports:
       - "${ABTEST_HTTP_PORT:-8082}:${ABTEST_HTTP_PORT:-8082}"
     networks:
@@ -345,6 +432,11 @@ services:
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_CALL_TOPIC: call-service
       KAFKA_CONSUMER_GROUP: call-service-group
+      CALL_KAFKA_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
+      CALL_KAFKA_PROCESS_MAX_RETRIES: ${CALL_KAFKA_PROCESS_MAX_RETRIES:-3}
+      CALL_KAFKA_RETRY_INITIAL_BACKOFF: ${CALL_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      CALL_KAFKA_RETRY_MAX_BACKOFF: ${CALL_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
       KAFKA_VOIP_PUSH_TOPIC: push-service-voip
       CALL_RING_TIMEOUT_SECONDS: ${CALL_RING_TIMEOUT_SECONDS:-45}
       CALL_ACTIVE_TTL_SECONDS: ${CALL_ACTIVE_TTL_SECONDS:-21600}
@@ -358,8 +450,7 @@ services:
       - "${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
     depends_on:
       - redis
-      - kafka1
-      - kafka2
+      - kafka-init
       - push_service
     networks:
       - backend
@@ -371,13 +462,20 @@ services:
       dockerfile: services/pushService/Dockerfile
     container_name: pushService
     environment:
+      <<: *database-env
       HTTP_PORT: ${PUSH_HTTP_PORT:-8086}
-      PGSQL_DSN: ${PGSQL_DSN}
       KAFKA_BROKER: kafka1:9092,kafka2:9094
       KAFKA_PUSH_TOPIC: push-service
       KAFKA_CONSUMER_GROUP: push-service-group
       KAFKA_VOIP_PUSH_TOPIC: push-service-voip
       KAFKA_VOIP_CONSUMER_GROUP: push-service-voip-group
+      PUSH_KAFKA_DLQ_TOPIC: ${PUSH_KAFKA_DLQ_TOPIC:-push-service-dlq}
+      PUSH_KAFKA_PROCESS_MAX_RETRIES: ${PUSH_KAFKA_PROCESS_MAX_RETRIES:-3}
+      PUSH_KAFKA_RETRY_INITIAL_BACKOFF: ${PUSH_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
+      PUSH_KAFKA_RETRY_MAX_BACKOFF: ${PUSH_KAFKA_RETRY_MAX_BACKOFF:-2s}
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
+      PUSH_APNS_MAX_CONCURRENCY: ${PUSH_APNS_MAX_CONCURRENCY:-16}
+      PUSH_DELIVERY_LEASE: ${PUSH_DELIVERY_LEASE:-30s}
       APNS_KEY_ID: ${APNS_KEY_ID:-C6D5695Q4Y}
       APNS_TEAM_ID: ${APNS_TEAM_ID:-8R5Q4A3RC7}
       APNS_BUNDLE_ID: ${APNS_BUNDLE_ID:-com.Voltline.Betterfly2}
@@ -388,8 +486,10 @@ services:
     ports:
       - "${PUSH_HTTP_PORT:-8086}:${PUSH_HTTP_PORT:-8086}"
     depends_on:
-      - kafka1
-      - kafka2
+      db_migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     volumes:
       - "${APNS_PRIVATE_KEY_HOST_PATH:-/dev/null}:/run/secrets/apns_key.p8:ro"
     networks:

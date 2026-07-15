@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
@@ -33,10 +34,19 @@ func (s *httpTestStore) ListActiveTokens(_ context.Context, userID int64, pushTy
 	}
 	return result, nil
 }
-func (s *httpTestStore) ClaimMessageDelivery(context.Context, int64, int64) (bool, error) {
-	return true, nil
+func (s *httpTestStore) ListMessageTokens(context.Context, []int64, int64, bool) ([]db.PushDeviceToken, error) {
+	return s.tokens, nil
 }
-func (s *httpTestStore) ReleaseMessageDelivery(context.Context, int64, int64) error { return nil }
+func (s *httpTestStore) ClaimMessageDeliveries(_ context.Context, _ int64, tokenIDs []int64, _ time.Time, _ time.Duration) (map[int64]int, bool, error) {
+	claims := make(map[int64]int, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		claims[tokenID] = 1
+	}
+	return claims, false, nil
+}
+func (s *httpTestStore) FinalizeMessageDeliveries(context.Context, []pushservice.DeliveryUpdate) error {
+	return nil
+}
 func (s *httpTestStore) MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error) {
 	return true, nil
 }
@@ -76,7 +86,8 @@ func (s *httpTestStore) ListDebugAudits(context.Context, int) ([]db.PushDebugAud
 func (s *httpTestStore) TokenSummary(context.Context) (pushservice.TokenSummary, error) {
 	return pushservice.TokenSummary{Total: int64(len(s.tokens)), Active: int64(len(s.tokens)), APNs: int64(len(s.tokens))}, nil
 }
-func (s *httpTestStore) DeactivateToken(context.Context, int64) error { return nil }
+func (s *httpTestStore) DeactivateToken(context.Context, int64) error    { return nil }
+func (s *httpTestStore) DeactivateTokens(context.Context, []int64) error { return nil }
 
 type httpTestSender struct{}
 

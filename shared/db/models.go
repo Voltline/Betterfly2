@@ -2,6 +2,18 @@ package db
 
 const MaxNameLen = 50 // 账户、用户名、备注等的长度限制
 
+type SchemaMigration struct {
+	Version   int    `gorm:"primaryKey;comment:数据库schema版本"`
+	AppliedAt string `gorm:"type:varchar(35);comment:迁移完成时间RFC3339"`
+}
+
+type ConsumerOperationResult struct {
+	Service         string `gorm:"primaryKey;type:varchar(40);comment:消费服务名"`
+	OperationKey    string `gorm:"primaryKey;type:varchar(255);comment:source topic/partition/offset"`
+	ResponsePayload []byte `gorm:"type:bytea;comment:已完成操作的protobuf响应"`
+	CreatedAt       string `gorm:"type:varchar(35);index:idx_consumer_operation_created;comment:完成时间RFC3339"`
+}
+
 type User struct {
 	ID           int64  `gorm:"primaryKey;autoIncrement;comment:用户id，唯一"`
 	Account      string `gorm:"uniqueIndex;type:varchar(50);comment:用户账号，唯一"`
@@ -128,9 +140,16 @@ type PushDeviceToken struct {
 }
 
 type PushMessageDelivery struct {
-	MessageID int64  `gorm:"primaryKey;comment:消息ID"`
-	TokenID   int64  `gorm:"primaryKey;comment:APNs token记录ID"`
-	CreatedAt string `gorm:"type:varchar(35);index:idx_push_message_delivery_created;comment:首次申请投递时间"`
+	MessageID   int64  `gorm:"primaryKey;comment:消息ID"`
+	TokenID     int64  `gorm:"primaryKey;comment:APNs token记录ID"`
+	Status      string `gorm:"type:varchar(20);default:sent;index:idx_push_delivery_retry;comment:claimed/sent/retryable/permanent"`
+	Attempt     int    `gorm:"default:0;comment:投递尝试次数"`
+	LeaseUntil  string `gorm:"type:varchar(35);index:idx_push_delivery_retry;comment:claimed租约截止时间"`
+	NextRetryAt string `gorm:"type:varchar(35);index:idx_push_delivery_retry;comment:下次允许重试时间"`
+	LastError   string `gorm:"type:varchar(255);comment:脱敏后的最后错误"`
+	APNSID      string `gorm:"type:varchar(128);comment:Apple返回的APNs ID"`
+	CreatedAt   string `gorm:"type:varchar(35);index:idx_push_message_delivery_created;comment:首次申请投递时间"`
+	UpdatedAt   string `gorm:"type:varchar(35);comment:最后状态更新时间"`
 }
 
 type PushDebugAudit struct {

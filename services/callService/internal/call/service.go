@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 
 	callpb "Betterfly2/proto/call"
 	pushpb "Betterfly2/proto/push"
+	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 )
 
@@ -60,6 +62,10 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 	}
 	if err == nil {
 		return nil
+	}
+	var publishErr *deliveryError
+	if errors.As(err, &publishErr) || !isCallDomainError(err) {
+		return err
 	}
 
 	callID := requestCallID(request.GetRequest())
@@ -110,7 +116,7 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 	}
 	now := s.now().UTC()
 	session := Session{
-		ID:           newCallID(),
+		ID:           callIDForContext(ctx),
 		CallerUserID: request.GetUserId(),
 		CalleeUserID: payload.GetCalleeUserId(),
 		CallType:     payload.GetCallType(),
@@ -127,20 +133,13 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 	callerEvent.SessionDescription = descriptionToProto(session.Offer)
 	callerEvent.IceServers = s.ice.Servers(session.CallerUserID, now)
 	if err := s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, callerEvent); err != nil {
-		logger.Sugar().Warnf("主叫事件投递失败，取消通话: call_id=%s error=%v", session.ID, err)
-		_, _ = s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "caller delivery failed")
-		return nil
+		return fmt.Errorf("publish outgoing call: %w", err)
 	}
 
 	if calleeOnline {
 		calleeEvent := s.incomingEvent(session, now)
 		if err := s.publishToTopic(ctx, calleeTopic, session.CalleeUserID, calleeEvent); err != nil {
-			logger.Sugar().Warnf("来电事件投递失败，取消通话: call_id=%s error=%v", session.ID, err)
-			ended, endErr := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "callee delivery failed")
-			if endErr == nil {
-				s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
-			}
-			return nil
+			return fmt.Errorf("publish incoming call: %w", err)
 		}
 	}
 
@@ -157,10 +156,7 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 			return nil
 		}
 		logger.Sugar().Warnf("发布VoIP Push请求失败，取消通话: call_id=%s error=%v", session.ID, err)
-		ended, endErr := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, "push request failed")
-		if endErr == nil {
-			s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
-		}
+		return fmt.Errorf("publish required VoIP push request: %w", asDeliveryError(err))
 	}
 	return nil
 }
@@ -210,8 +206,11 @@ func (s *Service) HandlePushResult(ctx context.Context, result *pushpb.VoIPPushR
 	if err != nil {
 		return err
 	}
-	s.publishBestEffortToUser(ctx, session.CallerUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
-	return nil
+	err = s.publishToUser(ctx, session.CallerUserID, "", s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
+	if errors.Is(err, ErrUserOffline) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) accept(ctx context.Context, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
@@ -224,15 +223,22 @@ func (s *Service) accept(ctx context.Context, request *callpb.InternalRequest, p
 	}
 
 	calleeEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, session, session.CallerUserID)
-	s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, calleeEvent)
+	if err := s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, calleeEvent); err != nil {
+		return err
+	}
 	callerEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, session, session.CalleeUserID)
 	callerEvent.SessionDescription = descriptionToProto(*session.Answer)
 	if err := s.publishToUser(ctx, session.CallerUserID, "", callerEvent); err != nil {
+		var publishErr *deliveryError
+		if errors.As(err, &publishErr) || !errors.Is(err, ErrUserOffline) {
+			return err
+		}
 		logger.Sugar().Warnf("接听后主叫已不可达，结束通话: call_id=%s error=%v", session.ID, err)
 		ended, endErr := s.store.EndSession(ctx, session.ID, session.CalleeUserID, callpb.CallEndReason_DISCONNECTED, "caller unavailable after accept")
-		if endErr == nil {
-			s.publishBestEffortToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CallerUserID))
+		if endErr != nil {
+			return endErr
 		}
+		return s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CallerUserID))
 	}
 	return nil
 }
@@ -297,9 +303,13 @@ func (s *Service) publishTerminal(ctx context.Context, requesterTopic string, re
 		return err
 	}
 	requesterEvent := s.sessionEvent(eventType, session, peerID)
-	s.publishBestEffortToTopic(ctx, requesterTopic, requesterID, requesterEvent)
+	if err := s.publishToTopic(ctx, requesterTopic, requesterID, requesterEvent); err != nil {
+		return err
+	}
 	peerEvent := s.sessionEvent(eventType, session, requesterID)
-	s.publishBestEffortToUser(ctx, peerID, peerEvent)
+	if err := s.publishToUser(ctx, peerID, "", peerEvent); err != nil && !errors.Is(err, ErrUserOffline) {
+		return err
+	}
 	return nil
 }
 
@@ -334,7 +344,7 @@ func (s *Service) publishToUser(ctx context.Context, userID int64, fallbackTopic
 }
 
 func (s *Service) publishToTopic(ctx context.Context, topic string, userID int64, event *callpb.CallEvent) error {
-	return s.publisher.Publish(ctx, topic, &callpb.Delivery{TargetUserId: userID, Event: event})
+	return asDeliveryError(s.publisher.Publish(ctx, topic, &callpb.Delivery{TargetUserId: userID, Event: event}))
 }
 
 func (s *Service) sessionEvent(eventType callpb.CallEventType, session Session, peerID int64) *callpb.CallEvent {
@@ -377,6 +387,11 @@ func errorCode(err error) callpb.CallErrorCode {
 	default:
 		return callpb.CallErrorCode_INTERNAL_ERROR
 	}
+}
+
+func isCallDomainError(err error) bool {
+	return errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrUserOffline) || errors.Is(err, ErrUserBusy) ||
+		errors.Is(err, ErrCallNotFound) || errors.Is(err, ErrInvalidState) || errors.Is(err, ErrForbidden)
 }
 
 func validDescription(description *callpb.SessionDescription, expectedType string) bool {
@@ -434,6 +449,15 @@ func newCallID() string {
 		return fmt.Sprintf("call-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(bytes)
+}
+
+func callIDForContext(ctx context.Context) string {
+	operationKey, ok := kafkaconsumer.OperationKeyFromContext(ctx)
+	if !ok || operationKey == "" {
+		return newCallID()
+	}
+	digest := sha256.Sum256([]byte("betterfly-call:" + operationKey))
+	return hex.EncodeToString(digest[:16])
 }
 
 func timestamp(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }

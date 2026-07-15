@@ -11,7 +11,7 @@ import (
 type GormStore struct{}
 
 func NewGormStore() *GormStore {
-	_ = db.DB(&db.ABExperiment{}, &db.ABExperimentGroup{}, &db.ABExperimentOverride{})
+	_ = db.DB()
 	return &GormStore{}
 }
 
@@ -20,7 +20,7 @@ func (s *GormStore) ListExperiments() ([]Experiment, error) {
 	if err := db.DB().Order("id desc").Find(&experiments).Error; err != nil {
 		return nil, err
 	}
-	return s.loadExperiments(experiments)
+	return s.loadExperiments(experiments, true)
 }
 
 func (s *GormStore) ListEvaluationExperiments() ([]Experiment, error) {
@@ -28,7 +28,7 @@ func (s *GormStore) ListEvaluationExperiments() ([]Experiment, error) {
 	if err := db.DB().Where("status IN ?", []string{StatusRunning, StatusRolledOut}).Order("id asc").Find(&experiments).Error; err != nil {
 		return nil, err
 	}
-	return s.loadExperiments(experiments)
+	return s.loadExperiments(experiments, false)
 }
 
 func (s *GormStore) GetExperiment(id int64) (Experiment, error) {
@@ -37,7 +37,7 @@ func (s *GormStore) GetExperiment(id int64) (Experiment, error) {
 	if result.Error != nil {
 		return Experiment{}, result.Error
 	}
-	experiments, err := s.loadExperiments([]db.ABExperiment{model})
+	experiments, err := s.loadExperiments([]db.ABExperiment{model}, true)
 	if err != nil {
 		return Experiment{}, err
 	}
@@ -330,7 +330,26 @@ func (s *GormStore) bumpExperimentVersion(id int64) (Experiment, error) {
 	return s.GetExperiment(id)
 }
 
-func (s *GormStore) loadExperiments(models []db.ABExperiment) ([]Experiment, error) {
+func (s *GormStore) ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]Override, error) {
+	if len(experimentIDs) == 0 {
+		return []Override{}, nil
+	}
+	var models []db.ABExperimentOverride
+	err := db.DB().Where(
+		"subject_type = ? AND subject_id = ? AND experiment_id IN ?",
+		subjectType, subjectID, experimentIDs,
+	).Order("id asc").Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	overrides := make([]Override, 0, len(models))
+	for _, model := range models {
+		overrides = append(overrides, overrideFromModel(model))
+	}
+	return overrides, nil
+}
+
+func (s *GormStore) loadExperiments(models []db.ABExperiment, includeOverrides bool) ([]Experiment, error) {
 	if len(models) == 0 {
 		return []Experiment{}, nil
 	}
@@ -345,8 +364,10 @@ func (s *GormStore) loadExperiments(models []db.ABExperiment) ([]Experiment, err
 		return nil, err
 	}
 	var overrides []db.ABExperimentOverride
-	if err := db.DB().Where("experiment_id IN ?", ids).Order("id asc").Find(&overrides).Error; err != nil {
-		return nil, err
+	if includeOverrides {
+		if err := db.DB().Where("experiment_id IN ?", ids).Order("id asc").Find(&overrides).Error; err != nil {
+			return nil, err
+		}
 	}
 
 	groupsByExperiment := make(map[int64][]Group)

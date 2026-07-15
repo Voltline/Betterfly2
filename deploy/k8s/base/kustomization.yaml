@@ -6,6 +6,7 @@ resources:
   - secret.example.yaml
   - redis.yaml
   - kafka.yaml
+  - infrastructure-jobs.yaml
   - rustfs.yaml
   - auth-service.yaml
   - data-forwarding.yaml
@@ -13,5 +14,6 @@ resources:
   - friend-service.yaml
   - call-service.yaml
   - push-service.yaml
+  - abtest-service.yaml
   - coturn.yaml
   - ingress.yaml

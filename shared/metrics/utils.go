@@ -110,6 +110,58 @@ func RecordKafkaProcessingLatency(start time.Time) {
 	TimeSince(start, KafkaProcessingLatency)
 }
 
+func RecordReliableConsumerOutcome(service, outcome string) {
+	KafkaConsumerMessagesTotal.WithLabelValues(service, outcome).Inc()
+}
+
+func RecordReliableConsumerRetry(service string) {
+	KafkaConsumerRetriesTotal.WithLabelValues(service).Inc()
+}
+
+func RecordReliableConsumerDLQ(service, errorClass, envelopeType string) {
+	KafkaConsumerDLQMessagesTotal.WithLabelValues(service, errorClass, envelopeType).Inc()
+}
+
+func RecordReliableConsumerDLQFailure(service string) {
+	KafkaConsumerDLQPublishFailuresTotal.WithLabelValues(service).Inc()
+}
+
+func RecordReliableConsumerLatency(service string, start time.Time) {
+	KafkaConsumerProcessingLatency.WithLabelValues(service).Observe(time.Since(start).Seconds())
+}
+
+func RecordPushBatchSize(size int) {
+	PushBatchSize.Observe(float64(size))
+}
+
+func RecordPushDelivery(outcome string) {
+	PushDeliveriesTotal.WithLabelValues(outcome).Inc()
+}
+
+func RecordPushQueueDelay(delay time.Duration) {
+	PushQueueDelay.Observe(delay.Seconds())
+}
+
+func RecordPushAPNSLatency(start time.Time) {
+	PushAPNSLatency.Observe(time.Since(start).Seconds())
+}
+
+func RecordABTestCache(outcome string) {
+	ABTestCacheRequestsTotal.WithLabelValues(outcome).Inc()
+}
+
+func RecordABTestCacheReload() {
+	ABTestCacheReloadsTotal.Inc()
+}
+
+func SetABTestSnapshotAge(age time.Duration) {
+	ABTestSnapshotAgeSeconds.Set(age.Seconds())
+}
+
+func RecordABTestDatabaseQuery(query string, start time.Time) {
+	ABTestDatabaseLatency.WithLabelValues(query).Observe(time.Since(start).Seconds())
+}
+
 // UpdateWebSocketConnections 更新WebSocket连接数
 func UpdateWebSocketConnections(count int) {
 	WebSocketConnectionsTotal.Set(float64(count))

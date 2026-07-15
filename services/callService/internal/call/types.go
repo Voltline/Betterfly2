@@ -24,6 +24,18 @@ var (
 	ErrInvalidInput = errors.New("invalid call request")
 )
 
+type deliveryError struct{ err error }
+
+func (e *deliveryError) Error() string { return e.err.Error() }
+func (e *deliveryError) Unwrap() error { return e.err }
+
+func asDeliveryError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &deliveryError{err: err}
+}
+
 type Description struct {
 	Type string `json:"type"`
 	SDP  string `json:"sdp"`

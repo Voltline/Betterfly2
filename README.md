@@ -144,6 +144,7 @@ Betterfly2/
 | [Push Service](services/pushService/README.md) | APNs 双环境、普通通知与内网调试后台 |
 | [Monitor 账号](services/dataForwardingService/MONITOR.md) | 仅用户 ID 1 可见的服务状态与管理指令 |
 | [Kubernetes](deploy/k8s/README.md) | 当前单集群验证清单的范围与限制 |
+| [数据库与可靠性运维](deploy/DATABASE_AND_RELIABILITY.md) | 独立迁移、连接池预算、Kafka 重试与 DLQ 语义 |
 | [协议生成](proto/docs/README.md) | Protobuf 依赖、生成命令和目录说明 |
 
 ## 项目成员

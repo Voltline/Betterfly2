@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"data_forwarding_service/internal/connection"
+	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
 	"data_forwarding_service/internal/session"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,9 +38,70 @@ func testWebSocketConfig() websocketConfig {
 		pongWait:           100 * time.Millisecond,
 		pingInterval:       20 * time.Millisecond,
 		writeTimeout:       100 * time.Millisecond,
+		sessionLeaseTTL:    200 * time.Millisecond,
+		routeLeaseTTL:      150 * time.Millisecond,
+		leaseRefresh:       20 * time.Millisecond,
+		leaseJitter:        time.Millisecond,
+		redisFailureGrace:  2,
 		readHeaderTimeout:  time.Second,
 		idleTimeout:        time.Second,
 		maxHeaderBytes:     4096,
+	}
+}
+
+func TestLeaseOwnershipLossClosesConnectionImmediately(t *testing.T) {
+	config := testWebSocketConfig()
+	handler := testWebSocketHandler(config)
+	conn := &connection.Connection{ID: "old", UserID: "7", OwnerToken: "old-owner", SendChan: make(chan []byte, 1)}
+	conn.MarkAuthenticated("7", "old-owner")
+	handler.refreshLease = func(context.Context, string, redisClient.SessionData, time.Duration, time.Duration) error {
+		return redisClient.ErrSessionOwnershipLost
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handler.refreshRouteLease(conn, "7")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ownership loss did not stop refresh loop")
+	}
+	if !conn.IsClosed() {
+		t.Fatal("ownership loss did not close old connection")
+	}
+}
+
+func TestLeaseRedisFailureUsesFiniteGraceThenFailsClosed(t *testing.T) {
+	config := testWebSocketConfig()
+	config.leaseRefresh = 5 * time.Millisecond
+	config.leaseJitter = 0
+	config.redisFailureGrace = 2
+	handler := testWebSocketHandler(config)
+	conn := &connection.Connection{ID: "ghost", UserID: "8", OwnerToken: "owner", SendChan: make(chan []byte, 1)}
+	conn.MarkAuthenticated("8", "owner")
+	var attempts atomic.Int32
+	handler.refreshLease = func(context.Context, string, redisClient.SessionData, time.Duration, time.Duration) error {
+		attempts.Add(1)
+		return errors.New("redis unavailable")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		handler.refreshRouteLease(conn, "8")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Redis failure grace did not terminate refresh loop")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Fatalf("unexpected refresh attempts: got=%d want=3", got)
+	}
+	if !conn.IsClosed() {
+		t.Fatal("connection remained active after Redis grace was exhausted")
 	}
 }
 

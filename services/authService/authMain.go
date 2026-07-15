@@ -13,7 +13,7 @@ func main() {
 	sugar := logger.Sugar()
 	defer logger.Sync()
 	sugar.Infoln("auth服务启动中...")
-	db.DB(&db.User{}) // 初始化数据库
+	db.DB() // 初始化数据库并校验schema版本
 
 	port := os.Getenv("PORT")
 	if port == "" {

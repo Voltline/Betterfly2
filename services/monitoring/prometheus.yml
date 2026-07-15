@@ -18,6 +18,30 @@ scrape_configs:
         labels:
           service: 'storage'
 
+  - job_name: 'friend'
+    static_configs:
+      - targets: ['friend_service:54401']
+        labels:
+          service: 'friend'
+
+  - job_name: 'call'
+    static_configs:
+      - targets: ['call_service:8085']
+        labels:
+          service: 'call'
+
+  - job_name: 'push'
+    static_configs:
+      - targets: ['push_service:8086']
+        labels:
+          service: 'push'
+
+  - job_name: 'abtest'
+    static_configs:
+      - targets: ['abtest_service:8082']
+        labels:
+          service: 'abtest'
+
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']

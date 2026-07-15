@@ -1,71 +1,109 @@
 package consumer
 
 import (
+	"context"
+	"errors"
+
 	callpb "Betterfly2/proto/call"
 	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
-	"Betterfly2/shared/logger"
+	"Betterfly2/shared/kafkaconsumer"
 	callservice "callService/internal/call"
-	"errors"
 
 	"github.com/IBM/sarama"
 	"google.golang.org/protobuf/proto"
 )
 
+type callHandler interface {
+	Handle(context.Context, *callpb.InternalRequest) error
+	HandlePushResult(context.Context, *pushpb.VoIPPushResult) error
+}
+
 type Handler struct {
-	service *callservice.Service
+	service  callHandler
+	reliable *kafkaconsumer.Handler
+	publish  kafkaconsumer.DLQPublisher
 }
 
-func NewHandler(service *callservice.Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service callHandler, publish ...kafkaconsumer.DLQPublisher) *Handler {
+	handler := &Handler{service: service}
+	if len(publish) > 0 {
+		handler.publish = publish[0]
+	}
+	return handler
 }
 
-func (h *Handler) Setup(sarama.ConsumerGroupSession) error   { return nil }
-func (h *Handler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+func (h *Handler) Setup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Setup(session)
+}
+
+func (h *Handler) Cleanup(session sarama.ConsumerGroupSession) error {
+	h.initialize()
+	return h.reliable.Cleanup(session)
+}
 
 func (h *Handler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	for message := range claim.Messages() {
-		env := &envelope.Envelope{}
-		if err := proto.Unmarshal(message.Value, env); err != nil {
-			logger.Sugar().Warnf("callService忽略无法解析的Envelope: %v", err)
-			session.MarkMessage(message, "")
-			continue
-		}
-		switch env.GetType() {
-		case envelope.MessageType_CALL_REQUEST:
-			request := &callpb.InternalRequest{}
-			if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
-				logger.Sugar().Warnf("callService无法解析请求: %v", err)
-				session.MarkMessage(message, "")
-				continue
-			}
-			if err := h.service.Handle(session.Context(), request); err != nil {
-				logger.Sugar().Errorf("callService处理请求失败: %v", err)
-				if errors.Is(err, callservice.ErrInvalidInput) {
-					session.MarkMessage(message, "")
-				}
-				continue
-			}
-		case envelope.MessageType_PUSH_RESPONSE:
-			response := &pushpb.ResponseMessage{}
-			if err := proto.Unmarshal(env.GetPayload(), response); err != nil {
-				logger.Sugar().Warnf("callService无法解析Push响应: %v", err)
-				session.MarkMessage(message, "")
-				continue
-			}
-			if err := h.service.HandlePushResult(session.Context(), response.GetVoipResult()); err != nil {
-				logger.Sugar().Errorf("callService处理Push响应失败: %v", err)
-				if errors.Is(err, callservice.ErrInvalidInput) {
-					session.MarkMessage(message, "")
-				}
-				continue
-			}
-		default:
-			logger.Sugar().Debugf("callService忽略非通话消息: %v", env.GetType())
-			session.MarkMessage(message, "")
-			continue
-		}
-		session.MarkMessage(message, "")
+	h.initialize()
+	return h.reliable.ConsumeClaim(session, claim)
+}
+
+func (h *Handler) initialize() {
+	if h.reliable != nil {
+		return
 	}
-	return nil
+	h.reliable = kafkaconsumer.New(
+		kafkaconsumer.LoadConfig("call", "CALL", "call-service-dlq"),
+		h.process,
+		h.publish,
+	)
+}
+
+func (h *Handler) process(ctx context.Context, message *sarama.ConsumerMessage) kafkaconsumer.Result {
+	if h.service == nil {
+		return kafkaconsumer.Transientf("call service is not configured")
+	}
+	env := &envelope.Envelope{}
+	if err := proto.Unmarshal(message.Value, env); err != nil {
+		return kafkaconsumer.Permanentf("decode call envelope: %v", err)
+	}
+	switch env.GetType() {
+	case envelope.MessageType_CALL_REQUEST:
+		request := &callpb.InternalRequest{}
+		if len(env.GetPayload()) == 0 {
+			return kafkaconsumer.Permanentf("empty call request payload")
+		}
+		if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
+			return kafkaconsumer.Permanentf("decode call request: %v", err)
+		}
+		if request.GetRequest() == nil || request.GetUserId() <= 0 || request.GetFromKafkaTopic() == "" {
+			return kafkaconsumer.Permanentf("incomplete call request")
+		}
+		if err := h.service.Handle(ctx, request); err != nil {
+			if errors.Is(err, callservice.ErrInvalidInput) {
+				return kafkaconsumer.Permanent(err)
+			}
+			return kafkaconsumer.Transient(err)
+		}
+	case envelope.MessageType_PUSH_RESPONSE:
+		response := &pushpb.ResponseMessage{}
+		if len(env.GetPayload()) == 0 {
+			return kafkaconsumer.Permanentf("empty push response payload")
+		}
+		if err := proto.Unmarshal(env.GetPayload(), response); err != nil {
+			return kafkaconsumer.Permanentf("decode push response: %v", err)
+		}
+		if response.GetVoipResult() == nil {
+			return kafkaconsumer.Permanentf("push response has no VoIP result")
+		}
+		if err := h.service.HandlePushResult(ctx, response.GetVoipResult()); err != nil {
+			if errors.Is(err, callservice.ErrInvalidInput) {
+				return kafkaconsumer.Permanent(err)
+			}
+			return kafkaconsumer.Transient(err)
+		}
+	default:
+		return kafkaconsumer.Permanentf("unexpected call envelope type: %s", env.GetType())
+	}
+	return kafkaconsumer.Success()
 }

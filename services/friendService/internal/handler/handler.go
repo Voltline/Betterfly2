@@ -5,6 +5,7 @@ import (
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/dispatch"
+	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
 	"context"
@@ -50,14 +51,29 @@ func newFriendRequestRouter() *dispatch.OneofRouter[friendRequestContext, *frien
 type FriendHandler struct{}
 
 func NewFriendHandler() *FriendHandler {
-	_ = db.DB(&db.User{}, &db.Friend{}, &db.Group{}, &db.GroupMember{}, &db.RelationshipRequest{})
-	if err := db.BackfillGroupMemberJoinedAt(); err != nil {
-		logger.Sugar().Fatalf("回填群成员入群时间失败: %v", err)
-	}
+	_ = db.DB()
 	return &FriendHandler{}
 }
 
-func (h *FriendHandler) HandleMessage(_ context.Context, message []byte) error {
+func (h *FriendHandler) HandleMessage(ctx context.Context, message []byte) error {
+	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
+	if hasOperationKey {
+		cached, err := db.LoadConsumerOperationResult("friend", operationKey)
+		if err != nil {
+			return err
+		}
+		if len(cached) > 0 {
+			resp := &friend.ResponseMessage{}
+			if err := proto.Unmarshal(cached, resp); err != nil {
+				return err
+			}
+			request := &friend.RequestMessage{}
+			if err := proto.Unmarshal(message, request); err != nil {
+				return err
+			}
+			return h.sendResponse(request.GetFromKafkaTopic(), resp)
+		}
+	}
 	req := &friend.RequestMessage{}
 	if err := proto.Unmarshal(message, req); err != nil {
 		return err
@@ -78,6 +94,15 @@ func (h *FriendHandler) HandleMessage(_ context.Context, message []byte) error {
 		resp = &friend.ResponseMessage{
 			Result:       friend.FriendResult_SERVICE_ERROR,
 			TargetUserId: req.TargetUserId,
+		}
+	}
+	if hasOperationKey {
+		encoded, marshalErr := proto.Marshal(resp)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if saveErr := db.SaveConsumerOperationResult("friend", operationKey, encoded); saveErr != nil {
+			return saveErr
 		}
 	}
 

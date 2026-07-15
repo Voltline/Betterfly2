@@ -1,20 +1,52 @@
 package abtest
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"Betterfly2/shared/logger"
+	"Betterfly2/shared/metrics"
+	"golang.org/x/sync/singleflight"
 )
 
 type Service struct {
-	store Store
+	store      Store
+	cacheTTL   time.Duration
+	now        func() time.Time
+	snapshot   atomic.Pointer[evaluationSnapshot]
+	generation atomic.Uint64
+	reload     singleflight.Group
+	bus        InvalidationBus
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return NewServiceWithInvalidation(store, nil, evaluationCacheTTL())
+}
+
+func NewServiceWithInvalidation(store Store, bus InvalidationBus, cacheTTL time.Duration) *Service {
+	if cacheTTL <= 0 || cacheTTL > 5*time.Second {
+		cacheTTL = 5 * time.Second
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	service := &Service{store: store, cacheTTL: cacheTTL, now: time.Now, bus: bus, ctx: ctx, cancel: cancel}
+	if bus != nil {
+		go func() {
+			if err := bus.Subscribe(ctx, service.invalidateLocal); err != nil && ctx.Err() == nil {
+				logger.Sugar().Warnw("AB Test跨副本缓存失效订阅退出", "error", err)
+			}
+		}()
+	}
+	return service
 }
 
 func (s *Service) ListExperiments() ([]Experiment, error) {
@@ -26,31 +58,71 @@ func (s *Service) GetExperiment(id int64) (Experiment, error) {
 }
 
 func (s *Service) CreateExperiment(req CreateExperimentRequest) (Experiment, error) {
-	return s.store.CreateExperiment(req)
+	value, err := s.store.CreateExperiment(req)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) UpdateExperiment(id int64, req UpdateExperimentRequest) (Experiment, error) {
-	return s.store.UpdateExperiment(id, req)
+	value, err := s.store.UpdateExperiment(id, req)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) SetExperimentStatus(id int64, status string) (Experiment, error) {
-	return s.store.SetExperimentStatus(id, status)
+	value, err := s.store.SetExperimentStatus(id, status)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
-	return s.store.PushFullGroup(experimentID, groupID)
+	value, err := s.store.PushFullGroup(experimentID, groupID)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) WithdrawExperiment(id int64) (Experiment, error) {
-	return s.store.WithdrawExperiment(id)
+	value, err := s.store.WithdrawExperiment(id)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) AddGroup(experimentID int64, req GroupInput) (Group, error) {
-	return s.store.AddGroup(experimentID, req)
+	value, err := s.store.AddGroup(experimentID, req)
+	s.invalidateAfterWrite(err)
+	return value, err
 }
 
 func (s *Service) AddOverride(experimentID int64, req OverrideInput) (Override, error) {
-	return s.store.AddOverride(experimentID, req)
+	value, err := s.store.AddOverride(experimentID, req)
+	s.invalidateAfterWrite(err)
+	return value, err
+}
+
+func (s *Service) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+}
+
+func (s *Service) invalidateLocal() {
+	s.generation.Add(1)
+	s.snapshot.Store(nil)
+}
+
+func (s *Service) invalidateAfterWrite(err error) {
+	if err != nil {
+		return
+	}
+	s.invalidateLocal()
+	if s.bus == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if publishErr := s.bus.Publish(ctx); publishErr != nil {
+		logger.Sugar().Warnw("发布AB Test缓存失效通知失败，将依赖短TTL收敛", "error", publishErr)
+	}
 }
 
 func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
@@ -63,19 +135,31 @@ func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 		req.Context = map[string]string{}
 	}
 
-	experiments, err := s.store.ListEvaluationExperiments()
+	snapshot, err := s.evaluationSnapshot()
 	if err != nil {
 		return EvaluateResponse{}, err
 	}
+	overrideStarted := time.Now()
+	overrides, err := s.store.ListOverridesForSubject(req.SubjectType, req.SubjectID, snapshot.experimentIDs)
+	metrics.RecordABTestDatabaseQuery("subject_overrides", overrideStarted)
+	if err != nil {
+		return EvaluateResponse{}, err
+	}
+	overridesByExperiment := make(map[int64][]Override, len(overrides))
+	for _, override := range overrides {
+		overridesByExperiment[override.ExperimentID] = append(overridesByExperiment[override.ExperimentID], cloneOverride(override))
+	}
 
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	resp := EvaluateResponse{
 		ServerTime:   now.Format(time.RFC3339),
 		MergedConfig: map[string]interface{}{},
 		Experiments:  []Assignment{},
 	}
 
-	for _, experiment := range experiments {
+	for _, immutableExperiment := range snapshot.experiments {
+		experiment := cloneExperiment(immutableExperiment)
+		experiment.Overrides = overridesByExperiment[experiment.ID]
 		assignment, ok := evaluateExperiment(experiment, req, now)
 		if !ok {
 			continue
@@ -85,6 +169,61 @@ func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 	}
 
 	return resp, nil
+}
+
+type evaluationSnapshot struct {
+	experiments   []Experiment
+	experimentIDs []int64
+	loadedAt      time.Time
+	generation    uint64
+}
+
+func (s *Service) evaluationSnapshot() (*evaluationSnapshot, error) {
+	for {
+		now := s.now()
+		generation := s.generation.Load()
+		if current := s.snapshot.Load(); current != nil && current.generation == generation && now.Sub(current.loadedAt) < s.cacheTTL {
+			metrics.RecordABTestCache("hit")
+			metrics.SetABTestSnapshotAge(now.Sub(current.loadedAt))
+			return current, nil
+		}
+		metrics.RecordABTestCache("miss")
+		value, err, _ := s.reload.Do(fmt.Sprintf("snapshot-%d", generation), func() (any, error) {
+			started := time.Now()
+			experiments, loadErr := s.store.ListEvaluationExperiments()
+			metrics.RecordABTestDatabaseQuery("snapshot", started)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+			immutable := make([]Experiment, 0, len(experiments))
+			ids := make([]int64, 0, len(experiments))
+			for _, experiment := range experiments {
+				experiment.Overrides = nil
+				immutable = append(immutable, cloneExperiment(experiment))
+				ids = append(ids, experiment.ID)
+			}
+			metrics.RecordABTestCacheReload()
+			return &evaluationSnapshot{experiments: immutable, experimentIDs: ids, loadedAt: s.now(), generation: generation}, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if generation != s.generation.Load() {
+			continue
+		}
+		loaded := value.(*evaluationSnapshot)
+		s.snapshot.Store(loaded)
+		metrics.SetABTestSnapshotAge(0)
+		return loaded, nil
+	}
+}
+
+func evaluationCacheTTL() time.Duration {
+	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("ABTEST_CACHE_MAX_STALENESS")))
+	if err != nil || value <= 0 || value > 5*time.Second {
+		return 5 * time.Second
+	}
+	return value
 }
 
 func evaluateExperiment(experiment Experiment, req EvaluateRequest, now time.Time) (Assignment, bool) {
@@ -418,9 +557,47 @@ func splitVersion(version string) []int {
 func cloneMap(source map[string]interface{}) map[string]interface{} {
 	target := make(map[string]interface{}, len(source))
 	for key, value := range source {
-		target[key] = value
+		target[key] = cloneValue(value)
 	}
 	return target
+}
+
+func cloneValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return cloneMap(typed)
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index := range typed {
+			result[index] = cloneValue(typed[index])
+		}
+		return result
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
+	}
+}
+
+func cloneExperiment(source Experiment) Experiment {
+	result := source
+	result.Targeting = cloneMap(source.Targeting)
+	result.Groups = make([]Group, len(source.Groups))
+	for index, group := range source.Groups {
+		result.Groups[index] = group
+		result.Groups[index].Config = cloneMap(group.Config)
+	}
+	result.Overrides = make([]Override, len(source.Overrides))
+	for index, override := range source.Overrides {
+		result.Overrides[index] = cloneOverride(override)
+	}
+	return result
+}
+
+func cloneOverride(source Override) Override {
+	result := source
+	result.Config = cloneMap(source.Config)
+	return result
 }
 
 func mergeConfig(target, source map[string]interface{}) {

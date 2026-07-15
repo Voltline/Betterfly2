@@ -12,6 +12,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const maxJSONBodyBytes = 64 << 10
@@ -37,6 +39,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.health)
 	mux.HandleFunc("/ready", s.health)
+	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/abtest/v1/client/config", s.clientConfig)
 	mux.HandleFunc("/abtest/v1/evaluate", s.evaluate)
 	mux.HandleFunc("/abtest/admin", s.adminPanel)

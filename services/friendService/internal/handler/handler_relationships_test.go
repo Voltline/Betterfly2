@@ -119,6 +119,24 @@ func TestExpiredRequestCommitsExpiredStateBeforeReturningError(t *testing.T) {
 	}
 }
 
+func TestResolvedRelationshipRequestCanReplaySameDecision(t *testing.T) {
+	mock := useMockDB(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "relationship_requests"`).WithArgs(int64(100), 1).
+		WillReturnRows(relationshipRequestRows().AddRow(100, "friend", 1001, 1002, 0, "", "accepted", nil, "2026-07-13T00:00:00Z", "2026-07-20T00:00:00Z", "2026-07-13T01:00:00Z", 1002))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`relationship_requests\.\*, requester\.name`).WithArgs(int64(100)).
+		WillReturnRows(relationshipRequestViewRows().AddRow(100, "friend", 1001, 1002, 0, "", "accepted", nil, "2026-07-13T00:00:00Z", "2026-07-20T00:00:00Z", "2026-07-13T01:00:00Z", 1002, "Alice", "", "Bob", "", "", ""))
+
+	response, err := (&FriendHandler{}).handleResolveFriendRequest(
+		&friend.RequestMessage{TargetUserId: 1002},
+		&friend.ResolveFriendRequest{UserId: 1002, RequestId: 100, Decision: friend.RequestDecision_REQUEST_ACCEPT},
+	)
+	if err != nil || response.GetResult() != friend.FriendResult_FRIEND_OK || response.GetRelationshipOperationRsp().GetRequest().GetStatus() != "accepted" {
+		t.Fatalf("idempotent relationship replay failed: response=%+v err=%v", response, err)
+	}
+}
+
 func relationshipRequestRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"id", "request_type", "requester_user_id", "target_user_id", "group_id", "message", "status", "active_key", "created_at", "expires_at", "resolved_at", "resolved_by"})
 }

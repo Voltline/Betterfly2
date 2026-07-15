@@ -25,6 +25,9 @@ func TestRedisStoreEnforcesBusyAndAcceptState(t *testing.T) {
 	if err := store.CreateSession(context.Background(), session); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	if err := store.CreateSession(context.Background(), session); err != nil {
+		t.Fatalf("same operation should replay existing session: %v", err)
+	}
 	busy := session
 	busy.ID = "call-2"
 	busy.CallerUserID = 3
@@ -86,7 +89,7 @@ func TestUserTopicRequiresLiveRouteLease(t *testing.T) {
 	if _, err := store.UserTopic(ctx, 42); !errors.Is(err, ErrUserOffline) {
 		t.Fatalf("stale route without lease must be offline, got %v", err)
 	}
-	if err := client.Set(ctx, "ws_route_lease:42", "df-a", time.Minute).Err(); err != nil {
+	if err := client.Set(ctx, "ws_route_lease:42", "df-a|owner-token", time.Minute).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if topic, err := store.UserTopic(ctx, 42); err != nil || topic != "df-a" {

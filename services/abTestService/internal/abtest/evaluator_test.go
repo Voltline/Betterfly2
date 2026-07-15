@@ -1,12 +1,18 @@
 package abtest
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 )
 
 type memoryStore struct {
-	experiments []Experiment
+	experiments   []Experiment
+	mu            sync.Mutex
+	evalLoads     int
+	overrideLoads int
+	loadDelay     time.Duration
 }
 
 func (s *memoryStore) ListExperiments() ([]Experiment, error) {
@@ -51,7 +57,43 @@ func (s *memoryStore) AddOverride(experimentID int64, req OverrideInput) (Overri
 }
 
 func (s *memoryStore) ListEvaluationExperiments() ([]Experiment, error) {
+	s.mu.Lock()
+	s.evalLoads++
+	delay := s.loadDelay
+	s.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	return s.experiments, nil
+}
+
+func (s *memoryStore) ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]Override, error) {
+	s.mu.Lock()
+	s.overrideLoads++
+	s.mu.Unlock()
+	active := make(map[int64]struct{}, len(experimentIDs))
+	for _, id := range experimentIDs {
+		active[id] = struct{}{}
+	}
+	var result []Override
+	for _, experiment := range s.experiments {
+		if _, ok := active[experiment.ID]; !ok {
+			continue
+		}
+		for _, override := range experiment.Overrides {
+			if override.SubjectType == subjectType && override.SubjectID == subjectID {
+				override.ExperimentID = experiment.ID
+				result = append(result, override)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (s *memoryStore) counts() (int, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.evalLoads, s.overrideLoads
 }
 
 func TestEvaluateReturnsStableClientConfig(t *testing.T) {
@@ -240,5 +282,175 @@ func TestEvaluateRunningExpiredStillSkipped(t *testing.T) {
 	}
 	if len(resp.Experiments) != 0 {
 		t.Fatalf("expected expired running experiment to be skipped, got %#v", resp.Experiments)
+	}
+}
+
+func TestEvaluateCachesImmutableSnapshotAndQueriesOnlySubjectOverrides(t *testing.T) {
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	service := NewServiceWithInvalidation(store, nil, time.Second)
+	defer service.Close()
+	for _, subjectID := range []string{"device-a", "device-b"} {
+		if _, err := service.Evaluate(EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: subjectID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	evaluationLoads, overrideLoads := store.counts()
+	if evaluationLoads != 1 || overrideLoads != 2 {
+		t.Fatalf("unexpected hot-path queries: snapshot=%d overrides=%d", evaluationLoads, overrideLoads)
+	}
+}
+
+func TestEvaluateSnapshotReloadUsesSingleflight(t *testing.T) {
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}, loadDelay: 25 * time.Millisecond}
+	service := NewServiceWithInvalidation(store, nil, time.Second)
+	defer service.Close()
+	var workers sync.WaitGroup
+	errorsByWorker := make(chan error, 24)
+	for index := 0; index < 24; index++ {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			_, err := service.Evaluate(EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-singleflight"})
+			errorsByWorker <- err
+		}(index)
+	}
+	workers.Wait()
+	close(errorsByWorker)
+	for err := range errorsByWorker {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	evaluationLoads, _ := store.counts()
+	if evaluationLoads != 1 {
+		t.Fatalf("cache miss stampede loaded snapshot %d times", evaluationLoads)
+	}
+}
+
+func TestAdminWriteImmediatelyInvalidatesLocalSnapshot(t *testing.T) {
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	service := NewServiceWithInvalidation(store, nil, time.Second)
+	defer service.Close()
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-local"}
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddGroup(1, GroupInput{GroupKey: "new", TrafficBasisPoints: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	evaluationLoads, _ := store.counts()
+	if evaluationLoads != 2 {
+		t.Fatalf("admin write did not invalidate local snapshot: loads=%d", evaluationLoads)
+	}
+}
+
+type memoryInvalidationBus struct {
+	mu          sync.Mutex
+	subscribers []func()
+}
+
+func (b *memoryInvalidationBus) Publish(context.Context) error {
+	b.mu.Lock()
+	subscribers := append([]func(){}, b.subscribers...)
+	b.mu.Unlock()
+	for _, subscriber := range subscribers {
+		subscriber()
+	}
+	return nil
+}
+
+func (b *memoryInvalidationBus) Subscribe(ctx context.Context, invalidate func()) error {
+	b.mu.Lock()
+	b.subscribers = append(b.subscribers, invalidate)
+	b.mu.Unlock()
+	<-ctx.Done()
+	return nil
+}
+
+func (b *memoryInvalidationBus) subscriberCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subscribers)
+}
+
+func TestCrossReplicaInvalidationReloadsPeerSnapshot(t *testing.T) {
+	bus := &memoryInvalidationBus{}
+	writerStore := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	readerStore := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	writer := NewServiceWithInvalidation(writerStore, bus, time.Second)
+	reader := NewServiceWithInvalidation(readerStore, bus, time.Second)
+	defer writer.Close()
+	defer reader.Close()
+	deadline := time.Now().Add(time.Second)
+	for bus.subscriberCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-peer"}
+	if _, err := reader.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.AddGroup(1, GroupInput{GroupKey: "peer-change"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	loads, _ := readerStore.counts()
+	if loads != 2 {
+		t.Fatalf("peer invalidation did not reload snapshot: loads=%d", loads)
+	}
+}
+
+func TestSnapshotShortTTLConvergesWithoutNotification(t *testing.T) {
+	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
+	service := NewServiceWithInvalidation(store, nil, 20*time.Millisecond)
+	defer service.Close()
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-ttl"}
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if _, err := service.Evaluate(request); err != nil {
+		t.Fatal(err)
+	}
+	loads, _ := store.counts()
+	if loads != 2 {
+		t.Fatalf("short TTL did not converge after missed notification: loads=%d", loads)
+	}
+}
+
+func TestEvaluateDoesNotExposeSharedSnapshotMaps(t *testing.T) {
+	experiment := activeTestExperiment()
+	experiment.Groups[0].Config = map[string]interface{}{"nested": map[string]interface{}{"enabled": true}}
+	service := NewServiceWithInvalidation(&memoryStore{experiments: []Experiment{experiment}}, nil, time.Second)
+	defer service.Close()
+	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-map"}
+	first, err := service.Evaluate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Experiments[0].Config["nested"].(map[string]interface{})["enabled"] = false
+	second, err := service.Evaluate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Experiments[0].Config["nested"].(map[string]interface{})["enabled"] != true {
+		t.Fatal("caller mutation leaked into cached immutable snapshot")
+	}
+}
+
+func activeTestExperiment() Experiment {
+	now := time.Now().UTC()
+	return Experiment{
+		ID: 1, ExperimentKey: "cached", ExperimentType: ExperimentTypeClient, Status: StatusRunning,
+		StartTime: now.Add(-time.Hour).Format(time.RFC3339), DurationSeconds: int64(2 * time.Hour / time.Second),
+		Groups: []Group{{ID: 1, ExperimentID: 1, GroupKey: "variant", TrafficBasisPoints: 10000, Config: map[string]interface{}{"enabled": true}}},
+		Overrides: []Override{
+			{ExperimentID: 1, SubjectType: SubjectTypeDevice, SubjectID: "device-a", Action: OverrideMergeConfig, Config: map[string]interface{}{"device_a": true}},
+			{ExperimentID: 1, SubjectType: SubjectTypeDevice, SubjectID: "someone-else", Action: OverrideExclude},
+		},
 	}
 }

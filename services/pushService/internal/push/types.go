@@ -12,6 +12,11 @@ import (
 const (
 	PushTypeVoIP = "voip"
 	PushTypeAPNs = "apns"
+
+	DeliveryClaimed   = "claimed"
+	DeliverySent      = "sent"
+	DeliveryRetryable = "retryable"
+	DeliveryPermanent = "permanent"
 )
 
 type NotificationKind string
@@ -88,8 +93,9 @@ type Store interface {
 	RegisterToken(context.Context, int64, string, string, string, string, string) error
 	UnregisterToken(context.Context, int64, string, string, string) (bool, error)
 	ListActiveTokens(context.Context, int64, string) ([]db.PushDeviceToken, error)
-	ClaimMessageDelivery(context.Context, int64, int64) (bool, error)
-	ReleaseMessageDelivery(context.Context, int64, int64) error
+	ListMessageTokens(context.Context, []int64, int64, bool) ([]db.PushDeviceToken, error)
+	ClaimMessageDeliveries(context.Context, int64, []int64, time.Time, time.Duration) (map[int64]int, bool, error)
+	FinalizeMessageDeliveries(context.Context, []DeliveryUpdate) error
 	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)
 	MessagePresentation(context.Context, int64, int64, bool) (MessagePresentation, error)
 	FindTokens(context.Context, TokenFilter) ([]db.PushDeviceToken, error)
@@ -100,6 +106,17 @@ type Store interface {
 	ListDebugAudits(context.Context, int) ([]db.PushDebugAudit, error)
 	TokenSummary(context.Context) (TokenSummary, error)
 	DeactivateToken(context.Context, int64) error
+	DeactivateTokens(context.Context, []int64) error
+}
+
+type DeliveryUpdate struct {
+	MessageID       int64
+	TokenID         int64
+	Status          string
+	NextRetryAt     time.Time
+	LastError       string
+	APNSID          string
+	DeactivateToken bool
 }
 
 type TokenFilter struct {

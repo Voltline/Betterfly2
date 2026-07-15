@@ -262,6 +262,9 @@ func resolveRequest(actorID, requestID int64, requestType, decision string) (*Re
 			return ErrRelationshipNotFound
 		}
 		if request.Status != RequestStatusPending {
+			if request.Status == decision && request.ResolvedBy == actorID && isResolutionDecision(decision) {
+				return nil
+			}
 			if request.Status == RequestStatusExpired {
 				return ErrRelationshipExpired
 			}
@@ -311,6 +314,10 @@ func resolveRequest(actorID, requestID int64, requestType, decision string) (*Re
 		return nil, outcomeErr
 	}
 	return GetRelationshipRequest(requestID)
+}
+
+func isResolutionDecision(decision string) bool {
+	return decision == RequestStatusAccepted || decision == RequestStatusRejected || decision == RequestStatusCancelled
 }
 
 func canResolveRequest(tx *gorm.DB, actorID int64, request *RelationshipRequest, decision string) bool {

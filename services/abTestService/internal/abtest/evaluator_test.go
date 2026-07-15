@@ -1,7 +1,6 @@
 package abtest
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -287,8 +286,7 @@ func TestEvaluateRunningExpiredStillSkipped(t *testing.T) {
 
 func TestEvaluateCachesImmutableSnapshotAndQueriesOnlySubjectOverrides(t *testing.T) {
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	service := NewServiceWithInvalidation(store, nil, time.Second)
-	defer service.Close()
+	service := newService(store, time.Second)
 	for _, subjectID := range []string{"device-a", "device-b"} {
 		if _, err := service.Evaluate(EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: subjectID}); err != nil {
 			t.Fatal(err)
@@ -302,8 +300,7 @@ func TestEvaluateCachesImmutableSnapshotAndQueriesOnlySubjectOverrides(t *testin
 
 func TestEvaluateSnapshotReloadUsesSingleflight(t *testing.T) {
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}, loadDelay: 25 * time.Millisecond}
-	service := NewServiceWithInvalidation(store, nil, time.Second)
-	defer service.Close()
+	service := newService(store, time.Second)
 	var workers sync.WaitGroup
 	errorsByWorker := make(chan error, 24)
 	for index := 0; index < 24; index++ {
@@ -329,8 +326,7 @@ func TestEvaluateSnapshotReloadUsesSingleflight(t *testing.T) {
 
 func TestEvaluateNegativeOverrideCacheAvoidsRepeatedDatabaseQuery(t *testing.T) {
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	service := NewServiceWithInvalidation(store, nil, time.Second)
-	defer service.Close()
+	service := newService(store, time.Second)
 	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-without-overrides"}
 	for index := 0; index < 3; index++ {
 		if _, err := service.Evaluate(request); err != nil {
@@ -347,7 +343,6 @@ func TestEvaluateUsesConfiguredMaximumStaleness(t *testing.T) {
 	t.Setenv("ABTEST_CACHE_MAX_STALENESS", "20ms")
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
 	service := NewService(store)
-	defer service.Close()
 	if service.cacheTTL != 20*time.Millisecond {
 		t.Fatalf("ABTEST_CACHE_MAX_STALENESS was ignored: cache_ttl=%s", service.cacheTTL)
 	}
@@ -367,8 +362,7 @@ func TestEvaluateUsesConfiguredMaximumStaleness(t *testing.T) {
 
 func TestAdminWriteImmediatelyInvalidatesLocalSnapshot(t *testing.T) {
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	service := NewServiceWithInvalidation(store, nil, time.Second)
-	defer service.Close()
+	service := newService(store, time.Second)
 	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-local"}
 	if _, err := service.Evaluate(request); err != nil {
 		t.Fatal(err)
@@ -385,97 +379,9 @@ func TestAdminWriteImmediatelyInvalidatesLocalSnapshot(t *testing.T) {
 	}
 }
 
-type memoryInvalidationBus struct {
-	mu          sync.Mutex
-	subscribers []func()
-}
-
-type lifecycleInvalidationBus struct {
-	started chan struct{}
-	stopped chan struct{}
-}
-
-func (b *lifecycleInvalidationBus) Publish(context.Context) error { return nil }
-
-func (b *lifecycleInvalidationBus) Subscribe(ctx context.Context, _ func()) error {
-	close(b.started)
-	<-ctx.Done()
-	close(b.stopped)
-	return nil
-}
-
-func TestServiceCloseStopsInvalidationSubscription(t *testing.T) {
-	bus := &lifecycleInvalidationBus{started: make(chan struct{}), stopped: make(chan struct{})}
-	service := NewServiceWithContext(context.Background(), &memoryStore{}, bus, time.Second)
-	select {
-	case <-bus.started:
-	case <-time.After(time.Second):
-		t.Fatal("invalidation subscription did not start")
-	}
-	service.Close()
-	select {
-	case <-bus.stopped:
-	case <-time.After(time.Second):
-		t.Fatal("service close did not cancel invalidation subscription")
-	}
-}
-
-func (b *memoryInvalidationBus) Publish(context.Context) error {
-	b.mu.Lock()
-	subscribers := append([]func(){}, b.subscribers...)
-	b.mu.Unlock()
-	for _, subscriber := range subscribers {
-		subscriber()
-	}
-	return nil
-}
-
-func (b *memoryInvalidationBus) Subscribe(ctx context.Context, invalidate func()) error {
-	b.mu.Lock()
-	b.subscribers = append(b.subscribers, invalidate)
-	b.mu.Unlock()
-	<-ctx.Done()
-	return nil
-}
-
-func (b *memoryInvalidationBus) subscriberCount() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.subscribers)
-}
-
-func TestCrossReplicaInvalidationReloadsPeerSnapshot(t *testing.T) {
-	bus := &memoryInvalidationBus{}
-	writerStore := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	readerStore := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	writer := NewServiceWithInvalidation(writerStore, bus, time.Second)
-	reader := NewServiceWithInvalidation(readerStore, bus, time.Second)
-	defer writer.Close()
-	defer reader.Close()
-	deadline := time.Now().Add(time.Second)
-	for bus.subscriberCount() < 2 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-peer"}
-	if _, err := reader.Evaluate(request); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := writer.AddGroup(1, GroupInput{GroupKey: "peer-change"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := reader.Evaluate(request); err != nil {
-		t.Fatal(err)
-	}
-	loads, _ := readerStore.counts()
-	if loads != 2 {
-		t.Fatalf("peer invalidation did not reload snapshot: loads=%d", loads)
-	}
-}
-
 func TestSnapshotShortTTLConvergesWithoutNotification(t *testing.T) {
 	store := &memoryStore{experiments: []Experiment{activeTestExperiment()}}
-	service := NewServiceWithInvalidation(store, nil, 20*time.Millisecond)
-	defer service.Close()
+	service := newService(store, 20*time.Millisecond)
 	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-ttl"}
 	if _, err := service.Evaluate(request); err != nil {
 		t.Fatal(err)
@@ -493,8 +399,7 @@ func TestSnapshotShortTTLConvergesWithoutNotification(t *testing.T) {
 func TestEvaluateDoesNotExposeSharedSnapshotMaps(t *testing.T) {
 	experiment := activeTestExperiment()
 	experiment.Groups[0].Config = map[string]interface{}{"nested": map[string]interface{}{"enabled": true}}
-	service := NewServiceWithInvalidation(&memoryStore{experiments: []Experiment{experiment}}, nil, time.Second)
-	defer service.Close()
+	service := newService(&memoryStore{experiments: []Experiment{experiment}}, time.Second)
 	request := EvaluateRequest{SubjectType: SubjectTypeDevice, SubjectID: "device-map"}
 	first, err := service.Evaluate(request)
 	if err != nil {

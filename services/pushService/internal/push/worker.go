@@ -30,8 +30,7 @@ type preparedDelivery struct {
 }
 
 func (s *Service) RunWorkers(ctx context.Context) error {
-	durable, ok := s.store.(DurableStore)
-	if !ok {
+	if s.durable == nil {
 		return errors.New("push durable store is not configured")
 	}
 	errCh := make(chan error, 2)
@@ -41,7 +40,7 @@ func (s *Service) RunWorkers(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			errCh <- s.runDeliveryLoop(ctx, durable, kind)
+			errCh <- s.runDeliveryLoop(ctx, s.durable, kind)
 		}()
 	}
 	select {
@@ -64,9 +63,9 @@ func (s *Service) runDeliveryLoop(ctx context.Context, store DurableStore, kind 
 		)
 		now := s.now().UTC()
 		if kind == deliveryKindMessage {
-			claims, err = store.ClaimMessageDeliveryBatch(ctx, s.workerBatch, now, s.deliveryLease, s.maxAttempts)
+			claims, err = store.ClaimMessageDeliveryBatch(ctx, s.maxConcurrency, now, s.deliveryLease, s.maxAttempts)
 		} else {
-			claims, err = store.ClaimVoIPDeliveryBatch(ctx, s.workerBatch, now, s.deliveryLease, s.maxAttempts)
+			claims, err = store.ClaimVoIPDeliveryBatch(ctx, s.maxConcurrency, now, s.deliveryLease, s.maxAttempts)
 		}
 		if err != nil {
 			logger.Sugar().Errorw("领取Push投递任务失败", "kind", kind, "error", err)
@@ -167,57 +166,53 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 }
 
 func (s *Service) processDurableBatch(ctx context.Context, store DurableStore, kind deliveryKind, prepared []preparedDelivery) error {
-	workerCount := s.maxConcurrency
-	if workerCount > len(prepared) {
-		workerCount = len(prepared)
-	}
-	jobs := make(chan preparedDelivery)
 	errCh := make(chan error, len(prepared))
 	var workers sync.WaitGroup
-	for i := 0; i < workerCount; i++ {
+	for _, item := range prepared {
+		item := item
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for item := range jobs {
-				if !item.claim.QueuedAt.IsZero() {
-					delay := s.now().Sub(item.claim.QueuedAt)
-					if delay >= 0 {
-						metrics.RecordPushQueueDelay(delay)
-					}
+			if !item.claim.QueuedAt.IsZero() {
+				delay := s.now().Sub(item.claim.QueuedAt)
+				if delay >= 0 {
+					metrics.RecordPushQueueDelay(delay)
 				}
-				update := s.sendDurableDelivery(ctx, item)
-				var err error
-				if kind == deliveryKindMessage {
-					err = store.FinalizeMessageDelivery(ctx, update)
-				} else {
-					err = store.FinalizeVoIPDelivery(ctx, update)
-				}
-				if errors.Is(err, ErrDeliveryFenced) {
-					logger.Sugar().Debugw("忽略已过期Push worker的Finalize", "job_id", item.claim.JobID, "token_id", item.claim.Token.ID, "attempt", item.claim.Attempt)
-					continue
-				}
-				if err != nil {
-					errCh <- err
-				}
+			}
+			update := s.sendDurableDelivery(ctx, item)
+			var err error
+			if kind == deliveryKindMessage {
+				err = store.FinalizeMessageDelivery(ctx, update)
+			} else {
+				err = store.FinalizeVoIPDelivery(ctx, update)
+			}
+			if errors.Is(err, ErrDeliveryFenced) {
+				logger.Sugar().Debugw("忽略已过期Push worker的Finalize", "job_id", item.claim.JobID, "token_id", item.claim.Token.ID, "attempt", item.claim.Attempt)
+				return
+			}
+			if err != nil {
+				errCh <- err
 			}
 		}()
 	}
-	for _, item := range prepared {
-		select {
-		case jobs <- item:
-		case <-ctx.Done():
-			close(jobs)
-			workers.Wait()
-			return ctx.Err()
-		}
-	}
-	close(jobs)
 	workers.Wait()
 	close(errCh)
 	for err := range errCh {
 		return err
 	}
 	return nil
+}
+
+func sanitizedPushError(err error) string {
+	var apnsErr *APNSError
+	if errors.As(err, &apnsErr) {
+		value := fmt.Sprintf("apns_status=%d reason=%s", apnsErr.StatusCode, apnsErr.Reason)
+		if len(value) > 255 {
+			return value[:255]
+		}
+		return value
+	}
+	return "network_or_sender_error"
 }
 
 func (s *Service) sendDurableDelivery(ctx context.Context, item preparedDelivery) DurableDeliveryUpdate {

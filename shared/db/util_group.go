@@ -35,20 +35,10 @@ func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
 	}
 }
 
-// BackfillGroupMemberJoinedAt migrates legacy rows without changing their
-// effective join time. It is idempotent and safe during rolling upgrades.
-func BackfillGroupMemberJoinedAt() error {
-	return BackfillGroupMemberJoinedAtWithDB(DB())
-}
-
 func BackfillGroupMemberJoinedAtWithDB(database *gorm.DB) error {
 	return database.Model(&GroupMember{}).
 		Where("joined_at IS NULL OR joined_at = ''").
 		Update("joined_at", gorm.Expr("update_time")).Error
-}
-
-func CreateGroupWithOwner(ownerUserID, groupID int64, groupName string) (bool, string, error) {
-	return CreateGroupWithOwnerWithDB(DB(), ownerUserID, groupID, groupName)
 }
 
 func CreateGroupWithOwnerWithDB(database *gorm.DB, ownerUserID, groupID int64, groupName string) (bool, string, error) {
@@ -184,10 +174,6 @@ func GetJoinedGroupsWithDB(database *gorm.DB, userID int64) ([]JoinedGroupContac
 	return groups, err
 }
 
-func RemoveUserFromGroup(groupID, userID int64) (bool, bool, string, error) {
-	return RemoveUserFromGroupWithDB(DB(), groupID, userID)
-}
-
 func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, bool, string, error) {
 	now := utils.NowTime()
 	groupExists := false
@@ -263,10 +249,6 @@ func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, 
 		return groupExists, false, "", err
 	}
 	return groupExists, removed, now, nil
-}
-
-func UpdateGroupAvatar(groupID int64, avatar string) (bool, string, error) {
-	return UpdateGroupAvatarWithDB(DB(), groupID, avatar)
 }
 
 func UpdateGroupAvatarWithDB(database *gorm.DB, groupID int64, avatar string) (bool, string, error) {

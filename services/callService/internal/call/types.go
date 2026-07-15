@@ -6,7 +6,6 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
-	pushpb "Betterfly2/proto/push"
 )
 
 const (
@@ -71,12 +70,11 @@ func (s Session) Peer(userID int64) (int64, error) {
 type Store interface {
 	Ping(context.Context) error
 	UserTopic(context.Context, int64) (string, error)
-	CreateSession(context.Context, Session) error
 	GetSession(context.Context, string) (Session, error)
-	AcceptSession(context.Context, string, int64, Description) (Session, error)
-	RejectSession(context.Context, string, int64, callpb.CallEndReason, string) (Session, error)
-	EndSession(context.Context, string, int64, callpb.CallEndReason, string) (Session, error)
-	ExpireRinging(context.Context, time.Time, int64) ([]Session, error)
+	ExpiredRinging(context.Context, time.Time, int64) ([]Session, error)
+	OperationCompleted(context.Context, string) (bool, error)
+	CreateSessionWithEvents(context.Context, Session, string, []PendingEvent) (bool, error)
+	TransitionSessionWithEvents(context.Context, Session, Session, bool, string, []PendingEvent) (bool, error)
 }
 
 type PendingEvent struct {
@@ -86,15 +84,8 @@ type PendingEvent struct {
 	Payload      []byte
 }
 
-type AtomicStore interface {
-	OperationCompleted(context.Context, string) (bool, error)
-	CreateSessionWithEvents(context.Context, Session, string, []PendingEvent) (bool, error)
-	TransitionSessionWithEvents(context.Context, Session, Session, bool, string, []PendingEvent) (bool, error)
-}
-
 type Publisher interface {
 	Publish(context.Context, string, *callpb.Delivery) error
-	PublishPush(context.Context, string, *pushpb.RequestMessage) error
 }
 
 type ICEProvider interface {

@@ -101,11 +101,10 @@ func TestPostgresSequenceMigrationIsIdempotentAndAlignsWithoutReset(t *testing.T
 	mock, database := useUserMockDB(t)
 	for i := 0; i < 2; i++ {
 		mock.ExpectBegin()
-		mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec(`(?s)DO \$\$.*CREATE SEQUENCE IF NOT EXISTS users_id_seq.*MAX\(id\).*sequence_last.*max_id > sequence_last.*setval.*ALTER TABLE users ALTER COLUMN id SET DEFAULT`).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec(`(?s)to_regclass\('public.messages'\).*CREATE INDEX IF NOT EXISTS idx_messages_sync_target_time_id`).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
-		if err := MigratePostgresSchema(database); err != nil {
+		if err := database.Transaction(migratePostgresSchemaStatements); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -104,18 +104,3 @@ func ExecuteInboxOutbox(
 	})
 	return result, err
 }
-
-func LoadConsumerInbox(database *gorm.DB, service, operationKey string) (*ConsumerInbox, error) {
-	if database == nil {
-		return nil, errors.New("database is nil")
-	}
-	var inbox ConsumerInbox
-	err := database.Where("service = ? AND operation_key = ?", service, operationKey).First(&inbox).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &inbox, nil
-}

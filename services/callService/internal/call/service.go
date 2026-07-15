@@ -42,8 +42,8 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 	if request.GetUserId() <= 0 || request.GetFromKafkaTopic() == "" || request.GetRequest() == nil {
 		return ErrInvalidInput
 	}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		completed, err := atomicStore.OperationCompleted(ctx, operationKey(ctx))
+	if operation := operationKey(ctx); operation != "" {
+		completed, err := s.store.OperationCompleted(ctx, operation)
 		if err != nil {
 			return err
 		}
@@ -87,15 +87,36 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 }
 
 func (s *Service) SweepExpired(ctx context.Context) error {
-	sessions, err := s.store.ExpireRinging(ctx, s.now().UTC(), 100)
+	now := s.now().UTC()
+	sessions, err := s.store.ExpiredRinging(ctx, now, 100)
 	if err != nil {
 		return err
 	}
-	for _, session := range sessions {
-		eventForCaller := s.sessionEvent(callpb.CallEventType_CALL_ENDED, session, session.CalleeUserID)
-		eventForCallee := s.sessionEvent(callpb.CallEventType_CALL_ENDED, session, session.CallerUserID)
-		s.publishBestEffortToUser(ctx, session.CallerUserID, eventForCaller)
-		s.publishBestEffortToUser(ctx, session.CalleeUserID, eventForCallee)
+	for _, expected := range sessions {
+		updated := expected
+		updated.State = StateEnded
+		updated.EndReason = callpb.CallEndReason_TIMEOUT
+		updated.EndMessage = "call timed out"
+		updated.EndedAt = &now
+		operation := fmt.Sprintf("call-timeout:%s:%d", expected.ID, expected.RingDeadline.UnixNano())
+		events := make([]PendingEvent, 0, 2)
+		for _, target := range []struct{ userID, peerID int64 }{{expected.CallerUserID, expected.CalleeUserID}, {expected.CalleeUserID, expected.CallerUserID}} {
+			topic, routeErr := s.store.UserTopic(ctx, target.userID)
+			if errors.Is(routeErr, ErrUserOffline) {
+				continue
+			}
+			if routeErr != nil {
+				return routeErr
+			}
+			event, eventErr := pendingCallDelivery(operation, fmt.Sprintf("timeout-%d", target.userID), topic, target.userID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, updated, target.peerID))
+			if eventErr != nil {
+				return eventErr
+			}
+			events = append(events, event)
+		}
+		if _, err := s.store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events); err != nil && !errors.Is(err, ErrInvalidState) {
+			return err
+		}
 	}
 	return nil
 }
@@ -144,41 +165,20 @@ func (s *Service) initiate(ctx context.Context, request *callpb.InternalRequest,
 		CallType: callTypeName(session.CallType), ResultKafkaTopic: "call-service",
 		ExpiresAt: session.RingDeadline.UTC().Format(time.RFC3339Nano), Required: !calleeOnline,
 	}}}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		events, eventErr := s.initiatePendingEvents(ctx, request, session, calleeOnline, calleeTopic, callerEvent, pushRequest)
-		if eventErr != nil {
-			return eventErr
-		}
-		replayed, commitErr := atomicStore.CreateSessionWithEvents(ctx, session, operationKey(ctx), events)
-		if commitErr != nil {
-			return commitErr
-		}
-		if replayed {
-			logger.Sugar().Debugw("重放Call initiate，复用已有Redis事件", "call_id", session.ID, "operation_key", operationKey(ctx))
-		}
-		return nil
+	operation := operationKey(ctx)
+	if operation == "" {
+		return ErrInvalidInput
 	}
-	if err := s.store.CreateSession(ctx, session); err != nil {
-		return err
+	events, eventErr := s.initiatePendingEvents(ctx, request, session, calleeOnline, calleeTopic, callerEvent, pushRequest)
+	if eventErr != nil {
+		return eventErr
 	}
-	if err := s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CallerUserID, callerEvent); err != nil {
-		return fmt.Errorf("publish outgoing call: %w", err)
+	replayed, commitErr := s.store.CreateSessionWithEvents(ctx, session, operation, events)
+	if commitErr != nil {
+		return commitErr
 	}
-	if calleeOnline {
-		calleeEvent := s.incomingEvent(session, now)
-		if err := s.publishToTopic(ctx, calleeTopic, session.CalleeUserID, calleeEvent); err != nil {
-			return fmt.Errorf("publish incoming call: %w", err)
-		}
-	}
-	pushTopic := voipPushTopic()
-	logger.Sugar().Debugf("发布VoIP Push请求: call_id=%s topic=%s required=%t", session.ID, pushTopic, !calleeOnline)
-	if err := s.publisher.PublishPush(ctx, pushTopic, pushRequest); err != nil {
-		if calleeOnline {
-			logger.Sugar().Warnf("在线通话的冗余VoIP Push请求失败: call_id=%s error=%v", session.ID, err)
-			return nil
-		}
-		logger.Sugar().Warnf("发布VoIP Push请求失败，取消通话: call_id=%s error=%v", session.ID, err)
-		return fmt.Errorf("publish required VoIP push request: %w", asDeliveryError(err))
+	if replayed {
+		logger.Sugar().Debugw("重放Call initiate，复用已有Redis事件", "call_id", session.ID, "operation_key", operation)
 	}
 	return nil
 }
@@ -214,75 +214,21 @@ func (s *Service) HandlePushResult(ctx context.Context, result *pushpb.VoIPPushR
 	if result.GetAccepted() || !result.GetRequired() {
 		return nil
 	}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		return s.handlePushResultAtomic(ctx, atomicStore, result)
-	}
-	session, err := s.store.GetSession(ctx, result.GetCallId())
-	if errors.Is(err, ErrCallNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if session.CallerUserID != result.GetCallerUserId() || session.CalleeUserID != result.GetCalleeUserId() || session.State != StateRinging {
-		return nil
-	}
-	ended, err := s.store.EndSession(ctx, session.ID, session.CallerUserID, callpb.CallEndReason_CANCELLED, result.GetReason())
-	if err != nil {
-		return err
-	}
-	err = s.publishToUser(ctx, session.CallerUserID, "", s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CalleeUserID))
-	if errors.Is(err, ErrUserOffline) {
-		return nil
-	}
-	return err
+	return s.handlePushResultAtomic(ctx, result)
 }
 
 func (s *Service) accept(ctx context.Context, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
 	if payload == nil || strings.TrimSpace(payload.GetCallId()) == "" || !validDescription(payload.GetAnswer(), "answer") {
 		return ErrInvalidInput
 	}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		return s.acceptAtomic(ctx, atomicStore, request, payload)
-	}
-	session, err := s.store.AcceptSession(ctx, payload.GetCallId(), request.GetUserId(), descriptionFromProto(payload.GetAnswer()))
-	if err != nil {
-		return err
-	}
-
-	calleeEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, session, session.CallerUserID)
-	if err := s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, calleeEvent); err != nil {
-		return err
-	}
-	callerEvent := s.sessionEvent(callpb.CallEventType_CALL_ACCEPTED, session, session.CalleeUserID)
-	callerEvent.SessionDescription = descriptionToProto(*session.Answer)
-	if err := s.publishToUser(ctx, session.CallerUserID, "", callerEvent); err != nil {
-		var publishErr *deliveryError
-		if errors.As(err, &publishErr) || !errors.Is(err, ErrUserOffline) {
-			return err
-		}
-		logger.Sugar().Warnf("接听后主叫已不可达，结束通话: call_id=%s error=%v", session.ID, err)
-		ended, endErr := s.store.EndSession(ctx, session.ID, session.CalleeUserID, callpb.CallEndReason_DISCONNECTED, "caller unavailable after accept")
-		if endErr != nil {
-			return endErr
-		}
-		return s.publishToTopic(ctx, request.GetFromKafkaTopic(), session.CalleeUserID, s.sessionEvent(callpb.CallEventType_CALL_ENDED, ended, session.CallerUserID))
-	}
-	return nil
+	return s.acceptAtomic(ctx, request, payload)
 }
 
 func (s *Service) reject(ctx context.Context, request *callpb.InternalRequest, payload *callpb.RejectCall) error {
 	if payload == nil || strings.TrimSpace(payload.GetCallId()) == "" {
 		return ErrInvalidInput
 	}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		return s.rejectAtomic(ctx, atomicStore, request, payload)
-	}
-	session, err := s.store.RejectSession(ctx, payload.GetCallId(), request.GetUserId(), callpb.CallEndReason_REJECTED, payload.GetMessage())
-	if err != nil {
-		return err
-	}
-	return s.publishTerminal(ctx, request.GetFromKafkaTopic(), request.GetUserId(), session, callpb.CallEventType_CALL_REJECTED)
+	return s.rejectAtomic(ctx, request, payload)
 }
 
 func (s *Service) hangup(ctx context.Context, request *callpb.InternalRequest, payload *callpb.HangupCall) error {
@@ -293,14 +239,7 @@ func (s *Service) hangup(ctx context.Context, request *callpb.InternalRequest, p
 	if reason == callpb.CallEndReason_CALL_END_REASON_UNSPECIFIED || reason == callpb.CallEndReason_REJECTED || reason == callpb.CallEndReason_TIMEOUT {
 		reason = callpb.CallEndReason_HANGUP
 	}
-	if atomicStore, ok := s.atomicStore(ctx); ok {
-		return s.hangupAtomic(ctx, atomicStore, request, payload.GetCallId(), reason)
-	}
-	session, err := s.store.EndSession(ctx, payload.GetCallId(), request.GetUserId(), reason, "")
-	if err != nil {
-		return err
-	}
-	return s.publishTerminal(ctx, request.GetFromKafkaTopic(), request.GetUserId(), session, callpb.CallEventType_CALL_ENDED)
+	return s.hangupAtomic(ctx, request, payload.GetCallId(), reason)
 }
 
 func (s *Service) forwardICE(ctx context.Context, request *callpb.InternalRequest, payload *callpb.SendIceCandidate) error {
@@ -331,39 +270,11 @@ func (s *Service) forwardICE(ctx context.Context, request *callpb.InternalReques
 	return err
 }
 
-func (s *Service) publishTerminal(ctx context.Context, requesterTopic string, requesterID int64, session Session, eventType callpb.CallEventType) error {
-	peerID, err := session.Peer(requesterID)
-	if err != nil {
-		return err
-	}
-	requesterEvent := s.sessionEvent(eventType, session, peerID)
-	if err := s.publishToTopic(ctx, requesterTopic, requesterID, requesterEvent); err != nil {
-		return err
-	}
-	peerEvent := s.sessionEvent(eventType, session, requesterID)
-	if err := s.publishToUser(ctx, peerID, "", peerEvent); err != nil && !errors.Is(err, ErrUserOffline) {
-		return err
-	}
-	return nil
-}
-
 func (s *Service) incomingEvent(session Session, now time.Time) *callpb.CallEvent {
 	event := s.sessionEvent(callpb.CallEventType_INCOMING_CALL, session, session.CallerUserID)
 	event.SessionDescription = descriptionToProto(session.Offer)
 	event.IceServers = s.ice.Servers(session.CalleeUserID, now)
 	return event
-}
-
-func (s *Service) publishBestEffortToTopic(ctx context.Context, topic string, userID int64, event *callpb.CallEvent) {
-	if err := s.publishToTopic(ctx, topic, userID, event); err != nil {
-		logger.Sugar().Warnf("通话事件投递失败: user_id=%d event=%v error=%v", userID, event.GetEventType(), err)
-	}
-}
-
-func (s *Service) publishBestEffortToUser(ctx context.Context, userID int64, event *callpb.CallEvent) {
-	if err := s.publishToUser(ctx, userID, "", event); err != nil {
-		logger.Sugar().Warnf("通话事件无法路由: user_id=%d event=%v error=%v", userID, event.GetEventType(), err)
-	}
 }
 
 func (s *Service) publishToUser(ctx context.Context, userID int64, fallbackTopic string, event *callpb.CallEvent) error {
@@ -379,15 +290,6 @@ func (s *Service) publishToUser(ctx context.Context, userID int64, fallbackTopic
 
 func (s *Service) publishToTopic(ctx context.Context, topic string, userID int64, event *callpb.CallEvent) error {
 	return asDeliveryError(s.publisher.Publish(ctx, topic, &callpb.Delivery{TargetUserId: userID, Event: event}))
-}
-
-func (s *Service) atomicStore(ctx context.Context) (AtomicStore, bool) {
-	operationKey, hasOperationKey := kafkaconsumer.OperationKeyFromContext(ctx)
-	if !hasOperationKey || operationKey == "" {
-		return nil, false
-	}
-	store, ok := s.store.(AtomicStore)
-	return store, ok
 }
 
 func operationKey(ctx context.Context) string {
@@ -425,7 +327,10 @@ func (s *Service) initiatePendingEvents(
 	return append(events, push), nil
 }
 
-func (s *Service) acceptAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
+func (s *Service) acceptAtomic(ctx context.Context, request *callpb.InternalRequest, payload *callpb.AcceptCall) error {
+	if operationKey(ctx) == "" {
+		return ErrInvalidInput
+	}
 	expected, err := s.store.GetSession(ctx, payload.GetCallId())
 	if err != nil {
 		return err
@@ -473,11 +378,14 @@ func (s *Service) acceptAtomic(ctx context.Context, store AtomicStore, request *
 		}
 		events = append(events, calleePending, callerPending)
 	}
-	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, updated.State == StateEnded, operation, events)
+	_, err = s.store.TransitionSessionWithEvents(ctx, expected, updated, updated.State == StateEnded, operation, events)
 	return err
 }
 
-func (s *Service) rejectAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, payload *callpb.RejectCall) error {
+func (s *Service) rejectAtomic(ctx context.Context, request *callpb.InternalRequest, payload *callpb.RejectCall) error {
+	if operationKey(ctx) == "" {
+		return ErrInvalidInput
+	}
 	expected, err := s.store.GetSession(ctx, payload.GetCallId())
 	if err != nil {
 		return err
@@ -499,11 +407,14 @@ func (s *Service) rejectAtomic(ctx context.Context, store AtomicStore, request *
 	if err != nil {
 		return err
 	}
-	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	_, err = s.store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
 	return err
 }
 
-func (s *Service) hangupAtomic(ctx context.Context, store AtomicStore, request *callpb.InternalRequest, callID string, reason callpb.CallEndReason) error {
+func (s *Service) hangupAtomic(ctx context.Context, request *callpb.InternalRequest, callID string, reason callpb.CallEndReason) error {
+	if operationKey(ctx) == "" {
+		return ErrInvalidInput
+	}
 	expected, err := s.store.GetSession(ctx, callID)
 	if err != nil {
 		return err
@@ -525,7 +436,7 @@ func (s *Service) hangupAtomic(ctx context.Context, store AtomicStore, request *
 	if err != nil {
 		return err
 	}
-	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	_, err = s.store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
 	return err
 }
 
@@ -555,7 +466,10 @@ func (s *Service) terminalPendingEvents(ctx context.Context, operation, requeste
 	return append(events, peerPending), nil
 }
 
-func (s *Service) handlePushResultAtomic(ctx context.Context, store AtomicStore, result *pushpb.VoIPPushResult) error {
+func (s *Service) handlePushResultAtomic(ctx context.Context, result *pushpb.VoIPPushResult) error {
+	if operationKey(ctx) == "" {
+		return ErrInvalidInput
+	}
 	expected, err := s.store.GetSession(ctx, result.GetCallId())
 	if errors.Is(err, ErrCallNotFound) {
 		return nil
@@ -586,7 +500,7 @@ func (s *Service) handlePushResultAtomic(ctx context.Context, store AtomicStore,
 		}
 		events = append(events, pending)
 	}
-	_, err = store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
+	_, err = s.store.TransitionSessionWithEvents(ctx, expected, updated, true, operation, events)
 	return err
 }
 

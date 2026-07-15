@@ -348,10 +348,6 @@ func membersWithoutSender(memberIDs []int64, senderID int64) []int64 {
 	return targets
 }
 
-func routeGroupPostCrossContainer(targetContainerID string, targetUserID int64, payload *pb.Post) error {
-	return routeGroupPostBatchCrossContainer(targetContainerID, []int64{targetUserID}, payload)
-}
-
 func routeGroupPostBatchCrossContainer(targetContainerID string, targetUserIDs []int64, payload *pb.Post) error {
 	if len(targetUserIDs) == 0 {
 		return nil

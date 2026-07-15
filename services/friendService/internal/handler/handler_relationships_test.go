@@ -45,7 +45,7 @@ func TestAcceptFriendRequestCreatesBothRelationsAtomically(t *testing.T) {
 		WithArgs(int64(77)).
 		WillReturnRows(relationshipRequestViewRows().AddRow(77, "friend", 1001, 1002, 0, "hello", "accepted", nil, "2026-07-13T00:00:00Z", "2099-07-20T00:00:00Z", "2026-07-13T01:00:00Z", 1002, "Alice", "", "Bob", "", "", ""))
 
-	response, err := (&FriendHandler{}).handleResolveFriendRequest(
+	response, err := (&FriendHandler{}).handleResolveFriendRequestWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1002},
 		&friend.ResolveFriendRequest{UserId: 1002, RequestId: 77, Decision: friend.RequestDecision_REQUEST_ACCEPT},
 	)
@@ -75,7 +75,7 @@ func TestAdminAcceptsGroupJoinRequestAtomically(t *testing.T) {
 	mock.ExpectQuery(`SELECT relationship_requests\.\*, requester\.name AS requester_name`).WithArgs(int64(88)).
 		WillReturnRows(relationshipRequestViewRows().AddRow(88, "group_join", 1003, 0, 3001, "join", "accepted", nil, "2026-07-13T00:00:00Z", "2099-07-20T00:00:00Z", "2026-07-13T01:00:00Z", 1002, "Applicant", "", "", "", "Team", ""))
 
-	response, err := (&FriendHandler{}).handleResolveGroupJoinRequest(
+	response, err := (&FriendHandler{}).handleResolveGroupJoinRequestWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1002},
 		&friend.ResolveGroupJoinRequest{RequestUserId: 1002, RequestId: 88, Decision: friend.RequestDecision_REQUEST_ACCEPT},
 	)
@@ -93,7 +93,7 @@ func TestAdminCannotKickAnotherAdmin(t *testing.T) {
 		WithArgs(int64(3001), int64(1003), 1).WillReturnRows(groupMemberRows().AddRow(3001, 1003, "admin", "2026-07-13T00:00:00Z"))
 	mock.ExpectRollback()
 
-	response, err := (&FriendHandler{}).handleKickGroupMember(
+	response, err := (&FriendHandler{}).handleKickGroupMemberWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1002},
 		&friend.KickGroupMember{RequestUserId: 1002, GroupId: 3001, UserId: 1003},
 	)
@@ -110,7 +110,7 @@ func TestExpiredRequestCommitsExpiredStateBeforeReturningError(t *testing.T) {
 	mock.ExpectExec(`UPDATE "relationship_requests" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	response, err := (&FriendHandler{}).handleResolveFriendRequest(
+	response, err := (&FriendHandler{}).handleResolveFriendRequestWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1002},
 		&friend.ResolveFriendRequest{UserId: 1002, RequestId: 99, Decision: friend.RequestDecision_REQUEST_ACCEPT},
 	)
@@ -128,7 +128,7 @@ func TestResolvedRelationshipRequestCanReplaySameDecision(t *testing.T) {
 	mock.ExpectQuery(`relationship_requests\.\*, requester\.name`).WithArgs(int64(100)).
 		WillReturnRows(relationshipRequestViewRows().AddRow(100, "friend", 1001, 1002, 0, "", "accepted", nil, "2026-07-13T00:00:00Z", "2026-07-20T00:00:00Z", "2026-07-13T01:00:00Z", 1002, "Alice", "", "Bob", "", "", ""))
 
-	response, err := (&FriendHandler{}).handleResolveFriendRequest(
+	response, err := (&FriendHandler{}).handleResolveFriendRequestWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1002},
 		&friend.ResolveFriendRequest{UserId: 1002, RequestId: 100, Decision: friend.RequestDecision_REQUEST_ACCEPT},
 	)

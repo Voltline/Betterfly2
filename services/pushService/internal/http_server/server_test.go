@@ -6,9 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
 	pushservice "pushService/internal/push"
 )
@@ -19,12 +17,6 @@ type httpTestStore struct {
 }
 
 func (s *httpTestStore) Ping(context.Context) error { return nil }
-func (s *httpTestStore) RegisterToken(context.Context, int64, string, string, string, string, string) error {
-	return nil
-}
-func (s *httpTestStore) UnregisterToken(context.Context, int64, string, string, string) (bool, error) {
-	return false, nil
-}
 func (s *httpTestStore) ListActiveTokens(_ context.Context, userID int64, pushType string) ([]db.PushDeviceToken, error) {
 	var result []db.PushDeviceToken
 	for _, token := range s.tokens {
@@ -33,19 +25,6 @@ func (s *httpTestStore) ListActiveTokens(_ context.Context, userID int64, pushTy
 		}
 	}
 	return result, nil
-}
-func (s *httpTestStore) ListMessageTokens(context.Context, []int64, int64, bool) ([]db.PushDeviceToken, error) {
-	return s.tokens, nil
-}
-func (s *httpTestStore) ClaimMessageDeliveries(_ context.Context, _ int64, tokenIDs []int64, _ time.Time, _ time.Duration) (map[int64]int, bool, error) {
-	claims := make(map[int64]int, len(tokenIDs))
-	for _, tokenID := range tokenIDs {
-		claims[tokenID] = 1
-	}
-	return claims, false, nil
-}
-func (s *httpTestStore) FinalizeMessageDeliveries(context.Context, []pushservice.DeliveryUpdate) error {
-	return nil
 }
 func (s *httpTestStore) MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error) {
 	return true, nil
@@ -86,8 +65,7 @@ func (s *httpTestStore) ListDebugAudits(context.Context, int) ([]db.PushDebugAud
 func (s *httpTestStore) TokenSummary(context.Context) (pushservice.TokenSummary, error) {
 	return pushservice.TokenSummary{Total: int64(len(s.tokens)), Active: int64(len(s.tokens)), APNs: int64(len(s.tokens))}, nil
 }
-func (s *httpTestStore) DeactivateToken(context.Context, int64) error    { return nil }
-func (s *httpTestStore) DeactivateTokens(context.Context, []int64) error { return nil }
+func (s *httpTestStore) DeactivateToken(context.Context, int64) error { return nil }
 
 type httpTestSender struct{}
 
@@ -96,13 +74,9 @@ func (httpTestSender) Send(context.Context, pushservice.Notification) (pushservi
 	return pushservice.SendResult{APNSID: "debug-apns-id"}, nil
 }
 
-type httpTestPublisher struct{}
-
-func (httpTestPublisher) Publish(context.Context, string, *pushpb.ResponseMessage) error { return nil }
-
 func newHTTPTestServer(token string) (*Server, *httpTestStore) {
 	store := &httpTestStore{tokens: []db.PushDeviceToken{{ID: 1, UserID: 2, DeviceID: "iphone", Token: "00112233445566778899", Environment: "sandbox", PushType: pushservice.PushTypeAPNs, IsActive: true}}}
-	service := pushservice.NewService(store, httpTestSender{}, httpTestPublisher{}, "com.Voltline.Betterfly2")
+	service := pushservice.NewService(store, httpTestSender{}, "com.Voltline.Betterfly2")
 	return NewWithAdminToken(service, token), store
 }
 

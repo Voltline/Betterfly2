@@ -70,11 +70,6 @@ func AddUser(user *User) error {
 	return err
 }
 
-// UpdateUserNameByID 用于更新用户昵称
-func UpdateUserNameByID(id int64, newName string) error {
-	return UpdateUserNameByIDWithDB(DB(), id, newName)
-}
-
 func UpdateUserNameByIDWithDB(database *gorm.DB, id int64, newName string) error {
 	nowTime := utils.NowTime()
 	return database.Model(&User{}).
@@ -83,11 +78,6 @@ func UpdateUserNameByIDWithDB(database *gorm.DB, id int64, newName string) error
 			"name":        newName,
 			"update_time": nowTime,
 		}).Error
-}
-
-// UpdateUserAvatarByID 用于更新用户头像
-func UpdateUserAvatarByID(id int64, newAvatarURL string) error {
-	return UpdateUserAvatarByIDWithDB(DB(), id, newAvatarURL)
 }
 
 func UpdateUserAvatarByIDWithDB(database *gorm.DB, id int64, newAvatarURL string) error {

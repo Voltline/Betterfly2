@@ -30,9 +30,10 @@ var timeFormats = []string{
 }
 
 type storageRequestContext struct {
-	handler  *StorageHandler
-	request  *storage.RequestMessage
-	database *gorm.DB
+	handler   *StorageHandler
+	request   *storage.RequestMessage
+	database  *gorm.DB
+	cacheKeys *[]string
 }
 
 type storageRequestModule func(*dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage])
@@ -125,9 +126,10 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 	sugar.Debugf("收到存储请求: from_topic=%s, target_user_id=%d",
 		req.FromKafkaTopic, req.TargetUserId)
 
-	_, err := db.ExecuteInboxOutbox(ctx, h.requestDatabase(), "storage", operationKey, func(tx *gorm.DB) ([]byte, []db.PendingOutboxEvent, error) {
+	cacheKeys := make([]string, 0, 1)
+	execution, err := db.ExecuteInboxOutbox(ctx, h.requestDatabase(), "storage", operationKey, func(tx *gorm.DB) ([]byte, []db.PendingOutboxEvent, error) {
 		resp, dispatchErr := getStorageRequestRouter().Dispatch(storageRequestContext{
-			handler: h, request: req, database: tx,
+			handler: h, request: req, database: tx, cacheKeys: &cacheKeys,
 		}, req.Payload)
 		if dispatchErr != nil {
 			sugar.Errorw("处理存储请求暂时失败", "operation_key", operationKey, "error", dispatchErr)
@@ -149,15 +151,30 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
 		}}, nil
 	})
+	if err == nil {
+		if execution.Replayed && len(cacheKeys) == 0 {
+			cacheKeys = mutationCacheKeys(req)
+		}
+		h.clearCacheKeys(cacheKeys)
+	}
 	return err
 }
 
-// handleStoreNewMessage 处理存储新消息请求
-func (h *StorageHandler) handleStoreNewMessage(req *storage.RequestMessage, msg *storage.StoreNewMessage) (*storage.ResponseMessage, error) {
-	return h.handleStoreNewMessageWithDB(h.requestDatabase(), req, msg)
+func mutationCacheKeys(req *storage.RequestMessage) []string {
+	switch payload := req.GetPayload().(type) {
+	case *storage.RequestMessage_StoreNewMessage:
+		return []string{fmt.Sprintf("user_messages:%d", payload.StoreNewMessage.GetToUserId())}
+	case *storage.RequestMessage_UpdateUserName:
+		return []string{fmt.Sprintf("user:%d", payload.UpdateUserName.GetUserId())}
+	case *storage.RequestMessage_UpdateUserAvatar:
+		return []string{fmt.Sprintf("user:%d", payload.UpdateUserAvatar.GetUserId())}
+	default:
+		return nil
+	}
 }
 
-func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage) (*storage.ResponseMessage, error) {
+// handleStoreNewMessage 处理存储新消息请求
+func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 保存到数据库
@@ -180,8 +197,12 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 
 	sugar.Debugf("消息保存成功: message_id=%d client_message_id=%s created=%t", storedMessage.MessageID, msg.GetClientMessageId(), created)
 
-	// 更新缓存（先清除相关缓存）
-	h.clearMessageCache(msg.ToUserId)
+	cacheKey := fmt.Sprintf("user_messages:%d", msg.ToUserId)
+	if cacheKeys != nil {
+		*cacheKeys = append(*cacheKeys, cacheKey)
+	} else {
+		h.clearCacheKeys([]string{cacheKey})
+	}
 
 	// 构建响应
 	resp := &storage.ResponseMessage{
@@ -207,10 +228,6 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 }
 
 // handleQueryMessage 处理查询消息请求
-func (h *StorageHandler) handleQueryMessage(req *storage.RequestMessage, query *storage.QueryMessage) (*storage.ResponseMessage, error) {
-	return h.handleQueryMessageWithDB(h.database, req, query)
-}
-
 func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryMessage) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
@@ -248,10 +265,6 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 	return h.authorizedMessageResponseWithDB(database, req, message)
 }
 
-func (h *StorageHandler) authorizedMessageResponse(req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
-	return h.authorizedMessageResponseWithDB(h.database, req, message)
-}
-
 func (h *StorageHandler) authorizedMessageResponseWithDB(database *gorm.DB, req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
 	if database == nil && message != nil && message.IsGroup && req.GetTargetUserId() != message.FromUserID {
 		database = h.requestDatabase()
@@ -279,10 +292,6 @@ func messageNotFoundResponse(req *storage.RequestMessage) *storage.ResponseMessa
 }
 
 // handleQuerySyncMessages 处理同步消息请求
-func (h *StorageHandler) handleQuerySyncMessages(req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
-	return h.handleQuerySyncMessagesWithDB(h.requestDatabase(), req, query)
-}
-
 func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QuerySyncMessages) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 	if req.GetTargetUserId() <= 0 || req.GetTargetUserId() != query.GetToUserId() {
@@ -381,11 +390,7 @@ func normalizeSyncPageSize(requested int32) int {
 }
 
 // handleUpdateUserName 处理更新用户名请求
-func (h *StorageHandler) handleUpdateUserName(req *storage.RequestMessage, update *storage.UpdateUserName) (*storage.ResponseMessage, error) {
-	return h.handleUpdateUserNameWithDB(h.requestDatabase(), req, update)
-}
-
-func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserName) (*storage.ResponseMessage, error) {
+func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserName, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 更新数据库
@@ -418,8 +423,12 @@ func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *stor
 	sugar.Debugf("用户名更新成功: user_id=%d, new_name=%s",
 		update.UserId, update.NewUserName)
 
-	// 清除用户信息缓存
-	h.clearUserCache(update.UserId)
+	cacheKey := fmt.Sprintf("user:%d", update.UserId)
+	if cacheKeys != nil {
+		*cacheKeys = append(*cacheKeys, cacheKey)
+	} else {
+		h.clearCacheKeys([]string{cacheKey})
+	}
 
 	resp := &storage.ResponseMessage{
 		Result:       storage.StorageResult_OK,
@@ -430,11 +439,7 @@ func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *stor
 }
 
 // handleUpdateUserAvatar 处理更新用户头像请求
-func (h *StorageHandler) handleUpdateUserAvatar(req *storage.RequestMessage, update *storage.UpdateUserAvatar) (*storage.ResponseMessage, error) {
-	return h.handleUpdateUserAvatarWithDB(h.requestDatabase(), req, update)
-}
-
-func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserAvatar) (*storage.ResponseMessage, error) {
+func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserAvatar, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
 	// 更新数据库
@@ -466,8 +471,12 @@ func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *st
 	sugar.Debugf("用户头像更新成功: user_id=%d, new_avatar=%s",
 		update.UserId, update.NewAvatarUrl)
 
-	// 清除用户信息缓存
-	h.clearUserCache(update.UserId)
+	cacheKey := fmt.Sprintf("user:%d", update.UserId)
+	if cacheKeys != nil {
+		*cacheKeys = append(*cacheKeys, cacheKey)
+	} else {
+		h.clearCacheKeys([]string{cacheKey})
+	}
 
 	resp := &storage.ResponseMessage{
 		Result:       storage.StorageResult_OK,
@@ -542,30 +551,16 @@ func (h *StorageHandler) setToCache(key string, value interface{}, ttl time.Dura
 	}
 }
 
-// clearMessageCache 清除消息相关缓存
-func (h *StorageHandler) clearMessageCache(userID int64) {
-	// 清除用户消息列表缓存
-	cacheKey := fmt.Sprintf("user_messages:%d", userID)
-	h.l1Cache.Del(cacheKey)
-	if h.l2Cache != nil {
-		h.l2Cache.Del(cacheKey)
-	}
-}
-
-// clearUserCache 清除用户信息缓存
-func (h *StorageHandler) clearUserCache(userID int64) {
-	cacheKey := fmt.Sprintf("user:%d", userID)
-	h.l1Cache.Del(cacheKey)
-	if h.l2Cache != nil {
-		h.l2Cache.Del(cacheKey)
+func (h *StorageHandler) clearCacheKeys(keys []string) {
+	for _, key := range keys {
+		h.l1Cache.Del(key)
+		if h.l2Cache != nil {
+			h.l2Cache.Del(key)
+		}
 	}
 }
 
 // handleQueryUser 处理查询用户信息请求
-func (h *StorageHandler) handleQueryUser(req *storage.RequestMessage, query *storage.QueryUser) (*storage.ResponseMessage, error) {
-	return h.handleQueryUserWithDB(h.database, req, query)
-}
-
 func (h *StorageHandler) handleQueryUserWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryUser) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 
@@ -621,10 +616,6 @@ func (h *StorageHandler) buildUserInfoResponse(req *storage.RequestMessage, user
 }
 
 // handleQueryFileExists 处理查询文件是否存在请求
-func (h *StorageHandler) handleQueryFileExists(req *storage.RequestMessage, query *storage.QueryFileExists) (*storage.ResponseMessage, error) {
-	return h.handleQueryFileExistsWithDB(h.database, req, query)
-}
-
 func (h *StorageHandler) handleQueryFileExistsWithDB(database *gorm.DB, req *storage.RequestMessage, query *storage.QueryFileExists) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
 

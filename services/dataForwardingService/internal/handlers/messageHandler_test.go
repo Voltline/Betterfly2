@@ -266,7 +266,7 @@ func TestBuildInsertGroupFriendRequestRoutesResponseToRequester(t *testing.T) {
 }
 
 func TestBuildInsertGroupUserFriendRequestRoutesResponseToRequester(t *testing.T) {
-	req := buildInsertGroupUserFriendRequest(1001, 3003, "df-pod-1")
+	req := buildInsertGroupUserFriendRequestWithMessage(1001, 3003, "", "df-pod-1")
 
 	payload, ok := req.Payload.(*friend.RequestMessage_AddGroupMember)
 	if !ok {

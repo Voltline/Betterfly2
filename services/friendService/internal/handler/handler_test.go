@@ -115,7 +115,7 @@ func TestHandleQueryGroup_AllowsNonMemberLookup(t *testing.T) {
 			"group_id", "name", "avatar", "owner_user_id", "is_delete", "update_time",
 		}).AddRow(3001, "test-group", "group-avatar", 1001, false, "2026-04-16 12:00:00"))
 
-	resp, err := handler.handleQueryGroup(req, req.GetQueryGroup())
+	resp, err := handler.handleQueryGroupWithDB(handler.database, req, req.GetQueryGroup())
 	if err != nil {
 		t.Fatalf("handleQueryGroup 返回错误: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
 		}).AddRow(3001, "team-a", "avatar-a", 1001, "2026-04-17 10:00:00").
 			AddRow(3002, "team-b", "avatar-b", 1002, "2026-04-17 11:00:00"))
 
-	resp, err := handler.handleQueryJoinedGroups(req, req.GetQueryJoinedGroups())
+	resp, err := handler.handleQueryJoinedGroupsWithDB(handler.database, req, req.GetQueryJoinedGroups())
 	if err != nil {
 		t.Fatalf("handleQueryJoinedGroups 返回错误: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestHandleRemoveGroupMember_LastOwnerLeavesAndClosesGroup(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	resp, err := handler.handleRemoveGroupMember(req, req.GetRemoveGroupMember())
+	resp, err := handler.handleRemoveGroupMemberWithDB(handler.database, req, req.GetRemoveGroupMember())
 	if err != nil {
 		t.Fatalf("handleRemoveGroupMember 返回错误: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestHandleRemoveGroupMember_OwnerTransfersBeforeLeaving(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	resp, err := handler.handleRemoveGroupMember(req, req.GetRemoveGroupMember())
+	resp, err := handler.handleRemoveGroupMemberWithDB(handler.database, req, req.GetRemoveGroupMember())
 	if err != nil {
 		t.Fatalf("handleRemoveGroupMember 返回错误: %v", err)
 	}
@@ -282,37 +282,37 @@ func TestFriendHandlersRejectInvalidArgumentsWithoutDatabaseAccess(t *testing.T)
 		call func() (*friend.ResponseMessage, error)
 	}{
 		{name: "query friend list", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleQueryFriendList(req, &friend.QueryFriendList{})
+			return handler.handleQueryFriendListWithDB(handler.database, req, &friend.QueryFriendList{})
 		}},
 		{name: "remove self as friend", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleRemoveDirectFriend(req, &friend.RemoveDirectFriend{UserId: 1, FriendId: 1})
+			return handler.handleRemoveDirectFriendWithDB(handler.database, req, &friend.RemoveDirectFriend{UserId: 1, FriendId: 1})
 		}},
 		{name: "update alias missing friend", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleUpdateFriendAlias(req, &friend.UpdateFriendAlias{UserId: 1})
+			return handler.handleUpdateFriendAliasWithDB(handler.database, req, &friend.UpdateFriendAlias{UserId: 1})
 		}},
 		{name: "update notify missing user", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleUpdateFriendNotify(req, &friend.UpdateFriendNotify{FriendId: 2})
+			return handler.handleUpdateFriendNotifyWithDB(handler.database, req, &friend.UpdateFriendNotify{FriendId: 2})
 		}},
 		{name: "add self as friend", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleAddDirectFriend(req, &friend.AddDirectFriend{UserId: 1, FriendId: 1})
+			return handler.handleAddDirectFriendWithDB(handler.database, req, &friend.AddDirectFriend{UserId: 1, FriendId: 1})
 		}},
 		{name: "create unnamed group", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleCreateGroup(req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2})
+			return handler.handleCreateGroupWithDB(handler.database, req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2})
 		}},
 		{name: "add invalid group member", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleAddGroupMember(req, &friend.AddGroupMember{UserId: 1})
+			return handler.handleAddGroupMemberWithDB(handler.database, req, &friend.AddGroupMember{UserId: 1})
 		}},
 		{name: "empty group avatar", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleUpdateGroupAvatar(req, &friend.UpdateGroupAvatar{RequestUserId: 1, GroupId: 2})
+			return handler.handleUpdateGroupAvatarWithDB(handler.database, req, &friend.UpdateGroupAvatar{RequestUserId: 1, GroupId: 2})
 		}},
 		{name: "query invalid group members", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleQueryGroupMembers(req, &friend.QueryGroupMembers{RequestUserId: 1})
+			return handler.handleQueryGroupMembersWithDB(handler.database, req, &friend.QueryGroupMembers{RequestUserId: 1})
 		}},
 		{name: "query joined groups without user", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleQueryJoinedGroups(req, &friend.QueryJoinedGroups{})
+			return handler.handleQueryJoinedGroupsWithDB(handler.database, req, &friend.QueryJoinedGroups{})
 		}},
 		{name: "remove a different user", call: func() (*friend.ResponseMessage, error) {
-			return handler.handleRemoveGroupMember(req, &friend.RemoveGroupMember{RequestUserId: 1, GroupId: 2, UserId: 3})
+			return handler.handleRemoveGroupMemberWithDB(handler.database, req, &friend.RemoveGroupMember{RequestUserId: 1, GroupId: 2, UserId: 3})
 		}},
 	}
 
@@ -338,7 +338,7 @@ func TestHandleQueryFriendListMapsDatabaseContacts(t *testing.T) {
 
 	handler := &FriendHandler{}
 	req := &friend.RequestMessage{TargetUserId: 1001}
-	resp, err := handler.handleQueryFriendList(req, &friend.QueryFriendList{UserId: 1001})
+	resp, err := handler.handleQueryFriendListWithDB(handler.database, req, &friend.QueryFriendList{UserId: 1001})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestHandleQueryGroupMembersMapsActiveMembers(t *testing.T) {
 			AddRow(int64(1001), "alice", "Alice", "avatar-a", "owner", "2026-07-12T10:00:00Z").
 			AddRow(int64(1002), "bob", "Bob", "avatar-b", "member", "2026-07-12T10:01:00Z"))
 
-	response, err := (&FriendHandler{}).handleQueryGroupMembers(
+	response, err := (&FriendHandler{}).handleQueryGroupMembersWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 1001},
 		&friend.QueryGroupMembers{RequestUserId: 1001, GroupId: 3001},
 	)
@@ -385,7 +385,7 @@ func TestHandleQueryGroupMembersRejectsNonMember(t *testing.T) {
 		WithArgs(int64(3001), int64(2001)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	response, err := (&FriendHandler{}).handleQueryGroupMembers(
+	response, err := (&FriendHandler{}).handleQueryGroupMembersWithDB(nil,
 		&friend.RequestMessage{TargetUserId: 2001},
 		&friend.QueryGroupMembers{RequestUserId: 2001, GroupId: 3001},
 	)

@@ -13,14 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// 全局WebSocket处理器实例
-var globalWebSocketHandler *handlers.WebSocketHandler
-
-// GetGlobalWebSocketHandler 获取全局WebSocket处理器
-func GetGlobalWebSocketHandler() *handlers.WebSocketHandler {
-	return globalWebSocketHandler
-}
-
 func main() {
 	sugar := logger.Sugar()
 	defer logger.Sync()
@@ -41,11 +33,10 @@ func main() {
 	}
 	defer redisClient.Rdb.Close()
 
-	// 创建并设置全局WebSocket处理器
-	globalWebSocketHandler = handlers.NewWebSocketHandler()
-	defer globalWebSocketHandler.Close()
+	webSocketHandler := handlers.NewWebSocketHandler()
+	defer webSocketHandler.Close()
 	// 设置handlers包中的全局实例
-	handlers.SetGlobalWebSocketHandler(globalWebSocketHandler)
+	handlers.SetGlobalWebSocketHandler(webSocketHandler)
 
 	go ConsumerRoutine()
 
@@ -72,8 +63,7 @@ func main() {
 
 	sugar.Infoln("Betterfly2服务器启动完成")
 
-	// 使用全局WebSocket处理器
-	err = globalWebSocketHandler.StartWebSocketServer()
+	err = webSocketHandler.StartWebSocketServer()
 	if err != nil {
 		sugar.Fatalln("启动 WebSocket 服务器失败: ", err)
 	}

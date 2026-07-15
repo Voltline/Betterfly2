@@ -2,9 +2,7 @@ package push
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -16,72 +14,6 @@ import (
 type GormStore struct {
 	db *gorm.DB
 }
-
-const legacyListMessageTokensSQL = `WITH targets AS (
-  SELECT DISTINCT value::bigint AS user_id
-  FROM jsonb_array_elements_text(CAST(? AS jsonb))
-)
-SELECT token.*
-FROM targets
-JOIN push_device_tokens AS token ON token.user_id = targets.user_id
-LEFT JOIN friends ON friends.user_id = token.user_id
-  AND friends.friend_id = ? AND friends.is_delete = FALSE
-WHERE token.push_type = ? AND token.is_active = TRUE
-  AND (? = TRUE OR friends.user_id IS NULL OR friends.is_notify = TRUE)
-ORDER BY token.id ASC`
-
-const legacyClaimInsertSQL = `WITH token_ids AS (
-  SELECT DISTINCT value::bigint AS token_id
-  FROM jsonb_array_elements_text(CAST(? AS jsonb))
-)
-INSERT INTO push_message_deliveries
-  (message_id, token_id, status, attempt, lease_until, next_retry_at, created_at, updated_at)
-SELECT ?, token_id, ?, 1, ?, ?, ?, ? FROM token_ids
-ON CONFLICT (message_id, token_id) DO NOTHING
-RETURNING token_id, attempt`
-
-const legacyClaimReclaimSQL = `WITH token_ids AS (
-  SELECT DISTINCT value::bigint AS token_id
-  FROM jsonb_array_elements_text(CAST(? AS jsonb))
-)
-UPDATE push_message_deliveries AS delivery
-SET status = ?, attempt = delivery.attempt + 1, lease_until = ?, updated_at = ?
-FROM token_ids
-WHERE delivery.message_id = ? AND delivery.token_id = token_ids.token_id AND (
-  (delivery.status = ? AND (delivery.next_retry_at = '' OR delivery.next_retry_at <= ?)) OR
-  (delivery.status = ? AND delivery.lease_until <= ?)
-)
-RETURNING delivery.token_id, delivery.attempt`
-
-const legacyClaimOutstandingSQL = `WITH token_ids AS (
-  SELECT DISTINCT value::bigint AS token_id
-  FROM jsonb_array_elements_text(CAST(? AS jsonb))
-)
-SELECT count(*)
-FROM push_message_deliveries AS delivery
-JOIN token_ids ON token_ids.token_id = delivery.token_id
-WHERE delivery.message_id = ? AND delivery.status IN (?, ?)`
-
-const legacyFinalizeDeliveriesSQL = `UPDATE push_message_deliveries AS delivery SET
-  status = update_values.status,
-  lease_until = '',
-  next_retry_at = update_values.next_retry_at,
-  last_error = update_values.last_error,
-  apns_id = update_values.apns_id,
-  updated_at = update_values.updated_at
-FROM jsonb_to_recordset(CAST(? AS jsonb)) AS update_values(
-  message_id bigint, token_id bigint, status text, next_retry_at text,
-  last_error text, apns_id text, updated_at text, deactivate_token boolean
-)
-WHERE delivery.message_id = update_values.message_id AND delivery.token_id = update_values.token_id`
-
-const legacyDeactivateTokensSQL = `UPDATE push_device_tokens AS token SET
-  is_active = FALSE, updated_at = ?
-WHERE token.id IN (
-  SELECT token_id
-  FROM jsonb_to_recordset(CAST(? AS jsonb)) AS update_values(token_id bigint, deactivate_token boolean)
-  WHERE deactivate_token = TRUE
-)`
 
 func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conversationID int64, isGroup bool) (MessagePresentation, error) {
 	var sender db.User
@@ -123,126 +55,6 @@ func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conve
 
 func NewGormStore() *GormStore {
 	return &GormStore{db: db.DB()}
-}
-
-func (s *GormStore) ListMessageTokens(ctx context.Context, targetUserIDs []int64, senderUserID int64, isGroup bool) ([]db.PushDeviceToken, error) {
-	if len(targetUserIDs) == 0 {
-		return nil, nil
-	}
-	targetJSON, err := json.Marshal(targetUserIDs)
-	if err != nil {
-		return nil, err
-	}
-	var tokens []db.PushDeviceToken
-	err = s.db.WithContext(ctx).Raw(legacyListMessageTokensSQL, string(targetJSON), senderUserID, PushTypeAPNs, isGroup).Scan(&tokens).Error
-	return tokens, err
-}
-
-func (s *GormStore) ClaimMessageDeliveries(
-	ctx context.Context,
-	messageID int64,
-	tokenIDs []int64,
-	now time.Time,
-	lease time.Duration,
-) (map[int64]int, bool, error) {
-	claims := make(map[int64]int, len(tokenIDs))
-	if messageID <= 0 || len(tokenIDs) == 0 {
-		return claims, false, nil
-	}
-	nowValue := db.FormatReliabilityTime(now)
-	leaseUntil := db.FormatReliabilityTime(now.Add(lease))
-	tokenJSON, err := json.Marshal(tokenIDs)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := scanDeliveryClaims(s.db.WithContext(ctx).Raw(
-		legacyClaimInsertSQL, string(tokenJSON), messageID, DeliveryClaimed, leaseUntil, nowValue, nowValue, nowValue,
-	), claims); err != nil {
-		return nil, false, err
-	}
-	if err := scanDeliveryClaims(s.db.WithContext(ctx).Raw(
-		legacyClaimReclaimSQL, string(tokenJSON),
-		DeliveryClaimed, leaseUntil, nowValue, messageID,
-		DeliveryRetryable, nowValue, DeliveryClaimed, nowValue,
-	), claims); err != nil {
-		return nil, false, err
-	}
-
-	var outstanding int64
-	err = s.db.WithContext(ctx).Raw(
-		legacyClaimOutstandingSQL, string(tokenJSON), messageID, DeliveryClaimed, DeliveryRetryable,
-	).Scan(&outstanding).Error
-	if err != nil {
-		return nil, false, err
-	}
-	return claims, outstanding > int64(len(claims)), nil
-}
-
-func scanDeliveryClaims(query *gorm.DB, claims map[int64]int) error {
-	rows, err := query.Rows()
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var tokenID int64
-		var attempt int
-		if err := rows.Scan(&tokenID, &attempt); err != nil {
-			return err
-		}
-		claims[tokenID] = attempt
-	}
-	return rows.Err()
-}
-
-func (s *GormStore) FinalizeMessageDeliveries(ctx context.Context, updates []DeliveryUpdate) error {
-	if len(updates) == 0 {
-		return nil
-	}
-	now := db.FormatReliabilityTime(time.Now())
-	type updateRow struct {
-		MessageID       int64  `json:"message_id"`
-		TokenID         int64  `json:"token_id"`
-		Status          string `json:"status"`
-		NextRetryAt     string `json:"next_retry_at"`
-		LastError       string `json:"last_error"`
-		APNSID          string `json:"apns_id"`
-		UpdatedAt       string `json:"updated_at"`
-		DeactivateToken bool   `json:"deactivate_token"`
-	}
-	rows := make([]updateRow, 0, len(updates))
-	hasInvalidToken := false
-	for _, update := range updates {
-		nextRetryAt := ""
-		if !update.NextRetryAt.IsZero() {
-			nextRetryAt = db.FormatReliabilityTime(update.NextRetryAt)
-		}
-		rows = append(rows, updateRow{
-			MessageID: update.MessageID, TokenID: update.TokenID, Status: update.Status,
-			NextRetryAt: nextRetryAt, LastError: update.LastError, APNSID: update.APNSID,
-			UpdatedAt: now, DeactivateToken: update.DeactivateToken,
-		})
-		if update.DeactivateToken {
-			hasInvalidToken = true
-		}
-	}
-	updateJSON, err := json.Marshal(rows)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Exec(legacyFinalizeDeliveriesSQL, string(updateJSON))
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != int64(len(updates)) {
-			return fmt.Errorf("finalize push deliveries: updated %d of %d rows", result.RowsAffected, len(updates))
-		}
-		if !hasInvalidToken {
-			return nil
-		}
-		return tx.Exec(legacyDeactivateTokensSQL, now, string(updateJSON)).Error
-	})
 }
 
 func (s *GormStore) FindTokens(ctx context.Context, filter TokenFilter) ([]db.PushDeviceToken, error) {
@@ -358,20 +170,6 @@ func (s *GormStore) Ping(ctx context.Context) error {
 	return sqlDB.PingContext(ctx)
 }
 
-func (s *GormStore) RegisterToken(ctx context.Context, userID int64, deviceID, token, environment, pushType, bundleID string) error {
-	now := time.Now().UTC()
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return registerTokenWithDB(tx, userID, deviceID, token, environment, pushType, bundleID, now)
-	})
-}
-
-func (s *GormStore) UnregisterToken(ctx context.Context, userID int64, deviceID, environment, pushType string) (bool, error) {
-	result := s.db.WithContext(ctx).
-		Where("user_id = ? AND device_id = ? AND environment = ? AND push_type = ?", userID, deviceID, environment, pushType).
-		Delete(&db.PushDeviceToken{})
-	return result.RowsAffected > 0, result.Error
-}
-
 func (s *GormStore) ListActiveTokens(ctx context.Context, userID int64, pushType string) ([]db.PushDeviceToken, error) {
 	var tokens []db.PushDeviceToken
 	err := s.db.WithContext(ctx).
@@ -406,20 +204,4 @@ func (s *GormStore) DeactivateToken(ctx context.Context, id int64) error {
 			"is_active":  false,
 			"updated_at": db.FormatReliabilityTime(time.Now()),
 		}).Error
-}
-
-func (s *GormStore) DeactivateTokens(ctx context.Context, ids []int64) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	encoded, err := json.Marshal(ids)
-	if err != nil {
-		return err
-	}
-	return s.db.WithContext(ctx).Exec(`UPDATE push_device_tokens SET
-  is_active = FALSE, updated_at = ?
-WHERE id IN (
-  SELECT DISTINCT value::bigint
-  FROM jsonb_array_elements_text(CAST(? AS jsonb))
-)`, db.FormatReliabilityTime(time.Now()), string(encoded)).Error
 }

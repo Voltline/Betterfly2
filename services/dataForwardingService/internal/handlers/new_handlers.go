@@ -7,7 +7,6 @@ import (
 	"data_forwarding_service/internal/connection"
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
-	"data_forwarding_service/internal/session"
 	"errors"
 	"math/rand"
 	"net"
@@ -23,7 +22,6 @@ import (
 // WebSocketHandler 处理WebSocket连接和消息
 type WebSocketHandler struct {
 	connManager     *connection.ConnectionManager
-	sessionManager  *session.SessionManager
 	router          *router.Router
 	config          websocketConfig
 	upgrader        websocket.Upgrader
@@ -34,22 +32,13 @@ type WebSocketHandler struct {
 
 // NewWebSocketHandler 创建新的WebSocket处理器
 func NewWebSocketHandler() *WebSocketHandler {
-	return NewWebSocketHandlerWithContext(context.TODO())
-}
-
-func NewWebSocketHandlerWithContext(parent context.Context) *WebSocketHandler {
 	logger.Sugar().Debugf("创建WebSocketHandler实例")
-	if parent == nil {
-		parent = context.TODO()
-	}
-	lifecycleCtx, lifecycleCancel := context.WithCancel(parent)
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	connManager := connection.NewConnectionManager()
-	sessionManager := session.NewSessionManager()
 	router := router.NewRouter(connManager)
 
 	handler := &WebSocketHandler{
 		connManager:     connManager,
-		sessionManager:  sessionManager,
 		router:          router,
 		config:          loadWebSocketConfig(),
 		lifecycleCtx:    lifecycleCtx,
@@ -185,11 +174,7 @@ func (h *WebSocketHandler) readProcess(conn *connection.Connection) {
 	sugar := logger.Sugar()
 	defer func() {
 		// 连接关闭时清理
-		wasCurrentSession := conn.IsAuthenticated() && conn.UserID != "" && h.connManager.IsCurrentUserConnection(conn.UserID, conn.ID)
 		h.connManager.RemoveConnection(conn.ID)
-		if wasCurrentSession {
-			h.sessionManager.RemoveSession(conn.UserID)
-		}
 		sugar.Debugf("(%v, %v)连接已关闭", conn.ID, conn.Conn.RemoteAddr())
 	}()
 
@@ -304,8 +289,6 @@ func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *
 		return
 	}
 
-	// 创建会话
-	h.sessionManager.ReplaceSession(userIDStr, conn.ID)
 	go h.refreshRouteLease(conn, userIDStr)
 	_ = conn.Conn.SetReadDeadline(time.Now().Add(h.config.pongWait))
 
@@ -386,8 +369,7 @@ func (h *WebSocketHandler) SendMessage(userID string, message []byte) error {
 
 // StopClient 外部关闭特定连接
 func (h *WebSocketHandler) StopClient(userID string) {
-	// 强制登出用户
-	h.sessionManager.ForceLogout(userID, h.connManager)
+	h.connManager.StopUserIfOwner(userID, "*")
 }
 
 func (h *WebSocketHandler) StopClientIfOwner(userID, ownerToken string) {

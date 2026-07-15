@@ -16,10 +16,6 @@ type FriendContact struct {
 	UpdateTime string `gorm:"column:update_time"`
 }
 
-func RemoveDirectFriendPair(userID, friendID int64) (bool, string, error) {
-	return RemoveDirectFriendPairWithDB(DB(), userID, friendID)
-}
-
 func RemoveDirectFriendPairWithDB(database *gorm.DB, userID, friendID int64) (bool, string, error) {
 	now := utils.NowTime()
 	affected := int64(0)
@@ -61,10 +57,6 @@ func GetFriendListWithDB(database *gorm.DB, userID int64) ([]FriendContact, erro
 	return contacts, err
 }
 
-func UpdateFriendAlias(userID, friendID int64, alias string) (bool, string, error) {
-	return UpdateFriendAliasWithDB(DB(), userID, friendID, alias)
-}
-
 func UpdateFriendAliasWithDB(database *gorm.DB, userID, friendID int64, alias string) (bool, string, error) {
 	now := utils.NowTime()
 	result := database.Model(&Friend{}).
@@ -77,10 +69,6 @@ func UpdateFriendAliasWithDB(database *gorm.DB, userID, friendID int64, alias st
 		return false, "", result.Error
 	}
 	return result.RowsAffected > 0, now, nil
-}
-
-func UpdateFriendNotify(userID, friendID int64, isNotify bool) (bool, string, error) {
-	return UpdateFriendNotifyWithDB(DB(), userID, friendID, isNotify)
 }
 
 func UpdateFriendNotifyWithDB(database *gorm.DB, userID, friendID int64, isNotify bool) (bool, string, error) {

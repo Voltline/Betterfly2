@@ -22,19 +22,25 @@ func TestRedisStoreEnforcesBusyAndAcceptState(t *testing.T) {
 		State: StateRinging, Offer: Description{Type: "offer", SDP: "sdp"},
 		CreatedAt: now, RingDeadline: now.Add(30 * time.Second),
 	}
-	if err := store.CreateSession(context.Background(), session); err != nil {
+	if _, err := store.CreateSessionWithEvents(context.Background(), session, "create-1", nil); err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.CreateSession(context.Background(), session); err != nil {
+	if replayed, err := store.CreateSessionWithEvents(context.Background(), session, "create-1", nil); err != nil || !replayed {
 		t.Fatalf("same operation should replay existing session: %v", err)
 	}
 	busy := session
 	busy.ID = "call-2"
 	busy.CallerUserID = 3
-	if err := store.CreateSession(context.Background(), busy); !errors.Is(err, ErrUserBusy) {
+	if _, err := store.CreateSessionWithEvents(context.Background(), busy, "create-2", nil); !errors.Is(err, ErrUserBusy) {
 		t.Fatalf("expected user busy, got %v", err)
 	}
-	accepted, err := store.AcceptSession(context.Background(), session.ID, 2, Description{Type: "answer", SDP: "answer"})
+	accepted := session
+	answer := Description{Type: "answer", SDP: "answer"}
+	accepted.State = StateActive
+	accepted.Answer = &answer
+	acceptedAt := time.Now().UTC()
+	accepted.AcceptedAt = &acceptedAt
+	_, err := store.TransitionSessionWithEvents(context.Background(), session, accepted, false, "accept-1", nil)
 	if err != nil {
 		t.Fatalf("accept session: %v", err)
 	}
@@ -53,7 +59,7 @@ func TestExpiredCallCleanupDoesNotDeleteNewCallIndex(t *testing.T) {
 		State: StateRinging, Offer: Description{Type: "offer", SDP: "old"},
 		CreatedAt: now, RingDeadline: now.Add(time.Second),
 	}
-	if err := store.CreateSession(context.Background(), oldSession); err != nil {
+	if _, err := store.CreateSessionWithEvents(context.Background(), oldSession, "old-create", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,11 +69,19 @@ func TestExpiredCallCleanupDoesNotDeleteNewCallIndex(t *testing.T) {
 		State: StateRinging, Offer: Description{Type: "offer", SDP: "new"},
 		CreatedAt: now.Add(2 * time.Second), RingDeadline: now.Add(32 * time.Second),
 	}
-	if err := store.CreateSession(context.Background(), newSession); err != nil {
+	if _, err := store.CreateSessionWithEvents(context.Background(), newSession, "new-create", nil); err != nil {
 		t.Fatalf("create replacement session: %v", err)
 	}
-	if _, err := store.ExpireRinging(context.Background(), now.Add(2*time.Second), 10); err != nil {
+	expired, err := store.ExpiredRinging(context.Background(), now.Add(2*time.Second), 10)
+	if err != nil || len(expired) != 1 {
 		t.Fatalf("expire old session: %v", err)
+	}
+	ended := expired[0]
+	ended.State = StateEnded
+	endedAt := now.Add(2 * time.Second)
+	ended.EndedAt = &endedAt
+	if _, err := store.TransitionSessionWithEvents(context.Background(), expired[0], ended, true, "old-timeout", nil); err != nil {
+		t.Fatal(err)
 	}
 	got, err := server.Get(userCallKey(1))
 	if err != nil {

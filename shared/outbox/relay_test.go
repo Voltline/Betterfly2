@@ -46,7 +46,7 @@ func TestRelayCrashAfterPublishReplaysStableEventAtLeastOnce(t *testing.T) {
 		}
 		publishes.Add(1)
 		return nil
-	}, Config{Service: "friend", BatchSize: 1, Lease: time.Second, PublishTimeout: 500 * time.Millisecond, Now: func() time.Time { return now }})
+	}, Config{Service: "friend", Lease: time.Second, PublishTimeout: 500 * time.Millisecond, Now: func() time.Time { return now }})
 
 	expectRelayClaim(mock, db.OutboxStatusPending, 0)
 	injected := errors.New("database failed after Kafka accepted event")
@@ -78,7 +78,7 @@ func TestRelayPublishFailurePersistsRetryableState(t *testing.T) {
 	now := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	relay := New(database, func(context.Context, db.OutboxEvent) error {
 		return context.DeadlineExceeded
-	}, Config{Service: "storage", BatchSize: 1, Lease: 10 * time.Second, PublishTimeout: time.Second, InitialBackoff: time.Second, MaxBackoff: time.Minute, AlertAfterAttempts: 3, Now: func() time.Time { return now }})
+	}, Config{Service: "storage", Lease: 10 * time.Second, PublishTimeout: time.Second, InitialBackoff: time.Second, MaxBackoff: time.Minute, AlertAfterAttempts: 3, Now: func() time.Time { return now }})
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT \* FROM outbox_events`).WillReturnRows(sqlmock.NewRows([]string{
@@ -104,7 +104,7 @@ func TestRelayReclaimsLegacyFailedEvent(t *testing.T) {
 	relay := New(database, func(context.Context, db.OutboxEvent) error {
 		publishes.Add(1)
 		return nil
-	}, Config{Service: "friend", BatchSize: 1, Lease: time.Second, PublishTimeout: 500 * time.Millisecond, Now: func() time.Time { return now }})
+	}, Config{Service: "friend", Lease: time.Second, PublishTimeout: 500 * time.Millisecond, Now: func() time.Time { return now }})
 
 	expectRelayClaim(mock, db.OutboxStatusFailed, 20)
 	mock.ExpectBegin()

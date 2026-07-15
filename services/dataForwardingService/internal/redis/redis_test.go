@@ -22,11 +22,18 @@ func useTestRedis(t *testing.T) *miniredis.Miniredis {
 	return server
 }
 
-func TestGetContainerByConnectionRequiresMatchingLease(t *testing.T) {
-	server := useTestRedis(t)
-	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
+func claimTestRoute(t *testing.T, userID, containerID, ownerToken string, ttl time.Duration) SessionData {
+	t.Helper()
+	data := SessionData{ConnectionID: "connection-" + ownerToken, ContainerID: containerID, OwnerToken: ownerToken}
+	if err := (&DistributedSessionManager{}).ClaimSessionAndRoute(context.Background(), userID, data, ttl, ttl); err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+func TestGetContainerByConnectionRequiresMatchingLease(t *testing.T) {
+	server := useTestRedis(t)
+	claimTestRoute(t, "1", "pod-a", "owner-a", 90*time.Second)
 	if got, err := GetContainerByConnection("1"); err != nil || got != "pod-a" {
 		t.Fatalf("expected valid route, got route=%q err=%v", got, err)
 	}
@@ -49,10 +56,9 @@ func TestGetContainerByConnectionRejectsMismatchedLeaseWithoutDeletingMigratedRo
 		t.Fatalf("expected mismatched route rejection, got %v", err)
 	}
 
-	if err := RegisterConnection(context.Background(), "1", "pod-new", "owner-new"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := UnregisterConnectionResultForTest("1", "pod-old", "owner-old"); err != nil {
+	claimTestRoute(t, "1", "pod-new", "owner-new", 90*time.Second)
+	old := SessionData{ConnectionID: "connection-old", ContainerID: "pod-old", OwnerToken: "owner-old"}
+	if err := (&DistributedSessionManager{}).RemoveOwnedSessionAndRoute(context.Background(), "1", old); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := GetContainerByConnection("1"); err != nil || got != "pod-new" {
@@ -60,19 +66,11 @@ func TestGetContainerByConnectionRejectsMismatchedLeaseWithoutDeletingMigratedRo
 	}
 }
 
-func UnregisterConnectionResultForTest(id, containerID, ownerToken string) (bool, error) {
-	result, err := unregisterConnectionScript.Run(ctx, Rdb,
-		[]string{"ws_connection_mapping", routeLeaseKey(id)}, id, containerID, ownerToken,
-	).Int()
-	return result == 1, err
-}
-
 func TestExpiredLeaseIsNotRoutable(t *testing.T) {
 	server := useTestRedis(t)
-	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
-		t.Fatal(err)
-	}
-	server.FastForward(routeLeaseTTL + time.Second)
+	const leaseTTL = 90 * time.Second
+	claimTestRoute(t, "1", "pod-a", "owner-a", leaseTTL)
+	server.FastForward(leaseTTL + time.Second)
 	if _, err := GetContainerByConnection("1"); !errors.Is(err, ErrRouteNotFound) {
 		t.Fatalf("expired lease remained routable: %v", err)
 	}
@@ -81,13 +79,9 @@ func TestExpiredLeaseIsNotRoutable(t *testing.T) {
 func TestOldOwnerCannotUnregisterNewRouteInSameContainer(t *testing.T) {
 	useTestRedis(t)
 	ctx := context.Background()
-	if err := RegisterConnection(ctx, "1", "pod-a", "old-owner"); err != nil {
-		t.Fatal(err)
-	}
-	if err := RegisterConnection(ctx, "1", "pod-a", "new-owner"); err != nil {
-		t.Fatal(err)
-	}
-	if err := UnregisterConnection(ctx, "1", "pod-a", "old-owner"); err != nil {
+	old := claimTestRoute(t, "1", "pod-a", "old-owner", 90*time.Second)
+	claimTestRoute(t, "1", "pod-a", "new-owner", 90*time.Second)
+	if err := (&DistributedSessionManager{}).RemoveOwnedSessionAndRoute(ctx, "1", old); err != nil {
 		t.Fatal(err)
 	}
 	if route, err := GetContainerByConnection("1"); err != nil || route != "pod-a" {
@@ -97,9 +91,7 @@ func TestOldOwnerCannotUnregisterNewRouteInSameContainer(t *testing.T) {
 
 func TestGetContainersByConnectionsReturnsOnlyValidRoutes(t *testing.T) {
 	server := useTestRedis(t)
-	if err := RegisterConnection(context.Background(), "1", "pod-a", "owner-a"); err != nil {
-		t.Fatal(err)
-	}
+	claimTestRoute(t, "1", "pod-a", "owner-a", 90*time.Second)
 	server.HSet("ws_connection_mapping", "2", "pod-b")
 	server.HSet("ws_connection_mapping", "3", "pod-old")
 	server.Set(routeLeaseKey("3"), "pod-new|owner-new")

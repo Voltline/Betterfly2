@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -14,45 +13,10 @@ import (
 var Rdb *redis.Client
 var ctx = context.Background()
 
-const routeLeaseTTL = 90 * time.Second
-
 var ErrRouteNotFound = errors.New("无有效WebSocket路由")
 var ErrSessionOwnershipLost = errors.New("WebSocket会话所有权已失效")
 
 func routeLeaseKey(userID string) string { return "ws_route_lease:" + userID }
-
-var registerConnectionScript = redis.NewScript(`
-local previous = redis.call('HGET', KEYS[1], ARGV[1])
-if previous and previous ~= ARGV[2] then
-  redis.call('SREM', 'container_connections:' .. previous, ARGV[1])
-end
-redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
-redis.call('SADD', 'container_connections:' .. ARGV[2], ARGV[1])
-redis.call('SET', KEYS[2], ARGV[2] .. '|' .. ARGV[3], 'PX', ARGV[4])
-return 1
-`)
-
-var unregisterConnectionScript = redis.NewScript(`
-local mapped = redis.call('HGET', KEYS[1], ARGV[1])
-local leased = redis.call('GET', KEYS[2])
-if mapped ~= ARGV[2] or leased ~= ARGV[2] .. '|' .. ARGV[3] then
-  return 0
-end
-redis.call('HDEL', KEYS[1], ARGV[1])
-redis.call('SREM', 'container_connections:' .. ARGV[2], ARGV[1])
-redis.call('DEL', KEYS[2])
-return 1
-`)
-
-var refreshConnectionScript = redis.NewScript(`
-local mapped = redis.call('HGET', KEYS[1], ARGV[1])
-local leased = redis.call('GET', KEYS[2])
-if mapped ~= ARGV[2] or leased ~= ARGV[2] .. '|' .. ARGV[3] then
-  return 0
-end
-redis.call('SET', KEYS[2], leased, 'PX', ARGV[4])
-return 1
-`)
 
 var getValidRouteScript = redis.NewScript(`
 local mapped = redis.call('HGET', KEYS[1], ARGV[1])
@@ -99,44 +63,6 @@ func InitRedis() error {
 	logger.Sugar().Debugf("当前 Redis: %s", addr)
 	if _, err := Rdb.Ping(ctx).Result(); err != nil {
 		return fmt.Errorf("连接 Redis 失败: %v", err)
-	}
-	return nil
-}
-
-func RegisterConnection(ctx context.Context, id, containerID, ownerToken string) error {
-	if Rdb == nil {
-		return errors.New("Redis客户端未初始化")
-	}
-	return registerConnectionScript.Run(ctx, Rdb,
-		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID, ownerToken, routeLeaseTTL.Milliseconds(),
-	).Err()
-}
-
-func UnregisterConnection(ctx context.Context, id, containerID, ownerToken string) error {
-	if Rdb == nil {
-		return errors.New("Redis客户端未初始化")
-	}
-	_, err := unregisterConnectionScript.Run(ctx, Rdb,
-		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID, ownerToken,
-	).Result()
-	return err
-}
-
-func RefreshConnection(ctx context.Context, id, containerID, ownerToken string) error {
-	if Rdb == nil {
-		return errors.New("Redis客户端未初始化")
-	}
-	updated, err := refreshConnectionScript.Run(ctx, Rdb,
-		[]string{"ws_connection_mapping", routeLeaseKey(id)},
-		id, containerID, ownerToken, routeLeaseTTL.Milliseconds(),
-	).Int()
-	if err != nil {
-		return err
-	}
-	if updated == 0 {
-		return ErrRouteNotFound
 	}
 	return nil
 }

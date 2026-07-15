@@ -15,23 +15,20 @@ import (
 
 type readinessStore struct{ err error }
 
-func (s readinessStore) Ping(context.Context) error                             { return s.err }
-func (readinessStore) UserTopic(context.Context, int64) (string, error)         { return "", nil }
-func (readinessStore) CreateSession(context.Context, callservice.Session) error { return nil }
+func (s readinessStore) Ping(context.Context) error                     { return s.err }
+func (readinessStore) UserTopic(context.Context, int64) (string, error) { return "", nil }
 func (readinessStore) GetSession(context.Context, string) (callservice.Session, error) {
 	return callservice.Session{}, nil
 }
-func (readinessStore) AcceptSession(context.Context, string, int64, callservice.Description) (callservice.Session, error) {
-	return callservice.Session{}, nil
-}
-func (readinessStore) RejectSession(context.Context, string, int64, callpb.CallEndReason, string) (callservice.Session, error) {
-	return callservice.Session{}, nil
-}
-func (readinessStore) EndSession(context.Context, string, int64, callpb.CallEndReason, string) (callservice.Session, error) {
-	return callservice.Session{}, nil
-}
-func (readinessStore) ExpireRinging(context.Context, time.Time, int64) ([]callservice.Session, error) {
+func (readinessStore) ExpiredRinging(context.Context, time.Time, int64) ([]callservice.Session, error) {
 	return nil, nil
+}
+func (readinessStore) OperationCompleted(context.Context, string) (bool, error) { return false, nil }
+func (readinessStore) CreateSessionWithEvents(context.Context, callservice.Session, string, []callservice.PendingEvent) (bool, error) {
+	return false, nil
+}
+func (readinessStore) TransitionSessionWithEvents(context.Context, callservice.Session, callservice.Session, bool, string, []callservice.PendingEvent) (bool, error) {
+	return false, nil
 }
 
 type noopICE struct{}

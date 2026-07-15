@@ -222,7 +222,7 @@ func TestRetryableDeliveryResumesAfterServiceRestart(t *testing.T) {
 		},
 	}
 
-	first := NewService(store, &memorySender{err: errors.New("temporary APNs network error")}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	first := NewService(store, &memorySender{err: errors.New("temporary APNs network error")}, "com.Voltline.Betterfly2")
 	first.now = func() time.Time { return now }
 	first.retryInitial = time.Second
 	first.retryMax = time.Second
@@ -239,7 +239,7 @@ func TestRetryableDeliveryResumesAfterServiceRestart(t *testing.T) {
 
 	now = now.Add(2 * time.Second)
 	secondSender := &memorySender{}
-	second := NewService(store, secondSender, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	second := NewService(store, secondSender, "com.Voltline.Betterfly2")
 	second.now = func() time.Time { return now }
 	claims, err = store.ClaimMessageDeliveryBatch(context.Background(), 1, now, second.deliveryLease, second.maxAttempts)
 	if err != nil || len(claims) != 1 || claims[0].Attempt != 2 {
@@ -269,7 +269,7 @@ func TestPresentationDatabaseFailureIsPersistedAsRetryable(t *testing.T) {
 			Token: db.PushDeviceToken{ID: 12, UserID: 2, Token: "device-token", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
 		},
 	}
-	service := NewService(store, &memorySender{}, &memoryPublisher{}, "com.Voltline.Betterfly2")
+	service := NewService(store, &memorySender{}, "com.Voltline.Betterfly2")
 	service.now = func() time.Time { return now }
 	service.retryInitial = time.Second
 	service.retryMax = time.Second
@@ -300,5 +300,172 @@ func TestPresentationDatabaseFailureIsPersistedAsRetryable(t *testing.T) {
 	}
 	if store.status != DeliverySent {
 		t.Fatalf("delivery did not recover after database returned: status=%s", store.status)
+	}
+}
+
+type boundaryDelivery struct {
+	claim      DurableDeliveryClaim
+	status     string
+	attempt    int
+	claimToken string
+	leaseUntil time.Time
+}
+
+type boundaryStore struct {
+	*memoryStore
+	mu         sync.Mutex
+	deliveries []*boundaryDelivery
+	claimCount map[int64]int
+	maxLimit   int
+}
+
+func (s *boundaryStore) EnqueueRequest(context.Context, string, *pushpb.RequestMessage, string) error {
+	return nil
+}
+
+func (s *boundaryStore) ClaimMessageDeliveryBatch(_ context.Context, limit int, now time.Time, lease time.Duration, _ int) ([]DurableDeliveryClaim, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit > s.maxLimit {
+		s.maxLimit = limit
+	}
+	claims := make([]DurableDeliveryClaim, 0, limit)
+	for _, delivery := range s.deliveries {
+		eligible := delivery.status == DeliveryPending || delivery.status == DeliveryClaimed && !delivery.leaseUntil.After(now)
+		if !eligible || len(claims) == limit {
+			continue
+		}
+		delivery.status = DeliveryClaimed
+		delivery.attempt++
+		delivery.claimToken = fmt.Sprintf("claim-%d-%d", delivery.claim.Token.ID, delivery.attempt)
+		delivery.leaseUntil = now.Add(lease)
+		claim := delivery.claim
+		claim.Attempt = delivery.attempt
+		claim.ClaimToken = delivery.claimToken
+		claims = append(claims, claim)
+		s.claimCount[claim.Token.ID]++
+	}
+	return claims, nil
+}
+
+func (s *boundaryStore) ClaimVoIPDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error) {
+	return nil, nil
+}
+
+func (s *boundaryStore) FinalizeMessageDelivery(_ context.Context, update DurableDeliveryUpdate) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, delivery := range s.deliveries {
+		if delivery.claim.Token.ID != update.Token.ID {
+			continue
+		}
+		if delivery.status != DeliveryClaimed || delivery.attempt != update.Attempt || delivery.claimToken != update.ClaimToken {
+			return ErrDeliveryFenced
+		}
+		delivery.status = update.Status
+		return nil
+	}
+	return ErrDeliveryFenced
+}
+
+func (s *boundaryStore) FinalizeVoIPDelivery(context.Context, DurableDeliveryUpdate) error {
+	return nil
+}
+
+type blockedSender struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedSender) Ready() error { return nil }
+func (s *blockedSender) Send(ctx context.Context, _ Notification) (SendResult, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.release:
+		return SendResult{APNSID: "released"}, nil
+	case <-ctx.Done():
+		return SendResult{}, ctx.Err()
+	}
+}
+
+func TestTwoWorkersDoNotReclaimQueuedDeliveryNearLeaseBoundary(t *testing.T) {
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2, 3}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 88,
+	}}}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &boundaryStore{
+		memoryStore: &memoryStore{}, claimCount: make(map[int64]int),
+		deliveries: []*boundaryDelivery{
+			{status: DeliveryPending, claim: DurableDeliveryClaim{JobID: "job-boundary", MessageID: 88, RequestPayload: payload, Token: db.PushDeviceToken{ID: 1, UserID: 2, Token: "one", Environment: "production", PushType: PushTypeAPNs, IsActive: true}}},
+			{status: DeliveryPending, claim: DurableDeliveryClaim{JobID: "job-boundary", MessageID: 88, RequestPayload: payload, Token: db.PushDeviceToken{ID: 2, UserID: 3, Token: "two", Environment: "production", PushType: PushTypeAPNs, IsActive: true}}},
+		},
+	}
+	blocked := &blockedSender{started: make(chan struct{}, 1), release: make(chan struct{})}
+	first := NewService(store, blocked, "com.Voltline.Betterfly2")
+	secondSender := &memorySender{}
+	second := NewService(store, secondSender, "com.Voltline.Betterfly2")
+	for _, service := range []*Service{first, second} {
+		service.maxConcurrency = 1
+		service.deliveryLease = 200 * time.Millisecond
+		service.sendTimeout = 150 * time.Millisecond
+		service.workerPoll = 5 * time.Millisecond
+	}
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelFirst()
+	defer cancelSecond()
+	firstDone := make(chan struct{})
+	go func() {
+		_ = first.runDeliveryLoop(firstCtx, store, deliveryKindMessage)
+		close(firstDone)
+	}()
+	select {
+	case <-blocked.started:
+	case <-time.After(time.Second):
+		t.Fatal("first worker did not enter APNs send slot")
+	}
+
+	time.Sleep(120 * time.Millisecond)
+	secondDone := make(chan struct{})
+	go func() {
+		_ = second.runDeliveryLoop(secondCtx, store, deliveryKindMessage)
+		close(secondDone)
+	}()
+	deadline := time.Now().Add(50 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		secondSender.mu.Lock()
+		sent := len(secondSender.sent)
+		secondSender.mu.Unlock()
+		if sent > 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(blocked.release)
+	secondSender.mu.Lock()
+	secondSent := append([]Notification(nil), secondSender.sent...)
+	secondSender.mu.Unlock()
+	if len(secondSent) != 1 || secondSent[0].Token != "two" {
+		t.Fatalf("second worker did not take the unclaimed delivery: %+v", secondSent)
+	}
+	cancelFirst()
+	cancelSecond()
+	for _, done := range []<-chan struct{}{firstDone, secondDone} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not stop after cancellation")
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.maxLimit != 1 || store.claimCount[1] != 1 || store.claimCount[2] != 1 {
+		t.Fatalf("claimed work waited outside sender slots or was reclaimed early: limit=%d claims=%v", store.maxLimit, store.claimCount)
 	}
 }

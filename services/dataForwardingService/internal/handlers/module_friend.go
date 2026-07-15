@@ -203,10 +203,6 @@ func handleInsertGroupUser(fromID int64, message *pb.RequestMessage) error {
 	return nil
 }
 
-func buildInsertGroupUserFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
-	return buildInsertGroupUserFriendRequestWithMessage(fromID, groupID, "", currentContainerID)
-}
-
 func buildInsertGroupUserFriendRequestWithMessage(fromID, groupID int64, message, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_AddGroupMember{

@@ -9,11 +9,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// StoreNewMessage 幂等存储消息；created=false表示同一客户端消息已存在。
-func StoreNewMessage(fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID string) (*Message, bool, error) {
-	return StoreNewMessageWithDB(DB(), fromUserID, toUserID, content, messageType, realFileName, isGroup, clientMessageID)
-}
-
 func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID string) (*Message, bool, error) {
 	clientMessageID = strings.TrimSpace(clientMessageID)
 	var clientMessageIDPtr *string
@@ -56,11 +51,6 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 	return &existing, false, nil
 }
 
-// GetMessageByID 基于消息ID直接查询消息
-func GetMessageByID(messageID int64) (*Message, error) {
-	return GetMessageByIDWithDB(DB(), messageID)
-}
-
 func GetMessageByIDWithDB(database *gorm.DB, messageID int64) (*Message, error) {
 	var message Message
 	err := database.First(&message, "message_id = ?", messageID).Error
@@ -91,10 +81,6 @@ type SyncMessagesPage struct {
 // 2. 该用户当前已加入群组中的群聊消息
 // 群聊消息会额外要求消息时间不早于该成员的入群时间，
 // 避免把用户入群前的旧消息同步回来。
-func GetSyncMessagesPage(toUserID int64, cursorTimestamp string, cursorMessageID int64, pageSize int) (*SyncMessagesPage, error) {
-	return GetSyncMessagesPageWithDB(DB(), toUserID, cursorTimestamp, cursorMessageID, pageSize)
-}
-
 func GetSyncMessagesPageWithDB(database *gorm.DB, toUserID int64, cursorTimestamp string, cursorMessageID int64, pageSize int) (*SyncMessagesPage, error) {
 	if pageSize <= 0 {
 		pageSize = DefaultSyncPageSize
@@ -166,10 +152,6 @@ func buildSyncMessagesPage(messages []Message, pageSize int) *SyncMessagesPage {
 
 // CanUserReadMessage checks authorization against the current relationship
 // state. Callers must invoke it even when the message entity came from cache.
-func CanUserReadMessage(requesterID int64, message *Message) (bool, error) {
-	return CanUserReadMessageWithDB(DB(), requesterID, message)
-}
-
 func CanUserReadMessageWithDB(database *gorm.DB, requesterID int64, message *Message) (bool, error) {
 	if requesterID <= 0 || message == nil {
 		return false, nil

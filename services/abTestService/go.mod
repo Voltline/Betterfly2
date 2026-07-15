@@ -7,7 +7,6 @@ toolchain go1.24.1
 require (
 	Betterfly2/shared v0.0.0
 	github.com/prometheus/client_golang v1.21.0
-	github.com/redis/go-redis/v9 v9.21.0
 	golang.org/x/sync v0.14.0
 )
 
@@ -25,7 +24,6 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.38.0 // indirect

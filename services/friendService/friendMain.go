@@ -65,8 +65,6 @@ func main() {
 			cancel()
 		}
 	}()
-	go db.RunReliabilityCleanup(ctx, database, db.LoadRetentionConfig())
-
 	consumerErrCh := make(chan error, 1)
 	go func() {
 		consumerErrCh <- startKafkaConsumer(ctx)

@@ -175,7 +175,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	mock.ExpectCommit()
 
 	// 调用处理函数
-	resp, err := handler.handleStoreNewMessage(req, req.GetStoreNewMessage())
+	resp, err := handler.handleStoreNewMessageWithDB(handler.requestDatabase(), req, req.GetStoreNewMessage(), nil)
 
 	// 验证结果
 	assert.NoError(t, err)
@@ -215,7 +215,7 @@ func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *test
 			"message_id", "client_message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
 		}).AddRow(12345, "client-message-1", 1000, 1001, "Hello, World!", "2026-07-12T09:00:01Z", "text", "", false))
 
-	resp, err := handler.handleStoreNewMessage(req, msg)
+	resp, err := handler.handleStoreNewMessageWithDB(handler.requestDatabase(), req, msg, nil)
 	assert.NoError(t, err)
 	if assert.NotNil(t, resp) && assert.NotNil(t, resp.GetStoreMsgRsp()) {
 		assert.Equal(t, int64(12345), resp.GetStoreMsgRsp().GetMessageId())
@@ -251,7 +251,7 @@ func TestHandleQueryMessage(t *testing.T) {
 		}).AddRow(12345, 1000, 1001, "Hello, World!", expectedTime, "text", false))
 
 	// 调用处理函数
-	resp, err := handler.handleQueryMessage(req, req.GetQueryMessage())
+	resp, err := handler.handleQueryMessageWithDB(handler.database, req, req.GetQueryMessage())
 
 	// 验证结果
 	assert.NoError(t, err)
@@ -295,7 +295,7 @@ func TestHandleQueryMessage_NotFound(t *testing.T) {
 		}))
 
 	// 调用处理函数
-	resp, err := handler.handleQueryMessage(req, req.GetQueryMessage())
+	resp, err := handler.handleQueryMessageWithDB(handler.database, req, req.GetQueryMessage())
 
 	// 验证结果
 	assert.NoError(t, err)
@@ -337,13 +337,71 @@ func TestHandleUpdateUserName(t *testing.T) {
 		}).AddRow(1000, "test-account", "NewUsername", time.Now().Format("2006-01-02 15:04:05"), "", "", []byte("key")))
 
 	// 调用处理函数
-	resp, err := handler.handleUpdateUserName(req, req.GetUpdateUserName())
+	resp, err := handler.handleUpdateUserNameWithDB(handler.requestDatabase(), req, req.GetUpdateUserName(), nil)
 
 	// 验证结果
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, storage.StorageResult_OK, resp.Result)
 	assert.Equal(t, int64(1001), resp.TargetUserId)
+}
+
+func TestHandleUpdateUserNameDefersCacheInvalidationUntilCommit(t *testing.T) {
+	database, mock := setupMockDB(t)
+	cache := newMockCache()
+	cache.Set("user:1000", "cached", time.Minute)
+	handler := &StorageHandler{l1Cache: cache}
+	req := &storage.RequestMessage{TargetUserId: 1001}
+	update := &storage.UpdateUserName{UserId: 1000, NewUserName: "NewUsername"}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE \"users\" SET .* WHERE id = \\$3").
+		WithArgs("NewUsername", sqlmock.AnyArg(), int64(1000)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery("SELECT \\* FROM \"users\" WHERE \"users\".\"id\" = \\$1 ORDER BY \"users\".\"id\" LIMIT \\$2").
+		WithArgs(int64(1000), 1).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "account", "name", "update_time", "avatar", "password_hash", "jwt_key",
+		}).AddRow(1000, "test-account", "NewUsername", time.Now().Format("2006-01-02 15:04:05"), "", "", []byte("key")))
+
+	var cacheKeys []string
+	resp, err := handler.handleUpdateUserNameWithDB(database, req, update, &cacheKeys)
+	assert.NoError(t, err)
+	assert.Equal(t, storage.StorageResult_OK, resp.GetResult())
+	assert.Equal(t, []string{"user:1000"}, cacheKeys)
+	_, cachedBeforeCommit := cache.Get("user:1000")
+	assert.True(t, cachedBeforeCommit)
+
+	handler.clearCacheKeys(cacheKeys)
+	_, cachedAfterCommit := cache.Get("user:1000")
+	assert.False(t, cachedAfterCommit)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestHandleUpdateUserNameFailureKeepsCache(t *testing.T) {
+	database, mock := setupMockDB(t)
+	cache := newMockCache()
+	cache.Set("user:1000", "cached", time.Minute)
+	handler := &StorageHandler{l1Cache: cache}
+	req := &storage.RequestMessage{TargetUserId: 1001}
+	update := &storage.UpdateUserName{UserId: 1000, NewUserName: "NewUsername"}
+	injected := errors.New("database temporarily unavailable")
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE \"users\" SET .* WHERE id = \\$3").
+		WithArgs("NewUsername", sqlmock.AnyArg(), int64(1000)).
+		WillReturnError(injected)
+	mock.ExpectRollback()
+
+	var cacheKeys []string
+	resp, err := handler.handleUpdateUserNameWithDB(database, req, update, &cacheKeys)
+	assert.Nil(t, resp)
+	assert.ErrorIs(t, err, injected)
+	assert.Empty(t, cacheKeys)
+	_, cached := cache.Get("user:1000")
+	assert.True(t, cached)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestHandleUpdateUserName_NotFound(t *testing.T) {
@@ -379,7 +437,7 @@ func TestHandleUpdateUserName_NotFound(t *testing.T) {
 		}))
 
 	// 调用处理函数
-	resp, err := handler.handleUpdateUserName(req, req.GetUpdateUserName())
+	resp, err := handler.handleUpdateUserNameWithDB(handler.requestDatabase(), req, req.GetUpdateUserName(), nil)
 
 	// 验证结果
 	assert.NoError(t, err)
@@ -416,7 +474,7 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 			AddRow(20002, 1001, 9001, "own-group-msg", "2026-04-17T10:06:00Z", "text", "", true).
 			AddRow(20003, 3003, 9001, "other-group-msg", "2026-04-17T10:07:00Z", "text", "", true))
 
-	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())
+	resp, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), req, req.GetQuerySyncMessages())
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -481,7 +539,7 @@ func TestHandleQuerySyncMessages_DefaultPageIsBounded(t *testing.T) {
 		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
 		WillReturnRows(rows)
 
-	resp, err := handler.handleQuerySyncMessages(req, req.GetQuerySyncMessages())
+	resp, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), req, req.GetQuerySyncMessages())
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -518,7 +576,7 @@ func TestSyncCompositeCursorDoesNotRepeatEqualTimestamps(t *testing.T) {
 			AddRow(2, 3, 9001, "group", timestamp, "text", "", true).
 			AddRow(3, 4, 1001, "next", timestamp, "text", "", false))
 	request := &storage.RequestMessage{TargetUserId: 1001, Payload: &storage.RequestMessage_QuerySyncMessages{QuerySyncMessages: &storage.QuerySyncMessages{ToUserId: 1001, CursorTimestamp: timestamp, PageSize: 2}}}
-	first, err := handler.handleQuerySyncMessages(request, request.GetQuerySyncMessages())
+	first, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), request, request.GetQuerySyncMessages())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +588,7 @@ func TestSyncCompositeCursorDoesNotRepeatEqualTimestamps(t *testing.T) {
 		WithArgs(int64(1001), timestamp, timestamp, int64(2), timestamp, timestamp, int64(2), int64(1001), 3).
 		WillReturnRows(sqlmock.NewRows(columns).AddRow(3, 4, 1001, "next", timestamp, "text", "", false))
 	request.GetQuerySyncMessages().CursorMessageId = 2
-	second, err := handler.handleQuerySyncMessages(request, request.GetQuerySyncMessages())
+	second, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), request, request.GetQuerySyncMessages())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,7 +684,7 @@ func TestHandleQueryFileExists_UsesCachedMetadata(t *testing.T) {
 		FileHash: "hash123",
 	}
 
-	resp, err := handler.handleQueryFileExists(req, query)
+	resp, err := handler.handleQueryFileExistsWithDB(handler.database, req, query)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)

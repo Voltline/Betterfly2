@@ -41,9 +41,7 @@ func main() {
 	sugar.Infoln("初始化 Kafka 生产者...")
 	err := publisher.InitKafkaProducer()
 	if err != nil {
-		sugar.Errorf("初始化 Kafka 生产者失败: %v，将在后台重试", err)
-		// 不直接退出，允许服务继续启动，Kafka连接会在后台重试
-		// 或者可以选择退出：sugar.Fatalf("初始化 Kafka 生产者失败: %v", err)
+		sugar.Fatalf("初始化 Kafka 生产者失败: %v", err)
 	}
 	defer func() {
 		if publisher.KafkaProducer != nil {

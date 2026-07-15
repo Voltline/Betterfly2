@@ -1,7 +1,6 @@
 package abtest
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -13,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
 	"golang.org/x/sync/singleflight"
 )
@@ -26,11 +24,7 @@ type Service struct {
 	generation     atomic.Uint64
 	reload         singleflight.Group
 	overrideReload singleflight.Group
-	bus            InvalidationBus
-	ctx            context.Context
-	cancel         context.CancelFunc
 	overrideTTL    time.Duration
-	overrideMax    int
 	overrideMu     sync.Mutex
 	overrides      map[string]overrideCacheEntry
 }
@@ -41,34 +35,23 @@ type overrideCacheEntry struct {
 }
 
 func NewService(store Store) *Service {
-	return NewServiceWithContext(context.TODO(), store, nil, evaluationCacheTTL())
+	return newService(store, evaluationCacheTTL())
 }
 
-func NewServiceWithInvalidation(store Store, bus InvalidationBus, cacheTTL time.Duration) *Service {
-	return NewServiceWithContext(context.TODO(), store, bus, cacheTTL)
-}
-
-func NewServiceWithContext(parent context.Context, store Store, bus InvalidationBus, cacheTTL time.Duration) *Service {
-	if parent == nil {
-		parent = context.TODO()
-	}
+func newService(store Store, cacheTTL time.Duration) *Service {
 	if cacheTTL <= 0 {
 		cacheTTL = evaluationCacheTTL()
 	}
 	if cacheTTL > 5*time.Second {
 		cacheTTL = 5 * time.Second
 	}
-	ctx, cancel := context.WithCancel(parent)
-	service := &Service{
-		store: store, cacheTTL: cacheTTL, now: time.Now, bus: bus, ctx: ctx, cancel: cancel,
-		overrideTTL: overrideCacheTTL(cacheTTL), overrideMax: overrideCacheMaxEntries(), overrides: make(map[string]overrideCacheEntry),
+	overrideTTL := 3 * time.Second
+	if overrideTTL > cacheTTL {
+		overrideTTL = cacheTTL
 	}
-	if bus != nil {
-		go func() {
-			if err := bus.Subscribe(ctx, service.invalidateLocal); err != nil && ctx.Err() == nil {
-				logger.Sugar().Warnw("AB Test跨副本缓存失效订阅退出", "error", err)
-			}
-		}()
+	service := &Service{
+		store: store, cacheTTL: cacheTTL, now: time.Now,
+		overrideTTL: overrideTTL, overrides: make(map[string]overrideCacheEntry),
 	}
 	return service
 }
@@ -123,12 +106,6 @@ func (s *Service) AddOverride(experimentID int64, req OverrideInput) (Override, 
 	return value, err
 }
 
-func (s *Service) Close() {
-	if s.cancel != nil {
-		s.cancel()
-	}
-}
-
 func (s *Service) invalidateLocal() {
 	s.generation.Add(1)
 	s.snapshot.Store(nil)
@@ -142,14 +119,6 @@ func (s *Service) invalidateAfterWrite(err error) {
 		return
 	}
 	s.invalidateLocal()
-	if s.bus == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(s.ctx, time.Second)
-	defer cancel()
-	if publishErr := s.bus.Publish(ctx); publishErr != nil {
-		logger.Sugar().Warnw("发布AB Test缓存失效通知失败，将依赖短TTL收敛", "error", publishErr)
-	}
 }
 
 func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
@@ -239,7 +208,8 @@ func (s *Service) cachedSubjectOverrides(key string, now time.Time) ([]Override,
 }
 
 func (s *Service) evictOverrideEntryLocked(now time.Time) {
-	if len(s.overrides) < s.overrideMax {
+	const maxOverrideEntries = 10000
+	if len(s.overrides) < maxOverrideEntries {
 		return
 	}
 	var oldestKey string
@@ -247,7 +217,7 @@ func (s *Service) evictOverrideEntryLocked(now time.Time) {
 	for key, entry := range s.overrides {
 		if now.Sub(entry.loadedAt) >= s.overrideTTL {
 			delete(s.overrides, key)
-			if len(s.overrides) < s.overrideMax {
+			if len(s.overrides) < maxOverrideEntries {
 				return
 			}
 			continue
@@ -320,28 +290,6 @@ func evaluationCacheTTL() time.Duration {
 	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("ABTEST_CACHE_MAX_STALENESS")))
 	if err != nil || value <= 0 || value > 5*time.Second {
 		return 5 * time.Second
-	}
-	return value
-}
-
-func overrideCacheTTL(maxStaleness time.Duration) time.Duration {
-	value, err := time.ParseDuration(strings.TrimSpace(os.Getenv("ABTEST_OVERRIDE_CACHE_TTL")))
-	if err != nil || value <= 0 {
-		value = 3 * time.Second
-	}
-	if value > maxStaleness {
-		value = maxStaleness
-	}
-	return value
-}
-
-func overrideCacheMaxEntries() int {
-	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv("ABTEST_OVERRIDE_CACHE_MAX_ENTRIES")))
-	if err != nil || value <= 0 {
-		return 10000
-	}
-	if value > 100000 {
-		return 100000
 	}
 	return value
 }

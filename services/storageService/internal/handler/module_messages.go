@@ -11,7 +11,7 @@ func init() {
 
 func registerStorageMessageModule(router *dispatch.OneofRouter[storageRequestContext, *storage.ResponseMessage]) {
 	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_StoreNewMessage) (*storage.ResponseMessage, error) {
-		return ctx.handler.handleStoreNewMessageWithDB(ctx.database, ctx.request, payload.StoreNewMessage)
+		return ctx.handler.handleStoreNewMessageWithDB(ctx.database, ctx.request, payload.StoreNewMessage, ctx.cacheKeys)
 	})
 	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QueryMessage) (*storage.ResponseMessage, error) {
 		return ctx.handler.handleQueryMessageWithDB(ctx.database, ctx.request, payload.QueryMessage)

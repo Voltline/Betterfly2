@@ -7,22 +7,12 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 )
 
-// splitBrokers 解析多个 Kafka broker 地址
-func splitBrokers(broker string) []string {
-	// 将逗号分隔的 broker 地址拆分为数组
-	return strings.Split(broker, ",")
-}
-
-var (
-	KafkaProducer sarama.SyncProducer
-	initOnce      sync.Once
-)
+var KafkaProducer sarama.SyncProducer
 
 // WaitForKafkaReady 等待 Kafka 就绪
 func WaitForKafkaReady(broker string, timeout time.Duration) error {
@@ -51,50 +41,34 @@ func WaitForKafkaReady(broker string, timeout time.Duration) error {
 
 // InitKafkaProducer 初始化 Kafka 生产者
 func InitKafkaProducer() error {
-	var initErr error
-	initOnce.Do(func() {
-		sugar := logger.Sugar()
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+	logger.Sugar().Infof("当前 Kafka Broker: %s", broker)
 
-		broker := os.Getenv("KAFKA_BROKER")
+	saramaConfig := sarama.NewConfig()
+	saramaConfig.Producer.Return.Successes = true
+	saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
+	saramaConfig.Producer.Retry.Max = 5
+	networkTimeout := kafkaNetworkTimeout()
+	saramaConfig.Net.DialTimeout = networkTimeout
+	saramaConfig.Net.ReadTimeout = networkTimeout
+	saramaConfig.Net.WriteTimeout = networkTimeout
+	saramaConfig.Producer.Timeout = networkTimeout
 
-		if broker == "" {
-			broker = "localhost:9092"
+	brokerList := strings.Split(broker, ",")
+	for _, brokerAddr := range brokerList {
+		if err := WaitForKafkaReady(brokerAddr, 60*time.Second); err != nil {
+			return err
 		}
-
-		sugar.Infof("当前 Kafka Broker: %s", broker)
-
-		saramaConfig := sarama.NewConfig()
-		saramaConfig.Producer.Return.Successes = true
-		saramaConfig.Producer.RequiredAcks = sarama.WaitForAll
-		saramaConfig.Producer.Retry.Max = 5
-		networkTimeout := kafkaNetworkTimeout()
-		saramaConfig.Net.DialTimeout = networkTimeout
-		saramaConfig.Net.ReadTimeout = networkTimeout
-		saramaConfig.Net.WriteTimeout = networkTimeout
-		saramaConfig.Producer.Timeout = networkTimeout
-
-		// 解析多个 Kafka broker 地址
-		brokerList := splitBrokers(broker)
-
-		// 增加等待时间到60秒，因为Kafka容器启动后需要时间完全就绪
-		for _, brokerAddr := range brokerList {
-			brokerErr := WaitForKafkaReady(brokerAddr, 60*time.Second)
-			if brokerErr != nil {
-				sugar.Errorf("Kafka %s 启动超时: %v", brokerAddr, brokerErr)
-				initErr = brokerErr
-				return
-			}
-		}
-
-		// 使用多个 broker 地址初始化生产者
-		producer, err := sarama.NewSyncProducer(brokerList, saramaConfig)
-		if err != nil {
-			initErr = fmt.Errorf("创建 Kafka 生产者失败: %v", err)
-			return
-		}
-		KafkaProducer = producer
-	})
-	return initErr
+	}
+	producer, err := sarama.NewSyncProducer(brokerList, saramaConfig)
+	if err != nil {
+		return fmt.Errorf("创建 Kafka 生产者失败: %v", err)
+	}
+	KafkaProducer = producer
+	return nil
 }
 
 func kafkaNetworkTimeout() time.Duration {

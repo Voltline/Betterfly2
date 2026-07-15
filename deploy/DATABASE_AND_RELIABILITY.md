@@ -35,6 +35,8 @@ The migration Job is deliberately absent from the normal base kustomization.
 Its versioned name makes every schema release execute once. The included Argo CD
 `PreSync` annotation makes migration success a Deployment rollout prerequisite;
 other deployment systems must implement the same ordered gate explicitly.
+Migrations v1-v4 are frozen release history: future model changes must use a new
+explicit migration version rather than editing a historical migration function.
 
 `DB_AUTO_MIGRATE=true` remains available for a single-process development setup.
 It is disabled by default and must not be enabled on production business Pods.
@@ -103,9 +105,11 @@ are committed in one database transaction.
 Storage, Friend and Push commit their inbox marker, business writes and outbox
 events in one PostgreSQL transaction. The source offset can be acknowledged after
 that transaction, while a separate leased relay publishes stable `event_id` values.
-Publishing is at-least-once: downstream consumers deduplicate the stable event ID,
-and a crash after Kafka accepts an event but before the relay records `published`
-may cause the same event to be sent again.
+Publishing is at-least-once. `event_id` is currently a stable tracing identifier;
+DataForwarding does not promise event-ID deduplication. A crash after Kafka accepts
+an event but before the relay records `published` may therefore deliver it again.
+Each relay claims and immediately publishes one event at a time; it has no batch
+lease renewal, heartbeat, or leader-election mechanism.
 Outbox publication failures remain `retryable` indefinitely with capped exponential
 backoff; `OUTBOX_ALERT_AFTER_ATTEMPTS` defaults to `20` and controls structured
 alerts, not data deletion. A service may override it with, for example,
@@ -122,12 +126,14 @@ retention rule.
 
 Push Kafka consumers persist jobs and per-token rows without waiting for APNs.
 Workers reclaim `pending`, due `retryable`, or lease-expired `claimed` rows in
-bounded batches. Finalization is fenced by token and attempt, so an expired worker
+groups no larger than `PUSH_APNS_MAX_CONCURRENCY`, so every claimed delivery can
+enter a sender slot immediately. Finalization is fenced by token and attempt, so an expired worker
 cannot overwrite its replacement. `PUSH_DELIVERY_RETENTION` defaults to `720h`,
 `PUSH_CLEANUP_INTERVAL` to `1h`, and `PUSH_CLEANUP_BATCH_SIZE` to `1000`.
 
 Completed inbox, legacy result and outbox rows are also cleaned by a limited
-background task. `CONSUMER_STATE_RETENTION` defaults to `720h` and is always
+background task owned only by the single-replica Storage Service. Friend and Push
+do not start duplicate shared cleanup loops. `CONSUMER_STATE_RETENTION` defaults to `720h` and is always
 forced beyond `KAFKA_MAX_REPLAY_WINDOW` (default `168h`). The cleanup interval
 and batch default to `1h` and `1000`; deleted rows are logged and exported through
 `betterfly_reliability_cleanup_rows_total`.
@@ -136,3 +142,11 @@ and batch default to `1h` and `1000`; deleted rows are logged and exported throu
 `WRITE` and `DESCRIBE` grants for the configured principals. This flag is useful
 only when the Kafka cluster already has authenticated principals and an authorizer
 enabled; otherwise local PLAINTEXT remains intentionally unenforced.
+
+Storage is intentionally deployed as one replica because its L1/L2 cache
+invalidation is local and no cross-replica cache bus is provided. AB Test replicas
+also use local caches and may observe Admin changes up to five seconds later.
+
+The Kafka Topic Job remains a fixed apply-time Job. Whenever topic definitions or
+configuration change, publish the manifest under a new Job name so Kubernetes
+actually executes it again.

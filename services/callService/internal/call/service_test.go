@@ -9,14 +9,17 @@ import (
 	"time"
 
 	callpb "Betterfly2/proto/call"
+	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/kafkaconsumer"
+	"google.golang.org/protobuf/proto"
 )
 
 type memoryStore struct {
-	mu       sync.Mutex
-	topics   map[int64]string
-	sessions map[string]Session
+	mu        sync.Mutex
+	topics    map[int64]string
+	sessions  map[string]Session
+	publisher *memoryPublisher
 }
 
 func newMemoryStore() *memoryStore {
@@ -33,22 +36,22 @@ func (s *memoryStore) UserTopic(_ context.Context, userID int64) (string, error)
 	return topic, nil
 }
 
-func (s *memoryStore) CreateSession(_ context.Context, session Session) error {
+func (s *memoryStore) OperationCompleted(context.Context, string) (bool, error) { return false, nil }
+
+func (s *memoryStore) CreateSessionWithEvents(ctx context.Context, session Session, _ string, events []PendingEvent) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.sessions[session.ID]; exists {
-		return nil
-	}
 	for _, existing := range s.sessions {
 		if existing.State == StateEnded {
 			continue
 		}
 		if existing.CallerUserID == session.CallerUserID || existing.CalleeUserID == session.CallerUserID || existing.CallerUserID == session.CalleeUserID || existing.CalleeUserID == session.CalleeUserID {
-			return ErrUserBusy
+			s.mu.Unlock()
+			return false, ErrUserBusy
 		}
 	}
 	s.sessions[session.ID] = session
-	return nil
+	s.mu.Unlock()
+	return false, s.publishEvents(ctx, events)
 }
 
 func (s *memoryStore) GetSession(_ context.Context, callID string) (Session, error) {
@@ -61,85 +64,59 @@ func (s *memoryStore) GetSession(_ context.Context, callID string) (Session, err
 	return session, nil
 }
 
-func (s *memoryStore) AcceptSession(_ context.Context, callID string, userID int64, answer Description) (Session, error) {
+func (s *memoryStore) TransitionSessionWithEvents(ctx context.Context, expected, updated Session, _ bool, _ string, events []PendingEvent) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	session, ok := s.sessions[callID]
-	if !ok {
-		return Session{}, ErrCallNotFound
+	if current, ok := s.sessions[expected.ID]; !ok || !reflect.DeepEqual(current, expected) {
+		s.mu.Unlock()
+		return false, ErrInvalidState
 	}
-	if session.CalleeUserID != userID {
-		return Session{}, ErrForbidden
-	}
-	if session.State == StateActive && session.Answer != nil && *session.Answer == answer {
-		return session, nil
-	}
-	if session.State != StateRinging {
-		return Session{}, ErrInvalidState
-	}
-	now := time.Now().UTC()
-	session.State = StateActive
-	session.Answer = &answer
-	session.AcceptedAt = &now
-	s.sessions[callID] = session
-	return session, nil
+	s.sessions[updated.ID] = updated
+	s.mu.Unlock()
+	return false, s.publishEvents(ctx, events)
 }
 
-func (s *memoryStore) RejectSession(_ context.Context, callID string, userID int64, reason callpb.CallEndReason, message string) (Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	session, ok := s.sessions[callID]
-	if !ok {
-		return Session{}, ErrCallNotFound
-	}
-	if session.CalleeUserID != userID {
-		return Session{}, ErrForbidden
-	}
-	if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
-		return session, nil
-	}
-	if session.State != StateRinging {
-		return Session{}, ErrInvalidState
-	}
-	endSession(&session, reason, message)
-	s.sessions[callID] = session
-	return session, nil
-}
-
-func (s *memoryStore) EndSession(_ context.Context, callID string, userID int64, reason callpb.CallEndReason, message string) (Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	session, ok := s.sessions[callID]
-	if !ok {
-		return Session{}, ErrCallNotFound
-	}
-	if _, err := session.Peer(userID); err != nil {
-		return Session{}, err
-	}
-	if session.State == StateEnded && session.EndReason == reason && session.EndMessage == message {
-		return session, nil
-	}
-	if session.State == StateEnded {
-		return Session{}, ErrInvalidState
-	}
-	endSession(&session, reason, message)
-	s.sessions[callID] = session
-	return session, nil
-}
-
-func (s *memoryStore) ExpireRinging(_ context.Context, now time.Time, _ int64) ([]Session, error) {
+func (s *memoryStore) ExpiredRinging(_ context.Context, now time.Time, _ int64) ([]Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var expired []Session
-	for id, session := range s.sessions {
+	for _, session := range s.sessions {
 		if session.State != StateRinging || session.RingDeadline.After(now) {
 			continue
 		}
-		endSession(&session, callpb.CallEndReason_TIMEOUT, "call timed out")
-		s.sessions[id] = session
 		expired = append(expired, session)
 	}
 	return expired, nil
+}
+
+func (s *memoryStore) publishEvents(ctx context.Context, events []PendingEvent) error {
+	if s.publisher == nil {
+		return nil
+	}
+	for _, event := range events {
+		env := &envelope.Envelope{}
+		if err := proto.Unmarshal(event.Payload, env); err != nil {
+			return err
+		}
+		switch env.GetType() {
+		case envelope.MessageType_CALL_RESPONSE:
+			delivery := &callpb.Delivery{}
+			if err := proto.Unmarshal(env.GetPayload(), delivery); err != nil {
+				return err
+			}
+			if err := s.publisher.Publish(ctx, event.Topic, delivery); err != nil {
+				return err
+			}
+		case envelope.MessageType_PUSH_REQUEST:
+			request := &pushpb.RequestMessage{}
+			if err := proto.Unmarshal(env.GetPayload(), request); err != nil {
+				return err
+			}
+			if err := s.publisher.PublishPush(ctx, event.Topic, request); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type publishedDelivery struct {
@@ -174,66 +151,19 @@ func (p *memoryPublisher) Publish(_ context.Context, topic string, delivery *cal
 	return nil
 }
 
-func TestInitiateRetryUsesStableCallIDAfterResponsePublishFailure(t *testing.T) {
-	store := newMemoryStore()
-	store.topics[1] = "df-a"
-	publisher := &memoryPublisher{failPublish: 1}
-	service := NewService(store, publisher, testICE{}, time.Minute)
-	ctx := kafkaconsumer.WithOperationKey(context.Background(), "call-service/0/42")
-
-	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err == nil {
-		t.Fatal("response publication failure was committed as success")
-	}
-	if len(store.sessions) != 1 {
-		t.Fatalf("first attempt created %d sessions", len(store.sessions))
-	}
-	var firstCallID string
-	for id := range store.sessions {
-		firstCallID = id
-	}
-	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
-		t.Fatalf("idempotent retry failed: %v", err)
-	}
-	if len(store.sessions) != 1 {
-		t.Fatalf("retry created duplicate sessions: %d", len(store.sessions))
-	}
-	if len(publisher.deliveries) == 0 || publisher.deliveries[0].delivery.GetEvent().GetCallId() != firstCallID {
-		t.Fatalf("retry did not reuse stable call ID: first=%s deliveries=%+v", firstCallID, publisher.deliveries)
-	}
-}
-
-func TestAcceptRetryReplaysAfterStateChangedButResponsePublishFailed(t *testing.T) {
-	store := newMemoryStore()
-	store.topics[1] = "df-a"
-	store.topics[2] = "df-b"
-	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
-		t.Fatal(err)
-	}
-	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
-	request := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
-		CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
-	}}}}
-	publisher.failPublish = 1
-	if err := service.Handle(context.Background(), request); err == nil {
-		t.Fatal("accepted side effect with failed response publication was committed")
-	}
-	if store.sessions[callID].State != StateActive {
-		t.Fatal("first accept did not apply state transition")
-	}
-	if err := service.Handle(context.Background(), request); err != nil {
-		t.Fatalf("idempotent accept retry failed: %v", err)
-	}
-	if countEvents(publisher, callpb.CallEventType_CALL_ACCEPTED) != 2 {
-		t.Fatalf("retry did not publish accepted responses: %+v", publisher.deliveries)
-	}
-}
-
 type testICE struct{}
 
 func (testICE) Servers(_ int64, _ time.Time) []*callpb.IceServer {
 	return []*callpb.IceServer{{Urls: []string{"turn:test"}, Username: "temporary"}}
+}
+
+func newMemoryService(store *memoryStore, publisher *memoryPublisher, ringTTL time.Duration) *Service {
+	store.publisher = publisher
+	return NewService(store, publisher, testICE{}, ringTTL)
+}
+
+func testCallContext(operation string) context.Context {
+	return kafkaconsumer.WithOperationKey(context.Background(), operation)
 }
 
 func TestCallLifecycle(t *testing.T) {
@@ -241,9 +171,9 @@ func TestCallLifecycle(t *testing.T) {
 	store.topics[1] = "df-a"
 	store.topics[2] = "df-b"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, 45*time.Second)
+	service := newMemoryService(store, publisher, 45*time.Second)
 
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("lifecycle-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatalf("initiate call: %v", err)
 	}
 	if len(publisher.deliveries) != 2 {
@@ -257,7 +187,7 @@ func TestCallLifecycle(t *testing.T) {
 	accept := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
 		CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
 	}}}}
-	if err := service.Handle(context.Background(), accept); err != nil {
+	if err := service.Handle(testCallContext("lifecycle-accept"), accept); err != nil {
 		t.Fatalf("accept call: %v", err)
 	}
 	if len(publisher.deliveries) != 4 || publisher.deliveries[3].delivery.GetTargetUserId() != 1 {
@@ -267,7 +197,7 @@ func TestCallLifecycle(t *testing.T) {
 	ice := &callpb.InternalRequest{FromKafkaTopic: "df-a", UserId: 1, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_IceCandidate{IceCandidate: &callpb.SendIceCandidate{
 		CallId: callID, Candidate: &callpb.IceCandidate{Candidate: "candidate:1"},
 	}}}}
-	if err := service.Handle(context.Background(), ice); err != nil {
+	if err := service.Handle(testCallContext("lifecycle-ice"), ice); err != nil {
 		t.Fatalf("forward ICE: %v", err)
 	}
 	last := publisher.deliveries[len(publisher.deliveries)-1]
@@ -276,7 +206,7 @@ func TestCallLifecycle(t *testing.T) {
 	}
 
 	hangup := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_Hangup{Hangup: &callpb.HangupCall{CallId: callID}}}}
-	if err := service.Handle(context.Background(), hangup); err != nil {
+	if err := service.Handle(testCallContext("lifecycle-hangup"), hangup); err != nil {
 		t.Fatalf("hangup call: %v", err)
 	}
 	requester := publisher.deliveries[len(publisher.deliveries)-2]
@@ -291,9 +221,9 @@ func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
+	service := newMemoryService(store, publisher, time.Minute)
 
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("offline-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatalf("offline request should create a push-backed call: %v", err)
 	}
 	if len(publisher.deliveries) != 1 || publisher.deliveries[0].delivery.GetEvent().GetEventType() != callpb.CallEventType_OUTGOING_CALL {
@@ -306,7 +236,7 @@ func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
 		t.Fatalf("expected isolated VoIP push topic, got %v", publisher.pushTopics)
 	}
 	firstCallID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
-	if err := service.HandlePushResult(context.Background(), &pushpb.VoIPPushResult{
+	if err := service.HandlePushResult(testCallContext("offline-push-failure"), &pushpb.VoIPPushResult{
 		CallId: firstCallID, CallerUserId: 1, CalleeUserId: 2, Accepted: false, Reason: "no_active_voip_token", Required: true,
 	}); err != nil {
 		t.Fatal(err)
@@ -317,14 +247,14 @@ func TestOfflineCallUsesVoIPPushAndUnauthorizedAcceptIsRejected(t *testing.T) {
 
 	store.topics[2] = "df-b"
 	store.topics[3] = "df-c"
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("offline-redial"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatal(err)
 	}
 	callID := publisher.deliveries[len(publisher.deliveries)-2].delivery.GetEvent().GetCallId()
 	unauthorized := &callpb.InternalRequest{FromKafkaTopic: "df-c", UserId: 3, Request: &callpb.ClientRequest{Payload: &callpb.ClientRequest_Accept{Accept: &callpb.AcceptCall{
 		CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer"},
 	}}}}
-	if err := service.Handle(context.Background(), unauthorized); err != nil {
+	if err := service.Handle(testCallContext("offline-unauthorized"), unauthorized); err != nil {
 		t.Fatal(err)
 	}
 	if got := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent().GetErrorCode(); got != callpb.CallErrorCode_FORBIDDEN {
@@ -336,9 +266,9 @@ func TestResumeCallReturnsPendingOfferAfterPushWake(t *testing.T) {
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
+	service := newMemoryService(store, publisher, time.Minute)
 
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("resume-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatal(err)
 	}
 	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
@@ -346,7 +276,7 @@ func TestResumeCallReturnsPendingOfferAfterPushWake(t *testing.T) {
 	resume := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
 		Payload: &callpb.ClientRequest_ResumeCall{ResumeCall: &callpb.ResumeCall{CallId: callID}},
 	}}
-	if err := service.Handle(context.Background(), resume); err != nil {
+	if err := service.Handle(testCallContext("resume-delivery"), resume); err != nil {
 		t.Fatal(err)
 	}
 	event := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
@@ -359,10 +289,10 @@ func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
 	store := newMemoryStore()
 	store.topics[1] = "df-a"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
+	service := newMemoryService(store, publisher, time.Minute)
 	ctx := context.Background()
 
-	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("early-ice-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatalf("initiate offline call: %v", err)
 	}
 	if countEvents(publisher, callpb.CallEventType_OUTGOING_CALL) != 1 || len(publisher.pushes) != 1 {
@@ -380,7 +310,7 @@ func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
 			CallId: callID, Candidate: &callpb.IceCandidate{Candidate: "candidate:early"},
 		}},
 	}}
-	if err := service.Handle(ctx, ice); err != nil {
+	if err := service.Handle(testCallContext("early-ice"), ice); err != nil {
 		t.Fatalf("early ICE should be temporarily tolerated: %v", err)
 	}
 	if len(publisher.deliveries) != deliveryCount || countEvents(publisher, callpb.CallEventType_CALL_ERROR) != 0 || countEvents(publisher, callpb.CallEventType_CALL_ENDED) != 0 {
@@ -395,7 +325,7 @@ func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
 	resume := &callpb.InternalRequest{FromKafkaTopic: "df-b", UserId: 2, Request: &callpb.ClientRequest{
 		Payload: &callpb.ClientRequest_ResumeCall{ResumeCall: &callpb.ResumeCall{CallId: callID}},
 	}}
-	if err := service.Handle(ctx, resume); err != nil {
+	if err := service.Handle(testCallContext("early-resume"), resume); err != nil {
 		t.Fatalf("resume call: %v", err)
 	}
 	incoming := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
@@ -412,7 +342,7 @@ func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
 			CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
 		}},
 	}}
-	if err := service.Handle(ctx, accept); err != nil {
+	if err := service.Handle(testCallContext("early-accept"), accept); err != nil {
 		t.Fatalf("accept resumed call: %v", err)
 	}
 	session, _ = store.GetSession(ctx, callID)
@@ -427,10 +357,10 @@ func TestOfflineEarlyICECanResumeAcceptHangupAndRedial(t *testing.T) {
 	hangup := &callpb.InternalRequest{FromKafkaTopic: "df-a", UserId: 1, Request: &callpb.ClientRequest{
 		Payload: &callpb.ClientRequest_Hangup{Hangup: &callpb.HangupCall{CallId: callID}},
 	}}
-	if err := service.Handle(ctx, hangup); err != nil {
+	if err := service.Handle(testCallContext("early-hangup"), hangup); err != nil {
 		t.Fatalf("hangup call: %v", err)
 	}
-	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("early-redial"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatalf("redial after hangup: %v", err)
 	}
 	last := publisher.deliveries[len(publisher.deliveries)-2].delivery.GetEvent()
@@ -444,10 +374,9 @@ func TestActiveICEToOfflinePeerStillReturnsCallError(t *testing.T) {
 	store.topics[1] = "df-a"
 	store.topics[2] = "df-b"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
-	ctx := context.Background()
+	service := newMemoryService(store, publisher, time.Minute)
 
-	if err := service.Handle(ctx, initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("active-ice-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatal(err)
 	}
 	callID := publisher.deliveries[0].delivery.GetEvent().GetCallId()
@@ -456,7 +385,7 @@ func TestActiveICEToOfflinePeerStillReturnsCallError(t *testing.T) {
 			CallId: callID, Answer: &callpb.SessionDescription{Type: "answer", Sdp: "answer-sdp"},
 		}},
 	}}
-	if err := service.Handle(ctx, accept); err != nil {
+	if err := service.Handle(testCallContext("active-ice-accept"), accept); err != nil {
 		t.Fatal(err)
 	}
 	delete(store.topics, 2)
@@ -465,7 +394,7 @@ func TestActiveICEToOfflinePeerStillReturnsCallError(t *testing.T) {
 			CallId: callID, Candidate: &callpb.IceCandidate{Candidate: "candidate:active"},
 		}},
 	}}
-	if err := service.Handle(ctx, ice); err != nil {
+	if err := service.Handle(testCallContext("active-ice-send"), ice); err != nil {
 		t.Fatal(err)
 	}
 	last := publisher.deliveries[len(publisher.deliveries)-1].delivery.GetEvent()
@@ -479,11 +408,11 @@ func TestSweepExpiredNotifiesBothUsers(t *testing.T) {
 	store.topics[1] = "df-a"
 	store.topics[2] = "df-b"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Second)
+	service := newMemoryService(store, publisher, time.Second)
 	now := time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("sweep-init"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now.Add(2 * time.Second) }
@@ -506,12 +435,12 @@ func TestBusyUserCannotEnterSecondCall(t *testing.T) {
 	store.topics[2] = "df-b"
 	store.topics[3] = "df-c"
 	publisher := &memoryPublisher{}
-	service := NewService(store, publisher, testICE{}, time.Minute)
+	service := newMemoryService(store, publisher, time.Minute)
 
-	if err := service.Handle(context.Background(), initiateRequest(1, 2, "df-a")); err != nil {
+	if err := service.Handle(testCallContext("busy-first"), initiateRequest(1, 2, "df-a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Handle(context.Background(), initiateRequest(3, 2, "df-c")); err != nil {
+	if err := service.Handle(testCallContext("busy-second"), initiateRequest(3, 2, "df-c")); err != nil {
 		t.Fatal(err)
 	}
 	last := publisher.deliveries[len(publisher.deliveries)-1]

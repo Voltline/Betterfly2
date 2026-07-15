@@ -24,6 +24,7 @@ Not production-ready yet:
 - Kafka should move to Strimzi, Bitnami Helm, or a managed Kafka service.
 - PostgreSQL is expected to be external through `PGSQL_DSN`.
 - RustFS is single-replica in this base.
+- Storage Service must remain single-replica while it uses local-only cache invalidation.
 - Ingress host and TLS settings are placeholders.
 - Prometheus、Grafana 与 Kafka UI 尚未包含在这套 base manifests 中。
 - 这些清单是单集群验证基线，不提供多地域数据复制或跨集群服务发现。
@@ -104,6 +105,9 @@ service starts and reapplies its retention settings on restart. The development
 base uses replication factor 1 because its Kafka StatefulSet has one broker;
 increase both the broker count and `DF_KAFKA_DLQ_REPLICATION_FACTOR` together in
 a production overlay.
+
+`betterfly-kafka-topics` is not rerun after it completes. Any future topic or
+topic-configuration change must use a newly versioned Job name.
 
 ## Local Access
 

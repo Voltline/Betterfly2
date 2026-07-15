@@ -108,10 +108,6 @@ func (h *FriendHandler) HandleMessage(ctx context.Context, message []byte) error
 	return err
 }
 
-func (h *FriendHandler) handleQueryFriendList(req *friend.RequestMessage, payload *friend.QueryFriendList) (*friend.ResponseMessage, error) {
-	return h.handleQueryFriendListWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleQueryFriendListWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryFriendList) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 {
 		return &friend.ResponseMessage{
@@ -148,10 +144,6 @@ func (h *FriendHandler) handleQueryFriendListWithDB(database *gorm.DB, req *frie
 			},
 		},
 	}, nil
-}
-
-func (h *FriendHandler) handleRemoveDirectFriend(req *friend.RequestMessage, payload *friend.RemoveDirectFriend) (*friend.ResponseMessage, error) {
-	return h.handleRemoveDirectFriendWithDB(h.database, req, payload)
 }
 
 func (h *FriendHandler) handleRemoveDirectFriendWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.RemoveDirectFriend) (*friend.ResponseMessage, error) {
@@ -194,10 +186,6 @@ func (h *FriendHandler) handleRemoveDirectFriendWithDB(database *gorm.DB, req *f
 	}, nil
 }
 
-func (h *FriendHandler) handleUpdateFriendAlias(req *friend.RequestMessage, payload *friend.UpdateFriendAlias) (*friend.ResponseMessage, error) {
-	return h.handleUpdateFriendAliasWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleUpdateFriendAliasWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateFriendAlias) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 {
 		return &friend.ResponseMessage{
@@ -238,10 +226,6 @@ func (h *FriendHandler) handleUpdateFriendAliasWithDB(database *gorm.DB, req *fr
 	}, nil
 }
 
-func (h *FriendHandler) handleUpdateFriendNotify(req *friend.RequestMessage, payload *friend.UpdateFriendNotify) (*friend.ResponseMessage, error) {
-	return h.handleUpdateFriendNotifyWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleUpdateFriendNotifyWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateFriendNotify) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 {
 		return &friend.ResponseMessage{
@@ -280,10 +264,6 @@ func (h *FriendHandler) handleUpdateFriendNotifyWithDB(database *gorm.DB, req *f
 			},
 		},
 	}, nil
-}
-
-func (h *FriendHandler) handleCreateGroup(req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
-	return h.handleCreateGroupWithDB(h.database, req, payload)
 }
 
 func (h *FriendHandler) handleCreateGroupWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
@@ -344,10 +324,6 @@ func (h *FriendHandler) handleCreateGroupWithDB(database *gorm.DB, req *friend.R
 	}, nil
 }
 
-func (h *FriendHandler) handleQueryGroup(req *friend.RequestMessage, payload *friend.QueryGroup) (*friend.ResponseMessage, error) {
-	return h.handleQueryGroupWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryGroup) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 {
 		return &friend.ResponseMessage{
@@ -382,10 +358,6 @@ func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.Re
 			},
 		},
 	}, nil
-}
-
-func (h *FriendHandler) handleUpdateGroupAvatar(req *friend.RequestMessage, payload *friend.UpdateGroupAvatar) (*friend.ResponseMessage, error) {
-	return h.handleUpdateGroupAvatarWithDB(h.database, req, payload)
 }
 
 func (h *FriendHandler) handleUpdateGroupAvatarWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateGroupAvatar) (*friend.ResponseMessage, error) {
@@ -446,10 +418,6 @@ func (h *FriendHandler) handleUpdateGroupAvatarWithDB(database *gorm.DB, req *fr
 	}, nil
 }
 
-func (h *FriendHandler) handleQueryGroupMembers(req *friend.RequestMessage, payload *friend.QueryGroupMembers) (*friend.ResponseMessage, error) {
-	return h.handleQueryGroupMembersWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryGroupMembers) (*friend.ResponseMessage, error) {
 	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 {
 		return &friend.ResponseMessage{
@@ -499,10 +467,6 @@ func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *fr
 	}, nil
 }
 
-func (h *FriendHandler) handleQueryJoinedGroups(req *friend.RequestMessage, payload *friend.QueryJoinedGroups) (*friend.ResponseMessage, error) {
-	return h.handleQueryJoinedGroupsWithDB(h.database, req, payload)
-}
-
 func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.QueryJoinedGroups) (*friend.ResponseMessage, error) {
 	if payload.GetUserId() <= 0 {
 		return &friend.ResponseMessage{
@@ -537,10 +501,6 @@ func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *fr
 			},
 		},
 	}, nil
-}
-
-func (h *FriendHandler) handleRemoveGroupMember(req *friend.RequestMessage, payload *friend.RemoveGroupMember) (*friend.ResponseMessage, error) {
-	return h.handleRemoveGroupMemberWithDB(h.database, req, payload)
 }
 
 func (h *FriendHandler) handleRemoveGroupMemberWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.RemoveGroupMember) (*friend.ResponseMessage, error) {

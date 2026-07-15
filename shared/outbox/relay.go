@@ -22,7 +22,6 @@ type Publisher func(context.Context, db.OutboxEvent) error
 
 type Config struct {
 	Service            string
-	BatchSize          int
 	PollInterval       time.Duration
 	Lease              time.Duration
 	PublishTimeout     time.Duration
@@ -39,21 +38,17 @@ func LoadConfig(service, prefix string) Config {
 	}
 	return normalize(Config{
 		Service:            service,
-		BatchSize:          envInt(prefix+"OUTBOX_BATCH_SIZE", 100),
 		PollInterval:       envDuration(prefix+"OUTBOX_POLL_INTERVAL", 250*time.Millisecond),
 		Lease:              envDuration(prefix+"OUTBOX_LEASE", 30*time.Second),
 		PublishTimeout:     envDuration(prefix+"OUTBOX_PUBLISH_TIMEOUT", 10*time.Second),
 		InitialBackoff:     envDuration(prefix+"OUTBOX_RETRY_INITIAL_BACKOFF", time.Second),
 		MaxBackoff:         envDuration(prefix+"OUTBOX_RETRY_MAX_BACKOFF", time.Minute),
-		AlertAfterAttempts: envInt(prefix+"OUTBOX_ALERT_AFTER_ATTEMPTS", envInt("OUTBOX_ALERT_AFTER_ATTEMPTS", envInt(prefix+"OUTBOX_MAX_ATTEMPTS", 20))),
+		AlertAfterAttempts: envInt(prefix+"OUTBOX_ALERT_AFTER_ATTEMPTS", envInt("OUTBOX_ALERT_AFTER_ATTEMPTS", 20)),
 		Now:                time.Now,
 	})
 }
 
 func normalize(config Config) Config {
-	if config.BatchSize <= 0 || config.BatchSize > 1000 {
-		config.BatchSize = 100
-	}
 	if config.PollInterval <= 0 {
 		config.PollInterval = 250 * time.Millisecond
 	}
@@ -97,7 +92,7 @@ func (r *Relay) Run(ctx context.Context) error {
 	for {
 		processed, err := r.RunOnce(ctx)
 		if err != nil && ctx.Err() == nil {
-			logger.Sugar().Errorw("Outbox relay批次失败", "service", r.config.Service, "error", err)
+			logger.Sugar().Errorw("Outbox relay事件处理失败", "service", r.config.Service, "error", err)
 		}
 		if ctx.Err() != nil {
 			return nil
@@ -114,34 +109,29 @@ func (r *Relay) Run(ctx context.Context) error {
 }
 
 func (r *Relay) RunOnce(ctx context.Context) (int, error) {
-	events, err := r.claim(ctx)
+	event, claimed, err := r.claim(ctx)
 	if err != nil {
 		return 0, err
 	}
-	for i := range events {
-		event := events[i]
-		publishCtx, cancel := context.WithTimeout(ctx, r.config.PublishTimeout)
-		err := r.publish(publishCtx, event)
-		cancel()
-		if err == nil {
-			if finalizeErr := r.markPublished(ctx, event); finalizeErr != nil {
-				return i, finalizeErr
-			}
-			continue
-		}
-		if finalizeErr := r.markFailure(ctx, event, err); finalizeErr != nil {
-			return i, finalizeErr
-		}
+	if !claimed {
+		return 0, nil
 	}
-	return len(events), nil
+	publishCtx, cancel := context.WithTimeout(ctx, r.config.PublishTimeout)
+	err = r.publish(publishCtx, event)
+	cancel()
+	if err == nil {
+		return 1, r.markPublished(ctx, event)
+	}
+	return 1, r.markFailure(ctx, event, err)
 }
 
-func (r *Relay) claim(ctx context.Context) ([]db.OutboxEvent, error) {
-	var claimed []db.OutboxEvent
+func (r *Relay) claim(ctx context.Context) (db.OutboxEvent, bool, error) {
+	var claimed db.OutboxEvent
+	found := false
 	err := r.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := r.config.Now().UTC()
 		nowValue := db.FormatReliabilityTime(now)
-		var candidates []db.OutboxEvent
+		var candidate db.OutboxEvent
 		err := tx.Raw(`SELECT * FROM outbox_events
 WHERE service = ? AND (
   (status IN (?, ?, ?) AND (next_attempt_at = '' OR next_attempt_at <= ?)) OR
@@ -149,35 +139,37 @@ WHERE service = ? AND (
 )
 ORDER BY created_at ASC, event_id ASC
 FOR UPDATE SKIP LOCKED
-LIMIT ?`, r.config.Service, db.OutboxStatusPending, db.OutboxStatusRetryable, db.OutboxStatusFailed, nowValue,
-			db.OutboxStatusClaimed, nowValue, r.config.BatchSize).Scan(&candidates).Error
+LIMIT 1`, r.config.Service, db.OutboxStatusPending, db.OutboxStatusRetryable, db.OutboxStatusFailed, nowValue,
+			db.OutboxStatusClaimed, nowValue).Scan(&candidate).Error
 		if err != nil {
 			return err
 		}
-		for i := range candidates {
-			token, err := randomToken()
-			if err != nil {
-				return err
-			}
-			leaseUntil := db.FormatReliabilityTime(now.Add(r.config.Lease))
-			result := tx.Model(&db.OutboxEvent{}).
-				Where("event_id = ? AND status = ?", candidates[i].EventID, candidates[i].Status).
-				Updates(map[string]any{"status": db.OutboxStatusClaimed, "claim_token": token, "lease_until": leaseUntil, "attempt": gorm.Expr("attempt + 1"), "updated_at": nowValue})
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				continue
-			}
-			candidates[i].Status = db.OutboxStatusClaimed
-			candidates[i].ClaimToken = token
-			candidates[i].LeaseUntil = leaseUntil
-			candidates[i].Attempt++
-			claimed = append(claimed, candidates[i])
+		if candidate.EventID == "" {
+			return nil
 		}
+		token, err := randomToken()
+		if err != nil {
+			return err
+		}
+		leaseUntil := db.FormatReliabilityTime(now.Add(r.config.Lease))
+		result := tx.Model(&db.OutboxEvent{}).
+			Where("event_id = ? AND status = ?", candidate.EventID, candidate.Status).
+			Updates(map[string]any{"status": db.OutboxStatusClaimed, "claim_token": token, "lease_until": leaseUntil, "attempt": gorm.Expr("attempt + 1"), "updated_at": nowValue})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		candidate.Status = db.OutboxStatusClaimed
+		candidate.ClaimToken = token
+		candidate.LeaseUntil = leaseUntil
+		candidate.Attempt++
+		claimed = candidate
+		found = true
 		return nil
 	})
-	return claimed, err
+	return claimed, found, err
 }
 
 func (r *Relay) markPublished(ctx context.Context, event db.OutboxEvent) error {

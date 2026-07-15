@@ -10,7 +10,6 @@ import (
 
 	callpb "Betterfly2/proto/call"
 	envelope "Betterfly2/proto/envelope"
-	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/mq"
 
 	"github.com/IBM/sarama"
@@ -50,18 +49,6 @@ func (p *KafkaPublisher) Publish(_ context.Context, topic string, delivery *call
 		return fmt.Errorf("empty destination topic")
 	}
 	payload, err := mq.MarshalEnvelope(envelope.MessageType_CALL_RESPONSE, delivery)
-	if err != nil {
-		return err
-	}
-	_, _, err = p.producer.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(payload)})
-	return err
-}
-
-func (p *KafkaPublisher) PublishPush(_ context.Context, topic string, request *pushpb.RequestMessage) error {
-	if strings.TrimSpace(topic) == "" {
-		return fmt.Errorf("empty destination topic")
-	}
-	payload, err := mq.MarshalEnvelope(envelope.MessageType_PUSH_REQUEST, request)
 	if err != nil {
 		return err
 	}

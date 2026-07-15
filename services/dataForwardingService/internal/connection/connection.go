@@ -292,13 +292,6 @@ func (cm *ConnectionManager) IsUserLoggedIn(userID string) bool {
 	return exists
 }
 
-func (cm *ConnectionManager) IsCurrentUserConnection(userID, connectionID string) bool {
-	cm.mutex.RLock()
-	defer cm.mutex.RUnlock()
-	mapped, exists := cm.userConnections.Load(userID)
-	return exists && mapped.(string) == connectionID
-}
-
 func (cm *ConnectionManager) GetConnectionCount() int {
 	return int(atomic.LoadInt64(&cm.connectionCount))
 }

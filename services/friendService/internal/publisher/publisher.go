@@ -13,10 +13,6 @@ import (
 	"github.com/IBM/sarama"
 )
 
-func splitBrokers(broker string) []string {
-	return strings.Split(broker, ",")
-}
-
 var (
 	KafkaProducer sarama.SyncProducer
 	initOnce      sync.Once
@@ -58,7 +54,7 @@ func InitKafkaProducer() error {
 		cfg.Net.WriteTimeout = networkTimeout
 		cfg.Producer.Timeout = networkTimeout
 
-		brokerList := splitBrokers(broker)
+		brokerList := strings.Split(broker, ",")
 		for _, brokerAddr := range brokerList {
 			if err := WaitForKafkaReady(brokerAddr, 60*time.Second); err != nil {
 				initErr = err

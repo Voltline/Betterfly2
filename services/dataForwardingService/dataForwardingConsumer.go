@@ -5,6 +5,7 @@ import (
 	"context"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/consumer"
+	"data_forwarding_service/internal/handlers"
 	"data_forwarding_service/internal/publisher"
 	"data_forwarding_service/internal/utils"
 	"errors"
@@ -60,7 +61,7 @@ func ConsumerRoutine() {
 
 	ctx := context.Background()
 	// 使用全局WebSocket处理器创建消费者处理器
-	handler := consumer.NewKafkaConsumerGroupHandlerWithHandler(GetGlobalWebSocketHandler())
+	handler := consumer.NewKafkaConsumerGroupHandlerWithHandler(handlers.GetWebSocketHandler())
 
 	go func() {
 		for {

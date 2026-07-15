@@ -60,10 +60,6 @@ func relationshipWindow(now time.Time) (string, string) {
 	return relationshipTime(now), relationshipTime(now.Add(relationshipRequestTTL))
 }
 
-func CreateFriendRequest(requesterID, targetID int64, message string) (*RelationshipRequestView, bool, error) {
-	return CreateFriendRequestWithDB(DB(), requesterID, targetID, message)
-}
-
 func CreateFriendRequestWithDB(database *gorm.DB, requesterID, targetID int64, message string) (*RelationshipRequestView, bool, error) {
 	if requesterID <= 0 || targetID <= 0 || requesterID == targetID {
 		return nil, false, ErrRelationshipInvalidState
@@ -90,10 +86,6 @@ func CreateFriendRequestWithDB(database *gorm.DB, requesterID, targetID int64, m
 	return view, created, err
 }
 
-func CreateGroupJoinRequest(userID, groupID int64, message string) (*RelationshipRequestView, bool, error) {
-	return CreateGroupJoinRequestWithDB(DB(), userID, groupID, message)
-}
-
 func CreateGroupJoinRequestWithDB(database *gorm.DB, userID, groupID int64, message string) (*RelationshipRequestView, bool, error) {
 	if exists, err := IsActiveGroupMemberWithDB(database, groupID, userID); err != nil || exists {
 		if exists {
@@ -117,10 +109,6 @@ func CreateGroupJoinRequestWithDB(database *gorm.DB, userID, groupID int64, mess
 	}
 	view, err := GetRelationshipRequestWithDB(database, request.ID)
 	return view, created, err
-}
-
-func CreateGroupInvitation(actorID, groupID, targetID int64, message string) (*RelationshipRequestView, bool, error) {
-	return CreateGroupInvitationWithDB(DB(), actorID, groupID, targetID, message)
 }
 
 func CreateGroupInvitationWithDB(database *gorm.DB, actorID, groupID, targetID int64, message string) (*RelationshipRequestView, bool, error) {
@@ -192,10 +180,6 @@ func expireActiveKey(tx *gorm.DB, key string, now time.Time) error {
 		Updates(map[string]interface{}{"status": RequestStatusExpired, "active_key": nil, "resolved_at": relationshipTime(now)}).Error
 }
 
-func friendshipActive(userID, friendID int64) (bool, error) {
-	return friendshipActiveWithDB(DB(), userID, friendID)
-}
-
 func friendshipActiveWithDB(database *gorm.DB, userID, friendID int64) (bool, error) {
 	var count int64
 	err := database.Model(&Friend{}).
@@ -219,10 +203,6 @@ func ListFriendRequestsWithDB(database *gorm.DB, userID int64, includeOutgoing b
 	var requests []RelationshipRequestView
 	err := query.Order("relationship_requests.created_at DESC").Limit(100).Scan(&requests).Error
 	return requests, err
-}
-
-func ListGroupJoinRequests(actorID, groupID int64) ([]RelationshipRequestView, error) {
-	return ListGroupJoinRequestsWithDB(DB(), actorID, groupID)
 }
 
 func ListGroupJoinRequestsWithDB(database *gorm.DB, actorID, groupID int64) ([]RelationshipRequestView, error) {
@@ -263,24 +243,12 @@ func ListGroupInvitationsWithDB(database *gorm.DB, userID int64, includeOutgoing
 	return requests, err
 }
 
-func ResolveFriendRequest(actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
-	return ResolveFriendRequestWithDB(DB(), actorID, requestID, decision)
-}
-
 func ResolveFriendRequestWithDB(database *gorm.DB, actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
 	return resolveRequest(database, actorID, requestID, RequestTypeFriend, decision)
 }
 
-func ResolveGroupJoinRequest(actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
-	return ResolveGroupJoinRequestWithDB(DB(), actorID, requestID, decision)
-}
-
 func ResolveGroupJoinRequestWithDB(database *gorm.DB, actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
 	return resolveRequest(database, actorID, requestID, RequestTypeGroupJoin, decision)
-}
-
-func ResolveGroupInvitation(actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
-	return ResolveGroupInvitationWithDB(DB(), actorID, requestID, decision)
 }
 
 func ResolveGroupInvitationWithDB(database *gorm.DB, actorID, requestID int64, decision string) (*RelationshipRequestView, error) {
@@ -427,10 +395,6 @@ func groupRequestUserID(request *RelationshipRequest) int64 {
 	return request.RequesterUserID
 }
 
-func GetRelationshipRequest(requestID int64) (*RelationshipRequestView, error) {
-	return GetRelationshipRequestWithDB(DB(), requestID)
-}
-
 func GetRelationshipRequestWithDB(database *gorm.DB, requestID int64) (*RelationshipRequestView, error) {
 	var request RelationshipRequestView
 	err := relationshipViewQuery(database).Where("relationship_requests.id = ?", requestID).Scan(&request).Error
@@ -452,19 +416,11 @@ target.name AS target_name, target.avatar AS target_avatar, groups.name AS group
 		Joins("LEFT JOIN groups ON groups.group_id = relationship_requests.group_id")
 }
 
-func expireRequestsForUser(userID int64) error {
-	return expireRequestsForUserWithDB(DB(), userID)
-}
-
 func expireRequestsForUserWithDB(database *gorm.DB, userID int64) error {
 	now := relationshipTime(relationshipNow())
 	return database.Model(&RelationshipRequest{}).
 		Where("status = ? AND expires_at <= ? AND (requester_user_id = ? OR target_user_id = ?)", RequestStatusPending, now, userID, userID).
 		Updates(map[string]interface{}{"status": RequestStatusExpired, "active_key": nil, "resolved_at": now}).Error
-}
-
-func expireRequestsForGroup(groupID int64) error {
-	return expireRequestsForGroupWithDB(DB(), groupID)
 }
 
 func expireRequestsForGroupWithDB(database *gorm.DB, groupID int64) error {
@@ -511,10 +467,6 @@ func groupMemberRoleUpdates(role, updateTime string) map[string]interface{} {
 	return map[string]interface{}{"role": role, "update_time": updateTime}
 }
 
-func KickGroupMemberBy(actorID, groupID, targetID int64) (string, error) {
-	return KickGroupMemberByWithDB(DB(), actorID, groupID, targetID)
-}
-
 func KickGroupMemberByWithDB(database *gorm.DB, actorID, groupID, targetID int64) (string, error) {
 	now := relationshipUpdateTime(relationshipNow())
 	err := database.Transaction(func(tx *gorm.DB) error {
@@ -539,10 +491,6 @@ func KickGroupMemberByWithDB(database *gorm.DB, actorID, groupID, targetID int64
 		return tx.Model(&Group{}).Where("group_id = ?", groupID).Update("update_time", now).Error
 	})
 	return now, err
-}
-
-func UpdateGroupMemberRoleBy(actorID, groupID, targetID int64, role string) (string, error) {
-	return UpdateGroupMemberRoleByWithDB(DB(), actorID, groupID, targetID, role)
 }
 
 func UpdateGroupMemberRoleByWithDB(database *gorm.DB, actorID, groupID, targetID int64, role string) (string, error) {

@@ -20,7 +20,7 @@ func TestSyncMessagesRejectsIdentityMismatchBeforeDatabaseQuery(t *testing.T) {
 		{name: "mismatched requester", requester: 1001, queryUser: 2002},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			resp, err := handler.handleQuerySyncMessages(
+			resp, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(),
 				&storage.RequestMessage{TargetUserId: test.requester},
 				&storage.QuerySyncMessages{ToUserId: test.queryUser, Timestamp: "2026-07-13T00:00:00Z"},
 			)
@@ -49,7 +49,7 @@ func TestDirectMessageAuthorizationFromCache(t *testing.T) {
 			l1 := newMockCache()
 			l1.Set("message:41", message, 0)
 			handler := &StorageHandler{l1Cache: l1}
-			resp, err := handler.handleQueryMessage(
+			resp, err := handler.handleQueryMessageWithDB(handler.database,
 				&storage.RequestMessage{TargetUserId: test.requester},
 				&storage.QueryMessage{MessageId: 41},
 			)
@@ -67,7 +67,7 @@ func TestGroupMessageSenderCanReadWithoutMembership(t *testing.T) {
 	message := &db.Message{MessageID: 42, FromUserID: 1001, ToUserID: 9001, Timestamp: "2026-07-13T01:00:00Z", IsGroup: true}
 	l1 := newMockCache()
 	l1.Set("message:42", message, 0)
-	resp, err := (&StorageHandler{l1Cache: l1}).handleQueryMessage(
+	resp, err := (&StorageHandler{l1Cache: l1}).handleQueryMessageWithDB(nil,
 		&storage.RequestMessage{TargetUserId: 1001},
 		&storage.QueryMessage{MessageId: 42},
 	)
@@ -97,7 +97,7 @@ func TestGroupMessageAuthorizationUsesCurrentMembershipAndJoinedAt(t *testing.T)
 			message := &db.Message{MessageID: 43, FromUserID: 1001, ToUserID: 9001, Timestamp: "2026-07-13T01:00:00Z", IsGroup: true}
 			l1 := newMockCache()
 			l1.Set("message:43", message, 0)
-			resp, err := (&StorageHandler{l1Cache: l1}).handleQueryMessage(
+			resp, err := (&StorageHandler{l1Cache: l1}).handleQueryMessageWithDB(nil,
 				&storage.RequestMessage{TargetUserId: 1002},
 				&storage.QueryMessage{MessageId: 43},
 			)
@@ -120,7 +120,7 @@ func TestL2MessageCacheHitStillChecksAuthorization(t *testing.T) {
 	l2 := newMockCache()
 	l2.Set("message:44", &db.Message{MessageID: 44, FromUserID: 1001, ToUserID: 9001, Timestamp: "2026-07-13T01:00:00Z", IsGroup: true}, 0)
 	handler := &StorageHandler{l1Cache: newMockCache(), l2Cache: l2}
-	resp, err := handler.handleQueryMessage(
+	resp, err := handler.handleQueryMessageWithDB(handler.database,
 		&storage.RequestMessage{TargetUserId: 1002},
 		&storage.QueryMessage{MessageId: 44},
 	)
@@ -135,7 +135,7 @@ func TestMissingAndUnauthorizedMessageAreIndistinguishable(t *testing.T) {
 		WithArgs(int64(404), int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 
-	missing, err := (&StorageHandler{l1Cache: newMockCache()}).handleQueryMessage(
+	missing, err := (&StorageHandler{l1Cache: newMockCache()}).handleQueryMessageWithDB(nil,
 		&storage.RequestMessage{TargetUserId: 1003},
 		&storage.QueryMessage{MessageId: 404},
 	)
@@ -145,7 +145,7 @@ func TestMissingAndUnauthorizedMessageAreIndistinguishable(t *testing.T) {
 
 	l1 := newMockCache()
 	l1.Set("message:405", &db.Message{MessageID: 405, FromUserID: 1001, ToUserID: 1002}, 0)
-	unauthorized, err := (&StorageHandler{l1Cache: l1}).handleQueryMessage(
+	unauthorized, err := (&StorageHandler{l1Cache: l1}).handleQueryMessageWithDB(nil,
 		&storage.RequestMessage{TargetUserId: 1003},
 		&storage.QueryMessage{MessageId: 405},
 	)

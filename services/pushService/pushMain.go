@@ -57,7 +57,7 @@ func main() {
 	}
 
 	store := pushservice.NewGormStore()
-	service := pushservice.NewService(store, sender, kafkaPublisher, env("APNS_BUNDLE_ID", "com.Voltline.Betterfly2"))
+	service := pushservice.NewService(store, sender, env("APNS_BUNDLE_ID", "com.Voltline.Betterfly2"))
 	relay := outbox.New(db.DB(), func(publishCtx context.Context, event db.OutboxEvent) error {
 		headers := []sarama.RecordHeader{
 			{Key: []byte("event_id"), Value: []byte(event.EventID)},
@@ -79,7 +79,6 @@ func main() {
 		}
 	}()
 	go store.RunCleanup(ctx, pushservice.LoadCleanupConfig())
-	go db.RunReliabilityCleanup(ctx, db.DB(), db.LoadRetentionConfig())
 
 	messageTopic := env("KAFKA_PUSH_TOPIC", "push-service")
 	consumerGroup, err := newConsumerGroup(brokers, env("KAFKA_CONSUMER_GROUP", "push-service-group"), sarama.OffsetNewest)

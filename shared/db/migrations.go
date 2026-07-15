@@ -24,6 +24,8 @@ var nonPostgresMigrationLock sync.Mutex
 const legacySnapshotMigrationVersion = 3
 
 func migrationPlan() []Migration {
+	// Versions 1-4 are published history. Do not add newly introduced models to
+	// these functions; the next schema change must be an explicit new version.
 	return []Migration{
 		{Version: 1, Name: "core schema", Apply: migrateCoreSchema},
 		{Version: 2, Name: "experiments push and idempotency schema", Apply: migrateServiceSchema},
@@ -304,17 +306,6 @@ func applyAdditiveModel(migrator additiveSchemaMigrator, model interface{}, colu
 		}
 	}
 	return nil
-}
-
-// MigratePostgresSchema remains callable for legacy tooling, but normal
-// releases use RunMigrations so the session lock covers the complete plan.
-func MigratePostgresSchema(database *gorm.DB) error {
-	return database.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(`SELECT pg_advisory_xact_lock(hashtext('betterfly2_schema_migration'))`).Error; err != nil {
-			return err
-		}
-		return migratePostgresSchemaStatements(tx)
-	})
 }
 
 func migratePostgresSchemaStatements(tx *gorm.DB) error {

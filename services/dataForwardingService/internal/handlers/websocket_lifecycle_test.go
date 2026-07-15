@@ -5,7 +5,6 @@ import (
 	"data_forwarding_service/internal/connection"
 	redisClient "data_forwarding_service/internal/redis"
 	"data_forwarding_service/internal/router"
-	"data_forwarding_service/internal/session"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -20,10 +19,9 @@ import (
 func testWebSocketHandler(config websocketConfig) *WebSocketHandler {
 	manager := connection.NewConnectionManager()
 	handler := &WebSocketHandler{
-		connManager:    manager,
-		sessionManager: session.NewSessionManager(),
-		router:         router.NewRouter(manager),
-		config:         config,
+		connManager: manager,
+		router:      router.NewRouter(manager),
+		config:      config,
 	}
 	handler.upgrader.CheckOrigin = config.checkOrigin
 	return handler

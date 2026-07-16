@@ -1,7 +1,6 @@
 package http_server
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -64,22 +63,6 @@ func TestJWTAuthMiddlewareRejectsMalformedRequestsBeforeRPC(t *testing.T) {
 				t.Fatal("rejected request reached the next handler")
 			}
 		})
-	}
-}
-
-func TestGetUserInfoReadsTypedContext(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	if _, err := GetUserInfo(req); err == nil {
-		t.Fatal("expected missing context value to fail")
-	}
-	want := &UserInfo{UserID: 7, Account: "alice"}
-	req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, want))
-	got, err := GetUserInfo(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Fatalf("unexpected user info: got=%+v want=%+v", got, want)
 	}
 }
 

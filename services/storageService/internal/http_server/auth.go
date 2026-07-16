@@ -2,8 +2,6 @@ package http_server
 
 import (
 	"Betterfly2/shared/logger"
-	"context"
-	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,15 +9,6 @@ import (
 	pb "Betterfly2/proto/server_rpc/auth"
 	"storageService/internal/grpcClient"
 )
-
-// UserContextKey 用户上下文键
-type UserContextKey struct{}
-
-// UserInfo 用户信息
-type UserInfo struct {
-	UserID  int64
-	Account string
-}
 
 func shouldBypassJWTAuth(path string) bool {
 	switch path {
@@ -89,26 +78,9 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 将用户信息存入上下文
-		userInfo := &UserInfo{
-			UserID:  checkJWTRsp.UserId,
-			Account: checkJWTRsp.Account,
-		}
-		ctx := context.WithValue(r.Context(), UserContextKey{}, userInfo)
-		r = r.WithContext(ctx)
-
-		sugar.Debugf("JWT验证成功: user_id=%d, account=%s", userInfo.UserID, userInfo.Account)
+		sugar.Debugf("JWT验证成功: user_id=%d, account=%s", checkJWTRsp.UserId, checkJWTRsp.Account)
 
 		// 继续处理请求
 		next.ServeHTTP(w, r)
 	})
-}
-
-// GetUserInfo 从上下文获取用户信息
-func GetUserInfo(r *http.Request) (*UserInfo, error) {
-	userInfo, ok := r.Context().Value(UserContextKey{}).(*UserInfo)
-	if !ok || userInfo == nil {
-		return nil, errors.New("user info not found in context")
-	}
-	return userInfo, nil
 }

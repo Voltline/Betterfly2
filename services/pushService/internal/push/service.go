@@ -14,7 +14,6 @@ import (
 
 type Service struct {
 	store          Store
-	durable        DurableStore
 	sender         Sender
 	bundleID       string
 	now            func() time.Time
@@ -28,9 +27,8 @@ type Service struct {
 }
 
 func NewService(store Store, sender Sender, bundleID string) *Service {
-	durable, _ := store.(DurableStore)
 	service := &Service{
-		store: store, durable: durable, sender: sender, bundleID: strings.TrimSpace(bundleID), now: time.Now,
+		store: store, sender: sender, bundleID: strings.TrimSpace(bundleID), now: time.Now,
 		maxConcurrency: envPositiveInt("PUSH_APNS_MAX_CONCURRENCY", 16),
 		deliveryLease:  envPositiveDuration("PUSH_DELIVERY_LEASE", 30*time.Second),
 		workerPoll:     envPositiveDuration("PUSH_WORKER_POLL_INTERVAL", 250*time.Millisecond),
@@ -60,10 +58,10 @@ func (s *Service) Handle(ctx context.Context, request *pushpb.RequestMessage) er
 		return ErrInvalidRequest
 	}
 	operationKey, ok := kafkaconsumer.OperationKeyFromContext(ctx)
-	if !ok || strings.TrimSpace(operationKey) == "" || s.durable == nil {
+	if !ok || strings.TrimSpace(operationKey) == "" {
 		return ErrInvalidRequest
 	}
-	return s.durable.EnqueueRequest(ctx, operationKey, request, s.bundleID)
+	return s.store.EnqueueRequest(ctx, operationKey, request, s.bundleID)
 }
 
 func uniquePushTargets(values []int64, senderUserID int64) []int64 {
@@ -149,39 +147,4 @@ func parseEnvironment(environment string) pushpb.PushEnvironment {
 
 func clientEvent(operation string, result pushpb.PushResult, deviceID string, environment pushpb.PushEnvironment, message string, now time.Time) *pushpb.ClientEvent {
 	return &pushpb.ClientEvent{Operation: operation, Result: result, DeviceId: deviceID, Environment: environment, Message: message, Timestamp: now.UTC().Format(time.RFC3339Nano)}
-}
-
-func valueOrEmpty[T any](value *T, getter func(*T) string) string {
-	if value == nil {
-		return ""
-	}
-	return getter(value)
-}
-
-func environmentOrUnknown(value *pushpb.RegisterVoIPToken) pushpb.PushEnvironment {
-	if value == nil {
-		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
-	}
-	return value.GetEnvironment()
-}
-
-func environmentOrUnknownUnregister(value *pushpb.UnregisterVoIPToken) pushpb.PushEnvironment {
-	if value == nil {
-		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
-	}
-	return value.GetEnvironment()
-}
-
-func environmentOrUnknownAPNs(value *pushpb.RegisterAPNsToken) pushpb.PushEnvironment {
-	if value == nil {
-		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
-	}
-	return value.GetEnvironment()
-}
-
-func environmentOrUnknownUnregisterAPNs(value *pushpb.UnregisterAPNsToken) pushpb.PushEnvironment {
-	if value == nil {
-		return pushpb.PushEnvironment_PUSH_ENVIRONMENT_UNSPECIFIED
-	}
-	return value.GetEnvironment()
 }

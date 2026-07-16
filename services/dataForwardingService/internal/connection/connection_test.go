@@ -109,7 +109,7 @@ func TestLoginFailureAndCancellationFailClosed(t *testing.T) {
 	if err := manager.Login(context.Background(), connection.ID, "10"); err == nil {
 		t.Fatal("expected external login failure")
 	}
-	if connection.IsAuthenticated() || manager.IsUserLoggedIn("10") || manager.GetLoggedInUserCount() != 0 {
+	if connection.IsAuthenticated() || manager.GetLoggedInUserCount() != 0 {
 		t.Fatal("failed login left local authenticated state")
 	}
 
@@ -190,7 +190,7 @@ func TestConnectionManagerLookupSendAndRemoveUnloggedConnection(t *testing.T) {
 	if got, ok := manager.GetConnectionByUserID(conn.UserID); !ok || got != conn {
 		t.Fatalf("user lookup failed: got=%p ok=%v", got, ok)
 	}
-	if !manager.IsUserLoggedIn(conn.UserID) || manager.GetConnectionCount() != 1 || manager.GetLoggedInUserCount() != 1 {
+	if manager.GetConnectionCount() != 1 || manager.GetLoggedInUserCount() != 1 {
 		t.Fatalf("unexpected manager counts: connections=%d users=%d", manager.GetConnectionCount(), manager.GetLoggedInUserCount())
 	}
 	if err := manager.SendMessageToUser(conn.UserID, []byte("hello")); err != nil {

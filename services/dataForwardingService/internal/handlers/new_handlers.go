@@ -381,15 +381,9 @@ func (h *WebSocketHandler) GetConnectionStats() (int, int) {
 	return h.connManager.GetConnectionCount(), h.connManager.GetLoggedInUserCount()
 }
 
-// GetWebSocketHandler 获取全局WebSocket处理器实例
 var globalWebSocketHandler *WebSocketHandler
 
 func GetWebSocketHandler() *WebSocketHandler {
-	if globalWebSocketHandler != nil && globalWebSocketHandler.connManager != nil {
-		logger.Sugar().Debugf("GetWebSocketHandler返回，连接管理器: %s", globalWebSocketHandler.connManager.GetInstanceID())
-	} else {
-		logger.Sugar().Warnf("GetWebSocketHandler返回nil或connManager为nil")
-	}
 	return globalWebSocketHandler
 }
 

@@ -484,33 +484,25 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 	}
 
 	internalDelivery := &pb.DFInternalDelivery{}
-	if err := proto.Unmarshal(payload, internalDelivery); err == nil {
-		switch delivery := internalDelivery.Payload.(type) {
-		case *pb.DFInternalDelivery_GroupPostBatchDelivery:
-			groupBatchDelivery := delivery.GroupPostBatchDelivery
-			if groupBatchDelivery.GetPost() == nil || len(groupBatchDelivery.GetTargetUserIds()) == 0 {
-				return permanentError("GroupPostBatchDelivery内容不完整")
-			}
-			return h.deliverGroupPostToUsers(groupBatchDelivery.GetPost(), groupBatchDelivery.GetTargetUserIds())
-		case *pb.DFInternalDelivery_GroupPostDelivery:
-			groupDelivery := delivery.GroupPostDelivery
-			if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
-				return permanentError("GroupPostDelivery内容不完整")
-			}
-			return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
+	if err := proto.Unmarshal(payload, internalDelivery); err != nil {
+		return permanentError("解析DFInternalDelivery失败: %v", err)
+	}
+	switch delivery := internalDelivery.Payload.(type) {
+	case *pb.DFInternalDelivery_GroupPostBatchDelivery:
+		groupBatchDelivery := delivery.GroupPostBatchDelivery
+		if groupBatchDelivery.GetPost() == nil || len(groupBatchDelivery.GetTargetUserIds()) == 0 {
+			return permanentError("GroupPostBatchDelivery内容不完整")
 		}
+		return h.deliverGroupPostToUsers(groupBatchDelivery.GetPost(), groupBatchDelivery.GetTargetUserIds())
+	case *pb.DFInternalDelivery_GroupPostDelivery:
+		groupDelivery := delivery.GroupPostDelivery
+		if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
+			return permanentError("GroupPostDelivery内容不完整")
+		}
+		return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
+	default:
+		return permanentError("DFInternalDelivery类型不受支持")
 	}
-
-	// 兼容旧格式：历史版本直接把 GroupPostDelivery 作为 DF_RESPONSE payload。
-	groupDelivery := &pb.GroupPostDelivery{}
-	if err := proto.Unmarshal(payload, groupDelivery); err != nil {
-		return permanentError("解析GroupPostDelivery失败: %v", err)
-	}
-	if groupDelivery.GetPost() == nil || groupDelivery.GetTargetUserId() <= 0 {
-		return permanentError("GroupPostDelivery内容不完整")
-	}
-
-	return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
 }
 
 func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, targetUserIDs []int64) error {

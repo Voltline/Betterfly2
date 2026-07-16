@@ -392,7 +392,7 @@ func monitorKickUser(ctx context.Context, userID int64) (string, error) {
 		return fmt.Sprintf("用户 %d 的路由租约已失效，未执行踢出。", userID), nil
 	}
 	dsm := &redisClient.DistributedSessionManager{}
-	if err := dsm.PublishKickNotification(strconv.FormatInt(userID, 10), container); err != nil {
+	if err := dsm.PublishKickNotification(ctx, strconv.FormatInt(userID, 10), container); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("已向 DF Pod %s 发送用户 %d 的强制断线指令。", container, userID), nil

@@ -26,9 +26,8 @@ FROM ubuntu:latest
 
 WORKDIR /app
 
-# 复制构建结果和必要的文件
+# 复制构建结果
 COPY --from=builder /app/services/authService/authMain .
-COPY --from=builder /app/shared/db/config/server.crt .
 
 # 启动服务
 ENTRYPOINT ["./authMain"]

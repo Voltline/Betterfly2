@@ -287,11 +287,6 @@ func (cm *ConnectionManager) SendMessageToUser(userID string, message []byte) er
 	return connection.EnqueueMessage(message)
 }
 
-func (cm *ConnectionManager) IsUserLoggedIn(userID string) bool {
-	_, exists := cm.GetConnectionByUserID(userID)
-	return exists
-}
-
 func (cm *ConnectionManager) GetConnectionCount() int {
 	return int(atomic.LoadInt64(&cm.connectionCount))
 }

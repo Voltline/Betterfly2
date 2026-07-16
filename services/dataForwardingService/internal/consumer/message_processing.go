@@ -246,15 +246,6 @@ func (h *NewKafkaConsumerGroupHandler) processMessage(msg *sarama.ConsumerMessag
 		return permanentError("Envelope解析失败: %v", err)
 	}
 	if env.GetType() == envelope.MessageType_UNKNOWN || len(env.GetPayload()) == 0 {
-		// 兼容迁移前未封装 Envelope 的 storage response 和 DF request。
-		legacyStorage := &storage.ResponseMessage{}
-		if err := proto.Unmarshal(msg.Value, legacyStorage); err == nil && legacyStorage.GetTargetUserId() > 0 {
-			return h.handleStorageResponse(legacyStorage)
-		}
-		legacyRequest, err := handlers.HandleRequestData(msg.Value)
-		if err == nil && legacyRequest.GetPost() != nil {
-			return handlers.InplaceHandlePostMessage(legacyRequest)
-		}
 		return permanentError("Envelope字段不完整: type=%s payload_bytes=%d", env.GetType(), len(env.GetPayload()))
 	}
 

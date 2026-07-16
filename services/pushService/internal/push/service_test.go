@@ -23,6 +23,22 @@ type memoryStore struct {
 	presentationErr error
 }
 
+func (s *memoryStore) EnqueueRequest(context.Context, string, *pushpb.RequestMessage, string) error {
+	return nil
+}
+func (s *memoryStore) ClaimMessageDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error) {
+	return nil, nil
+}
+func (s *memoryStore) ClaimVoIPDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]DurableDeliveryClaim, error) {
+	return nil, nil
+}
+func (s *memoryStore) FinalizeMessageDelivery(context.Context, DurableDeliveryUpdate) error {
+	return nil
+}
+func (s *memoryStore) FinalizeVoIPDelivery(context.Context, DurableDeliveryUpdate) error {
+	return nil
+}
+
 func (s *memoryStore) Ping(context.Context) error { return nil }
 
 func (s *memoryStore) ListActiveTokens(_ context.Context, userID int64, pushType string) ([]db.PushDeviceToken, error) {

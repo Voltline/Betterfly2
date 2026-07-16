@@ -59,11 +59,6 @@ var (
 	})
 
 	// Kafka指标
-	KafkaMessagesConsumedTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "betterfly_kafka_messages_consumed_total",
-		Help: "Total number of Kafka messages consumed",
-	})
-
 	KafkaMessagesProducedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "betterfly_kafka_messages_produced_total",
 		Help: "Total number of Kafka messages produced, by topic",
@@ -86,11 +81,6 @@ var (
 		Help: "Total number of Kafka processing retries",
 	})
 
-	KafkaProcessingLatency = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "betterfly_kafka_processing_latency_seconds",
-		Help:    "Latency of Kafka message processing in seconds",
-		Buckets: prometheus.DefBuckets,
-	})
 	KafkaConsumerMessagesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "betterfly_kafka_consumer_messages_total",
 		Help: "Kafka consumer outcomes by service and outcome",
@@ -179,21 +169,4 @@ var (
 		Name: "betterfly_online_users_total",
 		Help: "Current number of online users",
 	})
-
-	// HTTP请求指标
-	HTTPRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "betterfly_http_requests_total",
-		Help: "Total number of HTTP requests, by method, path and status",
-	}, []string{"method", "path", "status"})
-
-	HTTPRequestLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "betterfly_http_request_latency_seconds",
-		Help:    "Latency of HTTP requests in seconds",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"method", "path"})
 )
-
-// 初始化函数，确保指标被注册
-func init() {
-	// 所有指标通过promauto自动注册
-}

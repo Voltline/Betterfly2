@@ -253,7 +253,7 @@ func (s *Server) adminPanel(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = adminTemplate.Execute(w, map[string]string{
-		"TokenHint": adminTokenHint(s.adminToken),
+		"TokenHint": "管理接口需要 Header: Authorization: Bearer <ABTEST_ADMIN_TOKEN> 或 X-Admin-Token。",
 	})
 }
 
@@ -339,10 +339,6 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, value interface{}) e
 		return err
 	}
 	return nil
-}
-
-func adminTokenHint(token string) string {
-	return "管理接口需要 Header: Authorization: Bearer <ABTEST_ADMIN_TOKEN> 或 X-Admin-Token。"
 }
 
 func securityHeaders(next http.Handler) http.Handler {

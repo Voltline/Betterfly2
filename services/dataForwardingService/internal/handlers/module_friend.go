@@ -342,10 +342,6 @@ func buildUpdateGroupAvatarFriendRequest(fromID, groupID int64, avatarHash, curr
 	return req
 }
 
-func buildInsertContactFriendRequest(fromID, targetUserID int64, currentContainerID string) *friend.RequestMessage {
-	return buildInsertContactFriendRequestWithMessage(fromID, targetUserID, "", currentContainerID)
-}
-
 func buildInsertContactFriendRequestWithMessage(fromID, targetUserID int64, message, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_AddDirectFriend{

@@ -134,10 +134,7 @@ func (dsm *DistributedSessionManager) PublishOwnedKickNotification(ctx context.C
 	return Rdb.Publish(ctx, channel, message).Err()
 }
 
-// PublishKickNotification keeps the administrative kick path compatible.
-func (dsm *DistributedSessionManager) PublishKickNotification(userID, targetContainerID string) error {
-	ctx, cancel := context.WithTimeout(context.TODO(), 2*time.Second)
-	defer cancel()
+func (dsm *DistributedSessionManager) PublishKickNotification(ctx context.Context, userID, targetContainerID string) error {
 	return Rdb.Publish(ctx, "user_kick:"+targetContainerID, "KICK:"+userID+":*").Err()
 }
 

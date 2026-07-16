@@ -38,8 +38,7 @@ func NewWithReadiness(addr string, ready readinessCheck) *http.Server {
 	}
 }
 
-func defaultReadiness(ctx context.Context) error {
-	_ = ctx
+func defaultReadiness(context.Context) error {
 	if publisher.KafkaProducer == nil {
 		return errors.New("kafka producer not ready")
 	}

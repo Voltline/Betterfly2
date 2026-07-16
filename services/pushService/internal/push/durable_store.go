@@ -71,16 +71,16 @@ func (s *GormStore) persistClientCommand(tx *gorm.DB, operationKey string, comma
 	switch payload := command.GetRequest().Payload.(type) {
 	case *pushpb.ClientRequest_RegisterVoipToken:
 		request := payload.RegisterVoipToken
-		event = persistRegisterToken(tx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.RegisterVoIPToken) string { return v.GetDeviceId() }), valueOrEmpty(request, func(v *pushpb.RegisterVoIPToken) string { return v.GetToken() }), environmentOrUnknown(request), PushTypeVoIP, "register_voip_token", bundleID, now)
+		event = persistRegisterToken(tx, command.GetUserId(), request.GetDeviceId(), request.GetToken(), request.GetEnvironment(), PushTypeVoIP, "register_voip_token", bundleID, now)
 	case *pushpb.ClientRequest_UnregisterVoipToken:
 		request := payload.UnregisterVoipToken
-		event = persistUnregisterToken(tx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.UnregisterVoIPToken) string { return v.GetDeviceId() }), environmentOrUnknownUnregister(request), PushTypeVoIP, "unregister_voip_token", now)
+		event = persistUnregisterToken(tx, command.GetUserId(), request.GetDeviceId(), request.GetEnvironment(), PushTypeVoIP, "unregister_voip_token", now)
 	case *pushpb.ClientRequest_RegisterApnsToken:
 		request := payload.RegisterApnsToken
-		event = persistRegisterToken(tx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.RegisterAPNsToken) string { return v.GetDeviceId() }), valueOrEmpty(request, func(v *pushpb.RegisterAPNsToken) string { return v.GetToken() }), environmentOrUnknownAPNs(request), PushTypeAPNs, "register_apns_token", bundleID, now)
+		event = persistRegisterToken(tx, command.GetUserId(), request.GetDeviceId(), request.GetToken(), request.GetEnvironment(), PushTypeAPNs, "register_apns_token", bundleID, now)
 	case *pushpb.ClientRequest_UnregisterApnsToken:
 		request := payload.UnregisterApnsToken
-		event = persistUnregisterToken(tx, command.GetUserId(), valueOrEmpty(request, func(v *pushpb.UnregisterAPNsToken) string { return v.GetDeviceId() }), environmentOrUnknownUnregisterAPNs(request), PushTypeAPNs, "unregister_apns_token", now)
+		event = persistUnregisterToken(tx, command.GetUserId(), request.GetDeviceId(), request.GetEnvironment(), PushTypeAPNs, "unregister_apns_token", now)
 	default:
 		return nil, nil, ErrInvalidRequest
 	}

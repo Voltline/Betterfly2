@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
 	pushservice "pushService/internal/push"
 )
@@ -14,6 +16,22 @@ import (
 type httpTestStore struct {
 	tokens []db.PushDeviceToken
 	audits []db.PushDebugAudit
+}
+
+func (s *httpTestStore) EnqueueRequest(context.Context, string, *pushpb.RequestMessage, string) error {
+	return nil
+}
+func (s *httpTestStore) ClaimMessageDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]pushservice.DurableDeliveryClaim, error) {
+	return nil, nil
+}
+func (s *httpTestStore) ClaimVoIPDeliveryBatch(context.Context, int, time.Time, time.Duration, int) ([]pushservice.DurableDeliveryClaim, error) {
+	return nil, nil
+}
+func (s *httpTestStore) FinalizeMessageDelivery(context.Context, pushservice.DurableDeliveryUpdate) error {
+	return nil
+}
+func (s *httpTestStore) FinalizeVoIPDelivery(context.Context, pushservice.DurableDeliveryUpdate) error {
+	return nil
 }
 
 func (s *httpTestStore) Ping(context.Context) error { return nil }

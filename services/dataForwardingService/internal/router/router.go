@@ -119,39 +119,3 @@ func (r *Router) routeCrossContainer(toUserID string, targetContainerID string, 
 	metrics.RecordKafkaMessageProduced(targetContainerID)
 	return nil
 }
-
-// BroadcastMessage 广播消息到多个用户
-func (r *Router) BroadcastMessage(userIDs []string, message []byte) error {
-	var failedUsers []string
-
-	for _, userID := range userIDs {
-		err := r.RouteMessage(userID, message)
-		if err != nil {
-			failedUsers = append(failedUsers, userID)
-		}
-	}
-
-	if len(failedUsers) > 0 {
-		return fmt.Errorf("部分用户消息发送失败: %v", failedUsers)
-	}
-
-	return nil
-}
-
-// CheckUserOnline 检查用户是否在线
-func (r *Router) CheckUserOnline(userID string) bool {
-	return r.connManager.IsUserLoggedIn(userID)
-}
-
-// GetOnlineUsers 获取在线用户列表
-func (r *Router) GetOnlineUsers() []string {
-	// 注意：这里只返回本地实例的在线用户
-	// 如果需要全局在线用户，需要查询服务注册中心
-	var onlineUsers []string
-
-	// 这里需要实现遍历连接管理器获取所有已登录用户
-	// 由于connection包的设计，暂时无法直接获取所有用户
-	// 后续可以在connection包中添加相关方法
-
-	return onlineUsers
-}

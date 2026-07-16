@@ -134,23 +134,6 @@ func GetStoragePath(fileHash string) string {
 	return fmt.Sprintf("%s/%s", fileHash[:2], fileHash)
 }
 
-// UploadFile 上传文件到RustFS
-func (c *RustFSClient) UploadFile(ctx context.Context, fileHash string, fileSize int64, reader io.Reader) error {
-	storagePath := GetStoragePath(fileHash)
-
-	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(c.bucket),
-		Key:    aws.String(storagePath),
-		Body:   reader,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to upload file: %v", err)
-	}
-
-	logger.Sugar().Debugf("File uploaded successfully: hash=%s, path=%s", fileHash, storagePath)
-	return nil
-}
-
 // DownloadFile 从RustFS下载文件
 func (c *RustFSClient) DownloadFile(ctx context.Context, fileHash string) (io.ReadCloser, error) {
 	storagePath := GetStoragePath(fileHash)

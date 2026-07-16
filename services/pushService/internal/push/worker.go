@@ -30,9 +30,6 @@ type preparedDelivery struct {
 }
 
 func (s *Service) RunWorkers(ctx context.Context) error {
-	if s.durable == nil {
-		return errors.New("push durable store is not configured")
-	}
 	errCh := make(chan error, 2)
 	var workers sync.WaitGroup
 	for _, kind := range []deliveryKind{deliveryKindMessage, deliveryKindVoIP} {
@@ -40,7 +37,7 @@ func (s *Service) RunWorkers(ctx context.Context) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			errCh <- s.runDeliveryLoop(ctx, s.durable, kind)
+			errCh <- s.runDeliveryLoop(ctx, s.store, kind)
 		}()
 	}
 	select {

@@ -32,7 +32,7 @@ type L2Redis struct {
 func encode(value interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(value); err != nil {
+	if err := enc.Encode(&value); err != nil {
 		return nil, fmt.Errorf("gob编码失败: %v", err)
 	}
 	return buf.Bytes(), nil
@@ -40,43 +40,11 @@ func encode(value interface{}) ([]byte, error) {
 
 // decode 使用gob解码对象
 func decode(data []byte) (interface{}, error) {
-	buf := bytes.NewBuffer(data)
-	dec := gob.NewDecoder(buf)
-
-	// 尝试解码为注册的类型
 	var value interface{}
-	if err := dec.Decode(&value); err == nil {
-		return value, nil
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&value); err != nil {
+		return nil, errors.New("无法解码缓存数据")
 	}
-
-	// 如果失败，尝试解码为db.Message（兼容旧格式）
-	buf.Reset()
-	buf.Write(data)
-	dec = gob.NewDecoder(buf)
-	var msg db.Message
-	if err := dec.Decode(&msg); err == nil {
-		return &msg, nil
-	}
-
-	// 如果失败，尝试解码为db.User（兼容旧格式）
-	buf.Reset()
-	buf.Write(data)
-	dec = gob.NewDecoder(buf)
-	var user db.User
-	if err := dec.Decode(&user); err == nil {
-		return &user, nil
-	}
-
-	// 如果失败，尝试解码为字符串
-	buf.Reset()
-	buf.Write(data)
-	dec = gob.NewDecoder(buf)
-	var str string
-	if err := dec.Decode(&str); err == nil {
-		return str, nil
-	}
-
-	return nil, errors.New("无法解码缓存数据")
+	return value, nil
 }
 
 // getRedisAddr 获取Redis地址，优先使用环境变量

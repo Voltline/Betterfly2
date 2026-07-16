@@ -22,7 +22,6 @@ const (
 
 	PushJobPending   = "pending"
 	PushJobCompleted = "completed"
-	PushJobFailed    = "failed"
 )
 
 type NotificationKind string
@@ -96,6 +95,7 @@ func (e *APNSError) Retryable() bool {
 }
 
 type Store interface {
+	DurableStore
 	Ping(context.Context) error
 	ListActiveTokens(context.Context, int64, string) ([]db.PushDeviceToken, error)
 	MessageNotificationsEnabled(context.Context, int64, int64, bool) (bool, error)

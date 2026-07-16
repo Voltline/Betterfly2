@@ -16,31 +16,6 @@ func TimeSinceWithLabels(start time.Time, observer *prometheus.HistogramVec, lab
 	observer.WithLabelValues(labels...).Observe(time.Since(start).Seconds())
 }
 
-// IncCounter 增加计数器
-func IncCounter(counter prometheus.Counter) {
-	counter.Inc()
-}
-
-// IncCounterWithLabels 增加带标签的计数器
-func IncCounterWithLabels(counter *prometheus.CounterVec, labels ...string) {
-	counter.WithLabelValues(labels...).Inc()
-}
-
-// SetGauge 设置Gauge值
-func SetGauge(gauge prometheus.Gauge, value float64) {
-	gauge.Set(value)
-}
-
-// AddGauge Gauge值增加
-func AddGauge(gauge prometheus.Gauge, value float64) {
-	gauge.Add(value)
-}
-
-// SubGauge Gauge值减少
-func SubGauge(gauge prometheus.Gauge, value float64) {
-	gauge.Sub(value)
-}
-
 // RecordCacheHit 记录缓存命中
 func RecordCacheHit(cacheLevel string) {
 	CacheHitsTotal.WithLabelValues(cacheLevel).Inc()
@@ -78,11 +53,6 @@ func RecordRoutingError() {
 	MessagesRoutingErrorsTotal.Inc()
 }
 
-// RecordKafkaMessageConsumed 记录Kafka消息消费
-func RecordKafkaMessageConsumed() {
-	KafkaMessagesConsumedTotal.Inc()
-}
-
 // RecordKafkaMessageProduced 记录Kafka消息生产
 func RecordKafkaMessageProduced(topic string) {
 	KafkaMessagesProducedTotal.WithLabelValues(topic).Inc()
@@ -103,11 +73,6 @@ func RecordKafkaDLQPublishFailure() {
 
 func RecordKafkaProcessingRetry() {
 	KafkaProcessingRetriesTotal.Inc()
-}
-
-// RecordKafkaProcessingLatency 记录Kafka处理延迟
-func RecordKafkaProcessingLatency(start time.Time) {
-	TimeSince(start, KafkaProcessingLatency)
 }
 
 func RecordReliableConsumerOutcome(service, outcome string) {
@@ -170,11 +135,6 @@ func SetABTestSnapshotAge(age time.Duration) {
 
 func RecordABTestDatabaseQuery(query string, start time.Time) {
 	ABTestDatabaseLatency.WithLabelValues(query).Observe(time.Since(start).Seconds())
-}
-
-// UpdateWebSocketConnections 更新WebSocket连接数
-func UpdateWebSocketConnections(count int) {
-	WebSocketConnectionsTotal.Set(float64(count))
 }
 
 // RecordWebSocketConnectionOpened 记录WebSocket连接打开

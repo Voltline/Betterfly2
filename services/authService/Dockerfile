@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # 第一阶段：构建
 FROM golang:1.24 AS builder
 
@@ -9,7 +11,23 @@ ENV GOPROXY=https://goproxy.cn,direct \
 # 设置工作目录（项目根目录）
 WORKDIR /app
 
-# 复制所有必要的模块文件和项目文件（关键修改）
+# 依赖清单与源码分层，避免业务代码变化后重新下载全部模块。
+COPY ./proto/go.* ./proto/
+COPY ./proto/call/go.* ./proto/call/
+COPY ./proto/data_forwarding/go.* ./proto/data_forwarding/
+COPY ./proto/friend/go.* ./proto/friend/
+COPY ./proto/push/go.* ./proto/push/
+COPY ./proto/storage/go.* ./proto/storage/
+COPY ./shared/go.* ./shared/
+COPY ./services/authService/go.* ./services/authService/
+
+WORKDIR /app/services/authService
+
+RUN --mount=type=cache,id=betterfly-go-mod,target=/go/pkg/mod \
+    go mod download
+
+WORKDIR /app
+
 COPY ./proto ./proto
 COPY ./shared ./shared
 COPY ./services/authService ./services/authService
@@ -17,9 +35,10 @@ COPY ./services/authService ./services/authService
 # 进入服务目录构建
 WORKDIR /app/services/authService
 
-# 下载依赖并构建
-RUN go mod tidy && \
-    go build -o authMain .
+# 构建缓存由所有 Go 服务共享。
+RUN --mount=type=cache,id=betterfly-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=betterfly-go-build,target=/root/.cache/go-build \
+    go build -trimpath -o authMain .
 
 # 第二阶段：运行环境
 FROM ubuntu:latest

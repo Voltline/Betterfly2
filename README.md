@@ -103,7 +103,9 @@ cd services
 ./rebuild_docker_compose.sh --list
 ```
 
-`build_docker_compose.sh` 保留历史上的全量重建语义；日常开发优先使用 `rebuild_docker_compose.sh`，避免每次重建全部镜像。
+`build_docker_compose.sh` 保留历史上的全量部署范围，但会复用已有证书、Go 模块缓存和未变化的容器。只有证书地址变化时才追加 `--cert`，确实需要重建未变化容器时才追加 `--force-recreate`。日常开发优先使用 `rebuild_docker_compose.sh`，避免每次检查全部镜像。
+
+应用镜像使用 BuildKit 共享 Go 模块与编译缓存。首次构建仍需下载和编译依赖；不要在日常开发中执行 `docker builder prune`，否则下一次会重新承担这部分冷启动成本。
 
 ### 生成协议与运行测试
 

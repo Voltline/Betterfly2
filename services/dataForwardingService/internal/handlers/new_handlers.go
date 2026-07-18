@@ -248,8 +248,11 @@ func (h *WebSocketHandler) handleAuthenticatedMessage(conn *connection.Connectio
 	if err != nil {
 		logger.Sugar().Errorf("消息处理错误: %v", err)
 	}
+	if res.response != nil {
+		h.sendResponse(conn, res.response)
+	}
 
-	if res == 1 {
+	if res.code == 1 {
 		// 收到logout报文，需要断开连接
 		conn.Conn.Close()
 	}

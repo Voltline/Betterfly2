@@ -328,9 +328,10 @@ func TestBuildRelationshipResponsesPreserveStructuredResults(t *testing.T) {
 	}
 
 	member := buildGroupMemberOperationResponse(&friend.GroupOperationRsp{
-		Operation: "update_group_member_role", GroupId: 10, UserId: 2, Role: "admin", UpdateTime: "2026-07-13T01:00:00Z",
+		Operation: "transfer_group_owner", GroupId: 10, UserId: 2, Role: "owner", UpdateTime: "2026-07-13T01:00:00Z",
+		GroupName: "Team", PreviousOwnerUserId: 1,
 	}, friend.FriendResult_FRIEND_OK).GetGroupMemberOperationRsp()
-	if member.GetResult() != "FRIEND_OK" || member.GetRole() != "admin" || member.GetGroupId() != 10 {
+	if member.GetResult() != "FRIEND_OK" || member.GetRole() != "owner" || member.GetGroupId() != 10 || member.GetGroupName() != "Team" || member.GetPreviousOwnerUserId() != 1 {
 		t.Fatalf("group member operation mapping mismatch: %+v", member)
 	}
 }

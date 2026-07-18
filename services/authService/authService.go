@@ -215,6 +215,103 @@ RETURN:
 
 }
 
+func (*AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
+	user, result := authenticateUser(req.GetUserId(), req.GetJwt())
+	if result != pb.AuthResult_OK {
+		return &pb.ChangePasswordRsp{Result: result}, nil
+	}
+
+	newPassword := []byte(req.GetNewPassword())
+	if len(newPassword) < 8 {
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_TOO_SHORT}, nil
+	}
+	if len(newPassword) > 72 {
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_TOO_LONG}, nil
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.GetOldPassword())) != nil {
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_ERROR}, nil
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(newPassword, bcrypt.DefaultCost)
+	if err != nil {
+		logger.Sugar().Errorw("修改密码时生成哈希失败", "user_id", user.ID, "error", err)
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+	jwtKey, err := newJWTKey()
+	if err != nil {
+		logger.Sugar().Errorw("修改密码时生成签名密钥失败", "user_id", user.ID, "error", err)
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+
+	updated, err := db.UpdateUserCredentialsCAS(user.ID, user.PasswordHash, user.JwtKey, string(passwordHash), jwtKey)
+	if err != nil {
+		logger.Sugar().Errorw("修改密码时更新用户凭据失败", "user_id", user.ID, "error", err)
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+	if !updated {
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_JWT_ERROR}, nil
+	}
+
+	newJWT, err := utils.GenerateJWT(&db.User{ID: user.ID, Account: user.Account, JwtKey: jwtKey})
+	if err != nil {
+		logger.Sugar().Errorw("修改密码后签发JWT失败", "user_id", user.ID, "error", err)
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+	logger.Sugar().Infow("用户密码修改成功", "user_id", user.ID)
+	return &pb.ChangePasswordRsp{Result: pb.AuthResult_OK, Jwt: newJWT}, nil
+}
+
+func (*AuthService) RevokeSessions(_ context.Context, req *pb.RevokeSessionsReq) (*pb.RevokeSessionsRsp, error) {
+	user, result := authenticateUser(req.GetUserId(), req.GetJwt())
+	if result != pb.AuthResult_OK {
+		return &pb.RevokeSessionsRsp{Result: result}, nil
+	}
+
+	jwtKey, err := newJWTKey()
+	if err != nil {
+		logger.Sugar().Errorw("撤销会话时生成签名密钥失败", "user_id", user.ID, "error", err)
+		return &pb.RevokeSessionsRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+	updated, err := db.RotateUserJwtKeyCAS(user.ID, user.JwtKey, jwtKey)
+	if err != nil {
+		logger.Sugar().Errorw("撤销会话时更新签名密钥失败", "user_id", user.ID, "error", err)
+		return &pb.RevokeSessionsRsp{Result: pb.AuthResult_SERVICE_ERROR}, nil
+	}
+	if !updated {
+		return &pb.RevokeSessionsRsp{Result: pb.AuthResult_JWT_ERROR}, nil
+	}
+	logger.Sugar().Infow("用户会话已全部撤销", "user_id", user.ID)
+	return &pb.RevokeSessionsRsp{Result: pb.AuthResult_OK}, nil
+}
+
+func authenticateUser(userID int64, jwt string) (*db.User, pb.AuthResult) {
+	if userID <= 0 || jwt == "" {
+		return nil, pb.AuthResult_JWT_ERROR
+	}
+	user, err := db.GetUserById(userID)
+	if err != nil {
+		logger.Sugar().Errorw("账号安全操作读取用户失败", "user_id", userID, "error", err)
+		return nil, pb.AuthResult_SERVICE_ERROR
+	}
+	if user == nil || len(user.JwtKey) == 0 {
+		return nil, pb.AuthResult_JWT_ERROR
+	}
+	claims, err := utils.ValidateJWT(jwt, user.JwtKey)
+	if err != nil || claims.ID != user.ID || claims.Account != user.Account {
+		return nil, pb.AuthResult_JWT_ERROR
+	}
+	return user, pb.AuthResult_OK
+}
+
+func newJWTKey() ([]byte, error) {
+	key := make([]byte, config.JwtKeyLength)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
 func userBriefStr(user *db.User) string {
 	return fmt.Sprintf("user%d[%s]", user.ID, user.Account)
 }

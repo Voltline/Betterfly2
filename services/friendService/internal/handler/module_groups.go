@@ -31,4 +31,10 @@ func registerFriendGroupModule(router *dispatch.OneofRouter[friendRequestContext
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_QueryJoinedGroups) (*friend.ResponseMessage, error) {
 		return ctx.handler.handleQueryJoinedGroupsWithDB(ctx.database, ctx.request, payload.QueryJoinedGroups)
 	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateGroupName) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleUpdateGroupNameWithDB(ctx.database, ctx.request, payload.UpdateGroupName)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_TransferGroupOwner) (*friend.ResponseMessage, error) {
+		return ctx.handler.handleTransferGroupOwnerWithDB(ctx.database, ctx.request, payload.TransferGroupOwner)
+	})
 }

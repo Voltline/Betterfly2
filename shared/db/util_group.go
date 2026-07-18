@@ -264,3 +264,126 @@ func UpdateGroupAvatarWithDB(database *gorm.DB, groupID int64, avatar string) (b
 	}
 	return result.RowsAffected > 0, now, nil
 }
+
+func UpdateGroupNameByWithDB(database *gorm.DB, actorID, groupID int64, groupName string) (string, error) {
+	now := utils.NowTime()
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var group Group
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND is_delete = ?", groupID, false).
+			First(&group).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRelationshipNotFound
+			}
+			return err
+		}
+		_, allowed, err := RequireGroupManagerWithDB(tx.Clauses(clause.Locking{Strength: "UPDATE"}), groupID, actorID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return ErrRelationshipForbidden
+		}
+
+		result := tx.Model(&Group{}).
+			Where("group_id = ? AND is_delete = ?", groupID, false).
+			Updates(map[string]interface{}{"name": groupName, "update_time": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrRelationshipNotFound
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return now, nil
+}
+
+func TransferGroupOwnerWithDB(database *gorm.DB, actorID, groupID, targetUserID int64) (string, int64, string, error) {
+	if actorID <= 0 || groupID <= 0 || targetUserID <= 0 || actorID == targetUserID {
+		return "", 0, "", ErrRelationshipInvalidState
+	}
+
+	now := utils.NowTime()
+	groupName := ""
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var group Group
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND is_delete = ?", groupID, false).
+			First(&group).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRelationshipNotFound
+			}
+			return err
+		}
+		if group.OwnerUserID != actorID {
+			return ErrRelationshipInvalidState
+		}
+
+		var previousOwner GroupMember
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND user_id = ?", groupID, actorID).
+			First(&previousOwner).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRelationshipInvalidState
+			}
+			return err
+		}
+		if previousOwner.Role != GroupRoleOwner {
+			return ErrRelationshipInvalidState
+		}
+
+		var target GroupMember
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("group_id = ? AND user_id = ?", groupID, targetUserID).
+			First(&target).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrRelationshipNotFound
+			}
+			return err
+		}
+
+		groupUpdate := tx.Model(&Group{}).
+			Where("group_id = ? AND owner_user_id = ? AND is_delete = ?", groupID, actorID, false).
+			Updates(map[string]interface{}{"owner_user_id": targetUserID, "update_time": now})
+		if groupUpdate.Error != nil {
+			return groupUpdate.Error
+		}
+		if groupUpdate.RowsAffected != 1 {
+			return ErrRelationshipInvalidState
+		}
+		if err := tx.Model(&GroupMember{}).
+			Where("group_id = ? AND user_id = ?", groupID, targetUserID).
+			Updates(groupMemberRoleUpdates(GroupRoleOwner, now)).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&GroupMember{}).
+			Where("group_id = ? AND user_id = ?", groupID, actorID).
+			Updates(groupMemberRoleUpdates(GroupRoleAdmin, now)).Error; err != nil {
+			return err
+		}
+
+		var ownerCount int64
+		if err := tx.Model(&GroupMember{}).
+			Where("group_id = ? AND role = ?", groupID, GroupRoleOwner).
+			Count(&ownerCount).Error; err != nil {
+			return err
+		}
+		var currentOwner GroupMember
+		if err := tx.Where("group_id = ? AND user_id = ?", groupID, targetUserID).First(&currentOwner).Error; err != nil {
+			return err
+		}
+		if ownerCount != 1 || currentOwner.Role != GroupRoleOwner {
+			return ErrRelationshipInvalidState
+		}
+		groupName = group.Name
+		return nil
+	})
+	if err != nil {
+		return "", 0, "", err
+	}
+	return groupName, actorID, now, nil
+}

@@ -14,6 +14,8 @@ enum AuthResult {
   ACCOUNT_EMPTY = 5;
   PASSWORD_EMPTY = 6;
   ACCOUNT_TOO_LONG = 7;
+  PASSWORD_TOO_SHORT = 8;
+  PASSWORD_TOO_LONG = 9;
 }
 
 message LoginReq {
@@ -52,8 +54,31 @@ message CheckJwtRsp {
   string account = 3;
 }
 
+message ChangePasswordReq {
+  int64 user_id = 1;
+  string jwt = 2;
+  string old_password = 3;
+  string new_password = 4;
+}
+
+message ChangePasswordRsp {
+  AuthResult result = 1;
+  string jwt = 2;
+}
+
+message RevokeSessionsReq {
+  int64 user_id = 1;
+  string jwt = 2;
+}
+
+message RevokeSessionsRsp {
+  AuthResult result = 1;
+}
+
 service AuthService {
   rpc Login (LoginReq) returns (LoginRsp);
   rpc Signup (SignupReq) returns (SignupRsp);
   rpc CheckJwt (CheckJwtReq) returns (CheckJwtRsp);
+  rpc ChangePassword (ChangePasswordReq) returns (ChangePasswordRsp);
+  rpc RevokeSessions (RevokeSessionsReq) returns (RevokeSessionsRsp);
 }

@@ -139,6 +139,23 @@ message GroupMemberOperationRsp {
   int64 user_id = 4;
   string role = 5;
   string update_time = 6;
+  string group_name = 7;
+  int64 previous_owner_user_id = 8;
+}
+
+enum AccountSecurityResult {
+  ACCOUNT_SECURITY_OK = 0;
+  ACCOUNT_SECURITY_OLD_PASSWORD_ERROR = 1;
+  ACCOUNT_SECURITY_JWT_ERROR = 2;
+  ACCOUNT_SECURITY_PASSWORD_TOO_SHORT = 3;
+  ACCOUNT_SECURITY_PASSWORD_TOO_LONG = 4;
+  ACCOUNT_SECURITY_SERVICE_ERROR = 10;
+}
+
+message AccountSecurityRsp {
+  string operation = 1;
+  AccountSecurityResult result = 2;
+  string jwt = 3;
 }
 
 // 单条消息响应

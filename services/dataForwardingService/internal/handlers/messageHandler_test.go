@@ -365,3 +365,17 @@ func TestFriendDecisionMappingRejectsUnspecified(t *testing.T) {
 		t.Fatal("unspecified decision must be rejected")
 	}
 }
+
+func TestBuildGroupManagementRequestsUseAuthenticatedActor(t *testing.T) {
+	rename := buildUpdateGroupNameFriendRequest(1001, 3003, "New Team", "df-pod-1")
+	renamePayload := rename.GetUpdateGroupName()
+	if rename.GetTargetUserId() != 1001 || rename.GetFromKafkaTopic() != "df-pod-1" || renamePayload.GetRequestUserId() != 1001 || renamePayload.GetGroupId() != 3003 || renamePayload.GetGroupName() != "New Team" {
+		t.Fatalf("rename request bridge mismatch: %+v", rename)
+	}
+
+	transfer := buildTransferGroupOwnerFriendRequest(1001, 3003, 2002, "df-pod-1")
+	transferPayload := transfer.GetTransferGroupOwner()
+	if transfer.GetTargetUserId() != 1001 || transferPayload.GetRequestUserId() != 1001 || transferPayload.GetGroupId() != 3003 || transferPayload.GetUserId() != 2002 {
+		t.Fatalf("owner transfer request bridge mismatch: %+v", transfer)
+	}
+}

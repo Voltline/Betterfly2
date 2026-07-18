@@ -105,7 +105,7 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 	case *friend.ResponseMessage_RelationshipOperationRsp:
 		dfResp = buildRelationshipOperationResponse(payload.RelationshipOperationRsp, friendResp.GetResult())
 	case *friend.ResponseMessage_GroupOperationRsp:
-		if payload.GroupOperationRsp.GetOperation() == "kick_group_member" || payload.GroupOperationRsp.GetOperation() == "update_group_member_role" {
+		if isStructuredGroupOperation(payload.GroupOperationRsp.GetOperation()) {
 			dfResp = buildGroupMemberOperationResponse(payload.GroupOperationRsp, friendResp.GetResult())
 		}
 	}
@@ -284,8 +284,18 @@ func buildGroupMemberOperationResponse(operation *friend.GroupOperationRsp, resu
 		GroupMemberOperationRsp: &pb.GroupMemberOperationRsp{
 			Operation: operation.GetOperation(), Result: result.String(), GroupId: operation.GetGroupId(),
 			UserId: operation.GetUserId(), Role: operation.GetRole(), UpdateTime: operation.GetUpdateTime(),
+			GroupName: operation.GetGroupName(), PreviousOwnerUserId: operation.GetPreviousOwnerUserId(),
 		},
 	}}
+}
+
+func isStructuredGroupOperation(operation string) bool {
+	switch operation {
+	case "kick_group_member", "update_group_member_role", "update_group_name", "transfer_group_owner":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildGroupInfoResponse(groupInfo *friend.GroupInfoRsp) *pb.ResponseMessage {

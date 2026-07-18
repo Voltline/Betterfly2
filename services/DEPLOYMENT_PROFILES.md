@@ -26,8 +26,11 @@ cd services
 ./deploy_docker_compose.sh standard
 
 # 与历史 build_docker_compose.sh 相同的全量部署
-./deploy_docker_compose.sh full --cert --proto --force-recreate
+./build_docker_compose.sh
 ```
+
+全量脚本仅在证书缺失时生成证书，并默认复用未变化的容器。证书地址发生变化时可显式追加
+`--cert`；排查容器生命周期问题时才建议追加 `--force-recreate`。
 
 ## 按能力组合
 

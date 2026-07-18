@@ -15,7 +15,13 @@ message SignupReq {
   string user_name = 3;
 }
 
+enum LogoutScope {
+  CURRENT_CONNECTION = 0;
+  ALL_SESSIONS = 1;
+}
+
 message LogoutReq {
+  LogoutScope scope = 1;
 }
 
 message QueryUser {
@@ -119,6 +125,21 @@ message UpdateGroupMemberRole {
   int64 target_group_id = 2;
   int64 target_user_id = 3;
   string role = 4; // admin/member
+}
+
+message UpdateGroupName {
+  int64 target_group_id = 1;
+  string new_group_name = 2;
+}
+
+message TransferGroupOwner {
+  int64 target_group_id = 1;
+  int64 target_user_id = 2;
+}
+
+message ChangePassword {
+  string old_password = 1;
+  string new_password = 2;
 }
 
 message QueryGroupMembers {

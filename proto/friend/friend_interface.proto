@@ -107,6 +107,18 @@ message UpdateGroupMemberRole {
   string role = 4;
 }
 
+message UpdateGroupName {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  string group_name = 3;
+}
+
+message TransferGroupOwner {
+  int64 request_user_id = 1;
+  int64 group_id = 2;
+  int64 user_id = 3;
+}
+
 message QueryGroupMembers {
   int64 request_user_id = 1;
   int64 group_id = 2;
@@ -171,6 +183,8 @@ message GroupOperationRsp {
   int64 user_id = 3;
   string update_time = 4;
   string role = 5;
+  string group_name = 6;
+  int64 previous_owner_user_id = 7;
 }
 
 message GroupMemberContact {
@@ -267,6 +281,8 @@ message RequestMessage {
     ResolveGroupInvitation resolve_group_invitation = 21;
     KickGroupMember kick_group_member = 22;
     UpdateGroupMemberRole update_group_member_role = 23;
+    UpdateGroupName update_group_name = 24;
+    TransferGroupOwner transfer_group_owner = 25;
   }
 }
 

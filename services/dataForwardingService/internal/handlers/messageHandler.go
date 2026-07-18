@@ -22,7 +22,8 @@ type dfRequestContext struct {
 }
 
 type dfRequestResult struct {
-	code int
+	code     int
+	response *pb.ResponseMessage
 }
 
 type dfRequestModule func(*dispatch.OneofRouter[dfRequestContext, dfRequestResult])
@@ -64,7 +65,7 @@ func HandleRequestData(data []byte) (*pb.RequestMessage, error) {
 	return req, nil
 }
 
-func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error) {
+func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (dfRequestResult, error) {
 	result, err := getDFRequestRouter().Dispatch(dfRequestContext{
 		fromID:  fromID,
 		message: message,
@@ -72,11 +73,11 @@ func RequestMessageHandler(fromID int64, message *pb.RequestMessage) (int, error
 	if err != nil {
 		if errors.Is(err, dispatch.ErrNilPayload) || errors.Is(err, dispatch.ErrUnregisteredPayload) {
 			logger.Sugar().Warnf("收到不可处理Payload: %+v", message.Payload)
-			return 0, nil
+			return dfRequestResult{}, nil
 		}
-		return 0, err
+		return dfRequestResult{}, err
 	}
-	return result.code, nil
+	return result, nil
 }
 
 func HandleLoginMessage(message *pb.RequestMessage) (*pb.ResponseMessage, int64, error) {

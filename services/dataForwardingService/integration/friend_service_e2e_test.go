@@ -60,7 +60,16 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 			ToInsertUserId: user2.userID,
 		},
 	}))
-	user1.expectServerMessageContaining("好友")
+	friendRequest := user1.expectRelationshipOperation("create_friend_request")
+	if friendRequest.GetResult() != "FRIEND_OK" || friendRequest.GetRequest().GetRequestId() <= 0 {
+		t.Fatalf("unexpected friend request result: %+v", friendRequest)
+	}
+	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_ResolveFriendRequest{
+		ResolveFriendRequest: &pb.ResolveFriendRequest{RequestId: friendRequest.GetRequest().GetRequestId(), Decision: pb.RequestDecision_REQUEST_ACCEPT},
+	}))
+	if accepted := user2.expectRelationshipOperation("resolve_friend_request"); accepted.GetResult() != "FRIEND_OK" {
+		t.Fatalf("friend request acceptance failed: %+v", accepted)
+	}
 
 	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_QueryContacts{
 		QueryContacts: &pb.QueryContacts{FromUserId: user1.userID},
@@ -163,7 +172,16 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 			TargetGroupId: groupID,
 		},
 	}))
-	user2.expectServerMessageContaining("加入群组")
+	joinRequest := user2.expectRelationshipOperation("create_group_join_request")
+	if joinRequest.GetResult() != "FRIEND_OK" || joinRequest.GetRequest().GetRequestId() <= 0 {
+		t.Fatalf("unexpected group join request result: %+v", joinRequest)
+	}
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_ResolveGroupJoinRequest{
+		ResolveGroupJoinRequest: &pb.ResolveGroupJoinRequest{RequestId: joinRequest.GetRequest().GetRequestId(), Decision: pb.RequestDecision_REQUEST_ACCEPT},
+	}))
+	if accepted := user1.expectRelationshipOperation("resolve_group_join_request"); accepted.GetResult() != "FRIEND_OK" {
+		t.Fatalf("group join request acceptance failed: %+v", accepted)
+	}
 
 	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_QueryGroupMembers{
 		QueryGroupMembers: &pb.QueryGroupMembers{
@@ -182,6 +200,44 @@ func TestFriendServiceEndToEnd(t *testing.T) {
 	}
 	if member2 == nil || member2.GetRole() != "member" {
 		t.Fatalf("expected user2 to be member, got %+v", member2)
+	}
+
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_UpdateGroupName{
+		UpdateGroupName: &pb.UpdateGroupName{TargetGroupId: groupID, NewGroupName: "codex-renamed-group"},
+	}))
+	renameResult := user1.expectGroupMemberOperation("update_group_name")
+	if renameResult.GetResult() != "FRIEND_OK" || renameResult.GetGroupName() != "codex-renamed-group" {
+		t.Fatalf("unexpected group rename result: %+v", renameResult)
+	}
+
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_TransferGroupOwner{
+		TransferGroupOwner: &pb.TransferGroupOwner{TargetGroupId: groupID, TargetUserId: user2.userID},
+	}))
+	transferResult := user1.expectGroupMemberOperation("transfer_group_owner")
+	if transferResult.GetResult() != "FRIEND_OK" || transferResult.GetUserId() != user2.userID || transferResult.GetPreviousOwnerUserId() != user1.userID {
+		t.Fatalf("unexpected owner transfer result: %+v", transferResult)
+	}
+
+	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_UpdateGroupName{
+		UpdateGroupName: &pb.UpdateGroupName{TargetGroupId: groupID, NewGroupName: "codex-new-owner-group"},
+	}))
+	if operation := user2.expectGroupMemberOperation("update_group_name"); operation.GetResult() != "FRIEND_OK" {
+		t.Fatalf("new owner could not manage group: %+v", operation)
+	}
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_QueryGroup{
+		QueryGroup: &pb.QueryGroup{ToQueryGroupId: groupID},
+	}))
+	if groupInfo = user1.expectGroupInfo(); groupInfo.GetQueryGroupName() != "codex-new-owner-group" {
+		t.Fatalf("group rename was not visible on the next query: %+v", groupInfo)
+	}
+	user1.send(authenticatedRequest(user1.jwt, &pb.RequestMessage_QueryGroupMembers{
+		QueryGroupMembers: &pb.QueryGroupMembers{TargetGroupId: groupID},
+	}))
+	groupMembers = user1.expectGroupMembers()
+	member1 = findGroupMember(groupMembers.GetMembers(), user1.userID)
+	member2 = findGroupMember(groupMembers.GetMembers(), user2.userID)
+	if member1 == nil || member1.GetRole() != "admin" || member2 == nil || member2.GetRole() != "owner" {
+		t.Fatalf("owner transfer roles are inconsistent: old=%+v new=%+v", member1, member2)
 	}
 
 	user2.send(authenticatedRequest(user2.jwt, &pb.RequestMessage_QueryJoinedGroups{
@@ -432,6 +488,24 @@ func (c *wsTestClient) expectJoinedGroups() *pb.JoinedGroupsRsp {
 	return resp.GetJoinedGroupsRsp()
 }
 
+func (c *wsTestClient) expectGroupMemberOperation(operation string) *pb.GroupMemberOperationRsp {
+	c.t.Helper()
+	resp := c.waitFor(e2eTimeout, func(resp *pb.ResponseMessage) bool {
+		result := resp.GetGroupMemberOperationRsp()
+		return result != nil && result.GetOperation() == operation
+	})
+	return resp.GetGroupMemberOperationRsp()
+}
+
+func (c *wsTestClient) expectRelationshipOperation(operation string) *pb.RelationshipOperationRsp {
+	c.t.Helper()
+	resp := c.waitFor(e2eTimeout, func(resp *pb.ResponseMessage) bool {
+		result := resp.GetRelationshipOperationRsp()
+		return result != nil && result.GetOperation() == operation
+	})
+	return resp.GetRelationshipOperationRsp()
+}
+
 func (c *wsTestClient) expectGroupPost(groupID, fromUserID int64, msg string) *pb.Post {
 	c.t.Helper()
 	resp := c.waitFor(e2eTimeout, func(resp *pb.ResponseMessage) bool {
@@ -481,11 +555,15 @@ func authenticatedRequest(jwt string, payload isAuthenticatedPayload) *pb.Reques
 		req.Payload = p
 	case *pb.RequestMessage_DeleteContact:
 		req.Payload = p
+	case *pb.RequestMessage_ResolveFriendRequest:
+		req.Payload = p
 	case *pb.RequestMessage_InsertGroup:
 		req.Payload = p
 	case *pb.RequestMessage_QueryGroup:
 		req.Payload = p
 	case *pb.RequestMessage_InsertGroupUser:
+		req.Payload = p
+	case *pb.RequestMessage_ResolveGroupJoinRequest:
 		req.Payload = p
 	case *pb.RequestMessage_QueryGroupMembers:
 		req.Payload = p
@@ -496,6 +574,10 @@ func authenticatedRequest(jwt string, payload isAuthenticatedPayload) *pb.Reques
 	case *pb.RequestMessage_Post:
 		req.Payload = p
 	case *pb.RequestMessage_DeleteGroupUser:
+		req.Payload = p
+	case *pb.RequestMessage_UpdateGroupName:
+		req.Payload = p
+	case *pb.RequestMessage_TransferGroupOwner:
 		req.Payload = p
 	default:
 		panic(fmt.Sprintf("unsupported authenticated payload type %T", payload))

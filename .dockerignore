@@ -1,0 +1,21 @@
+.git
+.github
+.idea
+.vscode
+.DS_Store
+.env
+
+# Local tooling and deployment files are not used by Go image builds.
+tool
+common
+k8s
+skills
+*.md
+
+# Tests and local build artifacts should not invalidate production images.
+**/*_test.go
+**/*.out
+**/*.test
+**/*.log
+services/*/*Main
+

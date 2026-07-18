@@ -1,10 +1,31 @@
+# syntax=docker/dockerfile:1.7
+
 FROM golang:1.24-alpine AS builder
 
+ENV GOPROXY=https://goproxy.cn,direct \
+    GO111MODULE=on \
+    CGO_ENABLED=0
+
 WORKDIR /app
+
+COPY proto/go.* ./proto/
+COPY shared/go.* ./shared/
+
+WORKDIR /app/shared
+
+RUN --mount=type=cache,id=betterfly-go-mod,target=/go/pkg/mod \
+    go mod download
+
+WORKDIR /app
+
 COPY proto ./proto
 COPY shared ./shared
+
 WORKDIR /app/shared
-RUN go build -o /out/betterfly-migrate ./cmd/migrate
+
+RUN --mount=type=cache,id=betterfly-go-mod,target=/go/pkg/mod \
+    --mount=type=cache,id=betterfly-go-build,target=/root/.cache/go-build \
+    go build -trimpath -o /out/betterfly-migrate ./cmd/migrate
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates

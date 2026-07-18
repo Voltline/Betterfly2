@@ -40,6 +40,23 @@ func UpdateUserJwtKeyById(id int64, jwtKey []byte) error {
 		Update("jwt_key", jwtKey).Error
 }
 
+func UpdateUserCredentialsCAS(id int64, oldPasswordHash string, oldJwtKey []byte, newPasswordHash string, newJwtKey []byte) (bool, error) {
+	result := DB().Model(&User{}).
+		Where("id = ? AND password_hash = ? AND jwt_key = ?", id, oldPasswordHash, oldJwtKey).
+		Updates(map[string]interface{}{
+			"password_hash": newPasswordHash,
+			"jwt_key":       newJwtKey,
+		})
+	return result.RowsAffected == 1, result.Error
+}
+
+func RotateUserJwtKeyCAS(id int64, oldJwtKey, newJwtKey []byte) (bool, error) {
+	result := DB().Model(&User{}).
+		Where("id = ? AND jwt_key = ?", id, oldJwtKey).
+		Update("jwt_key", newJwtKey)
+	return result.RowsAffected == 1, result.Error
+}
+
 func AddUser(user *User) error {
 	user.UpdateTime = utils.NowTime()
 	database := DB()

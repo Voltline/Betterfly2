@@ -45,6 +45,9 @@ message RequestMessage {
     ResolveGroupInvitation resolve_group_invitation = 32;
     KickGroupMember kick_group_member = 33;
     UpdateGroupMemberRole update_group_member_role = 34;
+    UpdateGroupName update_group_name = 35;
+    TransferGroupOwner transfer_group_owner = 36;
+    ChangePassword change_password = 37;
   }
 }
 
@@ -71,5 +74,6 @@ message ResponseMessage {
     RelationshipRequestListRsp relationship_request_list_rsp = 18;
     RelationshipOperationRsp relationship_operation_rsp = 19;
     GroupMemberOperationRsp group_member_operation_rsp = 20;
+    AccountSecurityRsp account_security_rsp = 21;
   }
 }

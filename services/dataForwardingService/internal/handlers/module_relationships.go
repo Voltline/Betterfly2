@@ -37,6 +37,12 @@ func registerRelationshipRequestModules(router *dispatch.OneofRouter[dfRequestCo
 	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateGroupMemberRole) (dfRequestResult, error) {
 		return dfRequestResult{}, handleUpdateGroupMemberRole(ctx.fromID, ctx.message)
 	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateGroupName) (dfRequestResult, error) {
+		return dfRequestResult{}, handleUpdateGroupName(ctx.fromID, ctx.message)
+	})
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_TransferGroupOwner) (dfRequestResult, error) {
+		return dfRequestResult{}, handleTransferGroupOwner(ctx.fromID, ctx.message)
+	})
 }
 
 func handleQueryFriendRequests(fromID int64, message *pb.RequestMessage) error {
@@ -151,6 +157,48 @@ func handleUpdateGroupMemberRole(fromID int64, message *pb.RequestMessage) error
 	req := newFriendRequest(currentContainerTopic(), fromID)
 	req.Payload = &friend.RequestMessage_UpdateGroupMemberRole{UpdateGroupMemberRole: &friend.UpdateGroupMemberRole{RequestUserId: fromID, GroupId: payload.GetTargetGroupId(), UserId: payload.GetTargetUserId(), Role: payload.GetRole()}}
 	return publishFriendRequest(req)
+}
+
+func handleUpdateGroupName(fromID int64, message *pb.RequestMessage) error {
+	payload, err := authenticatedPayload(fromID, message, "修改群名称", "update_group_name", (*pb.RequestMessage).GetUpdateGroupName)
+	if err != nil {
+		return err
+	}
+	if payload.GetTargetGroupId() <= 0 {
+		return errors.New("群名称修改参数非法")
+	}
+	return publishFriendRequest(buildUpdateGroupNameFriendRequest(fromID, payload.GetTargetGroupId(), payload.GetNewGroupName(), currentContainerTopic()))
+}
+
+func buildUpdateGroupNameFriendRequest(fromID, groupID int64, groupName, topic string) *friend.RequestMessage {
+	req := newFriendRequest(topic, fromID)
+	req.Payload = &friend.RequestMessage_UpdateGroupName{UpdateGroupName: &friend.UpdateGroupName{
+		RequestUserId: fromID,
+		GroupId:       groupID,
+		GroupName:     groupName,
+	}}
+	return req
+}
+
+func handleTransferGroupOwner(fromID int64, message *pb.RequestMessage) error {
+	payload, err := authenticatedPayload(fromID, message, "转让群主", "transfer_group_owner", (*pb.RequestMessage).GetTransferGroupOwner)
+	if err != nil {
+		return err
+	}
+	if payload.GetTargetGroupId() <= 0 || payload.GetTargetUserId() <= 0 || payload.GetTargetUserId() == fromID {
+		return errors.New("群主转让参数非法")
+	}
+	return publishFriendRequest(buildTransferGroupOwnerFriendRequest(fromID, payload.GetTargetGroupId(), payload.GetTargetUserId(), currentContainerTopic()))
+}
+
+func buildTransferGroupOwnerFriendRequest(fromID, groupID, targetUserID int64, topic string) *friend.RequestMessage {
+	req := newFriendRequest(topic, fromID)
+	req.Payload = &friend.RequestMessage_TransferGroupOwner{TransferGroupOwner: &friend.TransferGroupOwner{
+		RequestUserId: fromID,
+		GroupId:       groupID,
+		UserId:        targetUserID,
+	}}
+	return req
 }
 
 func friendDecision(decision pb.RequestDecision) (friend.RequestDecision, error) {

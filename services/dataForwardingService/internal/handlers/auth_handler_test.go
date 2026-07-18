@@ -11,10 +11,16 @@ import (
 )
 
 type authClientStub struct {
-	loginResponse  *auth.LoginRsp
-	loginError     error
-	signupResponse *auth.SignupRsp
-	signupError    error
+	loginResponse          *auth.LoginRsp
+	loginError             error
+	signupResponse         *auth.SignupRsp
+	signupError            error
+	changePasswordResponse *auth.ChangePasswordRsp
+	changePasswordError    error
+	revokeSessionsResponse *auth.RevokeSessionsRsp
+	revokeSessionsError    error
+	changePasswordRequest  **auth.ChangePasswordReq
+	revokeSessionsRequest  **auth.RevokeSessionsReq
 }
 
 func (s authClientStub) Login(context.Context, *auth.LoginReq, ...grpc.CallOption) (*auth.LoginRsp, error) {
@@ -27,6 +33,20 @@ func (s authClientStub) Signup(context.Context, *auth.SignupReq, ...grpc.CallOpt
 
 func (s authClientStub) CheckJwt(context.Context, *auth.CheckJwtReq, ...grpc.CallOption) (*auth.CheckJwtRsp, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s authClientStub) ChangePassword(_ context.Context, req *auth.ChangePasswordReq, _ ...grpc.CallOption) (*auth.ChangePasswordRsp, error) {
+	if s.changePasswordRequest != nil {
+		*s.changePasswordRequest = req
+	}
+	return s.changePasswordResponse, s.changePasswordError
+}
+
+func (s authClientStub) RevokeSessions(_ context.Context, req *auth.RevokeSessionsReq, _ ...grpc.CallOption) (*auth.RevokeSessionsRsp, error) {
+	if s.revokeSessionsRequest != nil {
+		*s.revokeSessionsRequest = req
+	}
+	return s.revokeSessionsResponse, s.revokeSessionsError
 }
 
 func TestAuthHandlersPreserveRPCFailuresWithoutPanicking(t *testing.T) {

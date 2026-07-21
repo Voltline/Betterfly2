@@ -17,6 +17,10 @@ message QueryMessage {
   int64 message_id = 1;
 }
 
+message RecallMessage {
+  int64 message_id = 1;
+}
+
 message QuerySyncMessages {
   int64 to_user_id = 1;
   string timestamp = 2;

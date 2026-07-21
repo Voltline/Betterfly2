@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: betterfly-db-migrate-v4
+  name: betterfly-db-migrate-v5
   namespace: betterfly2
   annotations:
     argocd.argoproj.io/hook: PreSync
@@ -13,12 +13,12 @@ spec:
     metadata:
       labels:
         app: betterfly-db-migrate
-        betterfly.io/schema-version: "4"
+        betterfly.io/schema-version: "5"
     spec:
       restartPolicy: OnFailure
       containers:
         - name: migrate
-          image: betterfly2/db-migrate:schema-v4
+          image: betterfly2/db-migrate:schema-v5
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

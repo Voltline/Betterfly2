@@ -4,10 +4,28 @@ import (
 	"Betterfly2/shared/utils"
 	"errors"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const MessageRecallWindow = 2 * time.Minute
+
+type MessageRecallStatus int
+
+const (
+	MessageRecallOK MessageRecallStatus = iota
+	MessageRecallNotFound
+	MessageRecallForbidden
+	MessageRecallAlreadyRecalled
+	MessageRecallExpired
+)
+
+type MessageRecallOutcome struct {
+	Message *Message
+	Status  MessageRecallStatus
+}
 
 func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID string) (*Message, bool, error) {
 	clientMessageID = strings.TrimSpace(clientMessageID)
@@ -63,6 +81,66 @@ func GetMessageByIDWithDB(database *gorm.DB, messageID int64) (*Message, error) 
 	return &message, nil
 }
 
+func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now time.Time) (*MessageRecallOutcome, error) {
+	if database == nil {
+		return nil, errors.New("recall message database is nil")
+	}
+	if operatorUserID <= 0 || messageID <= 0 {
+		return &MessageRecallOutcome{Status: MessageRecallNotFound}, nil
+	}
+
+	var message Message
+	err := database.Clauses(clause.Locking{Strength: "UPDATE"}).First(&message, "message_id = ?", messageID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return &MessageRecallOutcome{Status: MessageRecallNotFound}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if message.FromUserID != operatorUserID {
+		canRead, authErr := CanUserReadMessageWithDB(database, operatorUserID, &message)
+		if authErr != nil {
+			return nil, authErr
+		}
+		status := MessageRecallNotFound
+		if canRead {
+			status = MessageRecallForbidden
+		}
+		return &MessageRecallOutcome{Message: &message, Status: status}, nil
+	}
+	if message.IsRecalled {
+		return &MessageRecallOutcome{Message: &message, Status: MessageRecallAlreadyRecalled}, nil
+	}
+
+	sentAt, err := time.Parse(time.RFC3339, message.Timestamp)
+	if err != nil {
+		return nil, err
+	}
+	if now.UTC().Sub(sentAt.UTC()) > MessageRecallWindow {
+		return &MessageRecallOutcome{Message: &message, Status: MessageRecallExpired}, nil
+	}
+
+	recalledAt := now.UTC().Format(time.RFC3339)
+	result := database.Model(&Message{}).
+		Where("message_id = ? AND is_recalled = ?", messageID, false).
+		Updates(map[string]any{
+			"is_recalled": true,
+			"recalled_at": recalledAt,
+			"recalled_by": operatorUserID,
+		})
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, errors.New("message recall update lost locked row")
+	}
+	message.IsRecalled = true
+	message.RecalledAt = recalledAt
+	message.RecalledBy = operatorUserID
+	return &MessageRecallOutcome{Message: &message, Status: MessageRecallOK}, nil
+}
+
 const (
 	DefaultSyncPageSize = 100
 	MaxSyncPageSize     = 500
@@ -100,7 +178,10 @@ FROM (
     m.timestamp,
     m.message_type,
     m.real_file_name,
-    m.is_group
+    m.is_group,
+    m.is_recalled,
+    m.recalled_at,
+    m.recalled_by
   FROM messages AS m
   WHERE m.is_group = FALSE
     AND m.to_user_id = ?
@@ -116,7 +197,10 @@ FROM (
     m.timestamp,
     m.message_type,
     m.real_file_name,
-    m.is_group
+    m.is_group,
+    m.is_recalled,
+    m.recalled_at,
+    m.recalled_by
   FROM group_members AS gm
   JOIN messages AS m
     ON m.to_user_id = gm.group_id

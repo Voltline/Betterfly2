@@ -93,6 +93,20 @@ func TestPendingMigrationsSupportsFirstRepeatAndLegacyUpgrade(t *testing.T) {
 	}
 }
 
+func TestMigrationPlanIncludesMessageRecallV5(t *testing.T) {
+	plan := migrationPlan()
+	if len(plan) != 5 || plan[4].Version != 5 || plan[4].Name != "message recall state" || plan[4].Apply == nil {
+		t.Fatalf("unexpected migration plan tail: %+v", plan)
+	}
+	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Version != 5 {
+		t.Fatalf("schema v4 upgrade pending=%+v, want only v5", pending)
+	}
+}
+
 func TestPendingMigrationsRejectsLedgerAndPlanGaps(t *testing.T) {
 	if _, err := pendingMigrations(testMigrationPlan(4), []int{1, 3}); err == nil {
 		t.Fatal("migration ledger gap was accepted")

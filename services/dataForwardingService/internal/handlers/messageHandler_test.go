@@ -37,6 +37,14 @@ func TestBuildSyncMessagesStorageRequestRoutesResponseToRequester(t *testing.T) 
 	}
 }
 
+func TestBuildDirectMessageRecallPushUsesSenderConversation(t *testing.T) {
+	event := &pb.MessageRecallEvent{MessageId: 78, FromUserId: 1001, ToUserId: 1002, OperatorUserId: 1001}
+	request := buildMessageRecallPushRequest([]int64{1002}, event).GetMessageRecall()
+	if request.GetConversationId() != 1001 || request.GetIsGroup() {
+		t.Fatalf("unexpected direct recall conversation: %+v", request)
+	}
+}
+
 func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
 	post := &pb.Post{
 		FromId:          1001,
@@ -67,6 +75,41 @@ func TestBuildStoreNewMessageStorageRequestRoutesAckToSender(t *testing.T) {
 	}
 	if storePayload.StoreNewMessage.GetClientMessageId() != "client-42" || storePayload.StoreNewMessage.GetClientTimestamp() != post.GetTimestamp() {
 		t.Fatalf("message correlation fields were not forwarded: %+v", storePayload.StoreNewMessage)
+	}
+}
+
+func TestBuildRecallMessageStorageRequestUsesAuthenticatedIdentity(t *testing.T) {
+	request := buildRecallMessageStorageRequest(1001, 77, "df-pod-1")
+	if request.GetFromKafkaTopic() != "df-pod-1" || request.GetTargetUserId() != 1001 {
+		t.Fatalf("unexpected recall routing: %+v", request)
+	}
+	payload := request.GetRecallMessage()
+	if payload == nil || payload.GetMessageId() != 77 {
+		t.Fatalf("unexpected recall payload: %+v", payload)
+	}
+}
+
+func TestRecallTargetsExcludeOperatorInvalidAndDuplicates(t *testing.T) {
+	got := recallTargetsWithoutOperator([]int64{1001, 1002, 1002, 0, -1, 1003}, 1001)
+	want := []int64{1002, 1003}
+	if len(got) != len(want) {
+		t.Fatalf("targets=%v want=%v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("targets=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestBuildMessageRecallPushRequestPreservesConversationMetadata(t *testing.T) {
+	event := &pb.MessageRecallEvent{
+		Result: pb.MessageRecallResult_MESSAGE_RECALL_OK, MessageId: 77, ToUserId: 9001,
+		IsGroup: true, OperatorUserId: 1001, RecalledAt: "2026-07-21T05:00:00Z",
+	}
+	request := buildMessageRecallPushRequest([]int64{1002, 1003}, event).GetMessageRecall()
+	if request == nil || request.GetMessageId() != 77 || request.GetConversationId() != 9001 || !request.GetIsGroup() || request.GetOperatorUserId() != 1001 || request.GetRecalledAt() != event.GetRecalledAt() || len(request.GetTargetUserIds()) != 2 {
+		t.Fatalf("unexpected recall push request: %+v", request)
 	}
 }
 

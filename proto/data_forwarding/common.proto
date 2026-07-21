@@ -20,6 +20,26 @@ message Post {
   string client_message_id = 8; // 客户端生成的稳定消息ID，重试时必须保持不变
 }
 
+enum MessageRecallResult {
+  MESSAGE_RECALL_OK = 0;
+  MESSAGE_RECALL_NOT_FOUND = 1;
+  MESSAGE_RECALL_FORBIDDEN = 2;
+  MESSAGE_RECALL_ALREADY_RECALLED = 3;
+  MESSAGE_RECALL_EXPIRED = 4;
+  MESSAGE_RECALL_SERVICE_ERROR = 10;
+}
+
+// 撤回成功时同时作为操作者ACK和会话参与者的实时事件。
+message MessageRecallEvent {
+  MessageRecallResult result = 1;
+  int64 message_id = 2;
+  int64 from_user_id = 3;
+  int64 to_user_id = 4;
+  bool is_group = 5;
+  int64 operator_user_id = 6;
+  string recalled_at = 7;
+}
+
 message GroupPostDelivery {
   int64 target_user_id = 1;
   Post post = 2;
@@ -30,9 +50,21 @@ message GroupPostBatchDelivery {
   Post post = 2;
 }
 
+message MessageRecallDelivery {
+  int64 target_user_id = 1;
+  MessageRecallEvent event = 2;
+}
+
+message MessageRecallBatchDelivery {
+  repeated int64 target_user_ids = 1;
+  MessageRecallEvent event = 2;
+}
+
 message DFInternalDelivery {
   oneof payload {
     GroupPostDelivery group_post_delivery = 1;
     GroupPostBatchDelivery group_post_batch_delivery = 2;
+    MessageRecallDelivery message_recall_delivery = 3;
+    MessageRecallBatchDelivery message_recall_batch_delivery = 4;
   }
 }

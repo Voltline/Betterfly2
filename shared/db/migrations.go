@@ -24,13 +24,14 @@ var nonPostgresMigrationLock sync.Mutex
 const legacySnapshotMigrationVersion = 3
 
 func migrationPlan() []Migration {
-	// Versions 1-4 are published history. Do not add newly introduced models to
+	// Versions 1-5 are published history. Do not add newly introduced models to
 	// these functions; the next schema change must be an explicit new version.
 	return []Migration{
 		{Version: 1, Name: "core schema", Apply: migrateCoreSchema},
 		{Version: 2, Name: "experiments push and idempotency schema", Apply: migrateServiceSchema},
 		{Version: 3, Name: "legacy compatibility and query indexes", Apply: migrateLegacyCompatibility},
 		{Version: 4, Name: "transactional inbox outbox and durable push", Apply: migrateReliabilitySchema},
+		{Version: 5, Name: "message recall state", Apply: migrateMessageRecallSchema},
 	}
 }
 
@@ -235,6 +236,10 @@ END $$`).Error; err != nil {
 		}
 	}
 	return nil
+}
+
+func migrateMessageRecallSchema(tx *gorm.DB) error {
+	return migrateModelsAdditive(tx, &Message{})
 }
 
 type additiveSchemaMigrator interface {

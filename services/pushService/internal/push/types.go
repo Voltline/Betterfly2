@@ -29,6 +29,7 @@ type NotificationKind string
 const (
 	NotificationVoIP      NotificationKind = "voip"
 	NotificationMessage   NotificationKind = "message"
+	NotificationRecall    NotificationKind = "message_recall"
 	NotificationBroadcast NotificationKind = "broadcast"
 )
 

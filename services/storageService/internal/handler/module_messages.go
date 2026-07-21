@@ -19,4 +19,7 @@ func registerStorageMessageModule(router *dispatch.OneofRouter[storageRequestCon
 	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_QuerySyncMessages) (*storage.ResponseMessage, error) {
 		return ctx.handler.handleQuerySyncMessagesWithDB(ctx.database, ctx.request, payload.QuerySyncMessages)
 	})
+	dispatch.Register(router, func(ctx storageRequestContext, payload *storage.RequestMessage_RecallMessage) (*storage.ResponseMessage, error) {
+		return ctx.handler.handleRecallMessageWithDB(ctx.database, ctx.request, payload.RecallMessage, ctx.cacheKeys)
+	})
 }

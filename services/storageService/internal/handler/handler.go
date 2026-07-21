@@ -168,6 +168,8 @@ func mutationCacheKeys(req *storage.RequestMessage) []string {
 		return []string{fmt.Sprintf("user:%d", payload.UpdateUserName.GetUserId())}
 	case *storage.RequestMessage_UpdateUserAvatar:
 		return []string{fmt.Sprintf("user:%d", payload.UpdateUserAvatar.GetUserId())}
+	case *storage.RequestMessage_RecallMessage:
+		return []string{fmt.Sprintf("message:%d", payload.RecallMessage.GetMessageId())}
 	default:
 		return nil
 	}
@@ -225,6 +227,63 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	}
 
 	return resp, nil
+}
+
+func (h *StorageHandler) handleRecallMessageWithDB(database *gorm.DB, req *storage.RequestMessage, recall *storage.RecallMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {
+	messageID := recall.GetMessageId()
+	operatorUserID := req.GetTargetUserId()
+	response := &storage.ResponseMessage{
+		Result:       storage.StorageResult_RECORD_NOT_EXIST,
+		TargetUserId: operatorUserID,
+		Payload: &storage.ResponseMessage_RecallMessageRsp{RecallMessageRsp: &storage.RecallMessageRsp{
+			MessageId:      messageID,
+			OperatorUserId: operatorUserID,
+		}},
+	}
+	if messageID <= 0 || operatorUserID <= 0 {
+		return response, nil
+	}
+
+	outcome, err := db.RecallMessageWithDB(database, operatorUserID, messageID, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	response.Result = storageResultForRecallStatus(outcome.Status)
+	if outcome.Message != nil && outcome.Status != db.MessageRecallNotFound {
+		response.GetRecallMessageRsp().FromUserId = outcome.Message.FromUserID
+		response.GetRecallMessageRsp().ToUserId = outcome.Message.ToUserID
+		response.GetRecallMessageRsp().IsGroup = outcome.Message.IsGroup
+		response.GetRecallMessageRsp().RecalledAt = outcome.Message.RecalledAt
+	}
+	if outcome.Status != db.MessageRecallOK {
+		return response, nil
+	}
+
+	keys := []string{
+		fmt.Sprintf("message:%d", messageID),
+		fmt.Sprintf("user_messages:%d", outcome.Message.ToUserID),
+	}
+	if cacheKeys != nil {
+		*cacheKeys = append(*cacheKeys, keys...)
+	} else {
+		h.clearCacheKeys(keys)
+	}
+	return response, nil
+}
+
+func storageResultForRecallStatus(status db.MessageRecallStatus) storage.StorageResult {
+	switch status {
+	case db.MessageRecallOK:
+		return storage.StorageResult_OK
+	case db.MessageRecallForbidden:
+		return storage.StorageResult_FORBIDDEN
+	case db.MessageRecallAlreadyRecalled:
+		return storage.StorageResult_ALREADY_RECALLED
+	case db.MessageRecallExpired:
+		return storage.StorageResult_RECALL_EXPIRED
+	default:
+		return storage.StorageResult_RECORD_NOT_EXIST
+	}
 }
 
 // handleQueryMessage 处理查询消息请求
@@ -360,7 +419,11 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 			MsgType:      msg.MessageType,
 			IsGroup:      msg.IsGroup,
 			RealFileName: msg.RealFileName,
+			IsRecalled:   msg.IsRecalled,
+			RecalledAt:   msg.RecalledAt,
+			RecalledBy:   msg.RecalledBy,
 		})
+		maskRecalledStorageMessage(msgResponses[len(msgResponses)-1])
 	}
 
 	resp := &storage.ResponseMessage{
@@ -488,7 +551,7 @@ func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *st
 
 // buildMessageResponse 构建消息查询响应
 func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *db.Message) *storage.ResponseMessage {
-	return &storage.ResponseMessage{
+	response := &storage.ResponseMessage{
 		Result:       storage.StorageResult_OK,
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_MsgRsp{
@@ -501,9 +564,22 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 				MsgType:      msg.MessageType,
 				IsGroup:      msg.IsGroup,
 				RealFileName: msg.RealFileName,
+				IsRecalled:   msg.IsRecalled,
+				RecalledAt:   msg.RecalledAt,
+				RecalledBy:   msg.RecalledBy,
 			},
 		},
 	}
+	maskRecalledStorageMessage(response.GetMsgRsp())
+	return response
+}
+
+func maskRecalledStorageMessage(message *storage.MessageRsp) {
+	if message == nil || !message.GetIsRecalled() {
+		return
+	}
+	message.Content = ""
+	message.RealFileName = ""
 }
 
 // getFromCache 从缓存获取数据（先L1后L2）

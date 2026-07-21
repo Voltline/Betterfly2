@@ -510,9 +510,36 @@ func (h *NewKafkaConsumerGroupHandler) handleDFResponse(payload []byte) error {
 			return permanentError("GroupPostDelivery内容不完整")
 		}
 		return h.deliverGroupPostToUsers(groupDelivery.GetPost(), []int64{groupDelivery.GetTargetUserId()})
+	case *pb.DFInternalDelivery_MessageRecallBatchDelivery:
+		recallDelivery := delivery.MessageRecallBatchDelivery
+		if recallDelivery.GetEvent() == nil || len(recallDelivery.GetTargetUserIds()) == 0 {
+			return permanentError("MessageRecallBatchDelivery内容不完整")
+		}
+		return h.deliverMessageRecallToUsers(recallDelivery.GetEvent(), recallDelivery.GetTargetUserIds())
+	case *pb.DFInternalDelivery_MessageRecallDelivery:
+		recallDelivery := delivery.MessageRecallDelivery
+		if recallDelivery.GetEvent() == nil || recallDelivery.GetTargetUserId() <= 0 {
+			return permanentError("MessageRecallDelivery内容不完整")
+		}
+		return h.deliverMessageRecallToUsers(recallDelivery.GetEvent(), []int64{recallDelivery.GetTargetUserId()})
 	default:
 		return permanentError("DFInternalDelivery类型不受支持")
 	}
+}
+
+func (h *NewKafkaConsumerGroupHandler) deliverMessageRecallToUsers(event *pb.MessageRecallEvent, targetUserIDs []int64) error {
+	responseBytes, err := proto.Marshal(&pb.ResponseMessage{
+		Payload: &pb.ResponseMessage_MessageRecallEvent{MessageRecallEvent: event},
+	})
+	if err != nil {
+		return fmt.Errorf("序列化消息撤回事件失败: %v", err)
+	}
+	for _, targetUserID := range targetUserIDs {
+		if err := h.wsHandler.SendMessage(strconv.FormatInt(targetUserID, 10), responseBytes); err != nil {
+			return fmt.Errorf("转发消息撤回事件给用户 %d 失败: %v", targetUserID, err)
+		}
+	}
+	return nil
 }
 
 func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, targetUserIDs []int64) error {
@@ -626,6 +653,18 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		}
 		dfResp = buildPostAckResponse(payload.StoreMsgRsp)
 
+	case *storage.ResponseMessage_RecallMessageRsp:
+		recall := payload.RecallMessageRsp
+		event := buildMessageRecallEvent(storageResp.GetResult(), recall)
+		if storageResp.GetResult() == storage.StorageResult_OK {
+			if err := handlers.DeliverMessageRecall(event); err != nil {
+				return fmt.Errorf("投递消息撤回事件失败: %v", err)
+			}
+		}
+		dfResp = &pb.ResponseMessage{
+			Payload: &pb.ResponseMessage_MessageRecallEvent{MessageRecallEvent: event},
+		}
+
 	case *storage.ResponseMessage_MsgRsp:
 		// 单条消息查询响应
 		msg := payload.MsgRsp
@@ -642,6 +681,9 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 					MsgType:      msg.GetMsgType(),
 					IsGroup:      msg.GetIsGroup(),
 					RealFileName: msg.GetRealFileName(),
+					IsRecalled:   msg.GetIsRecalled(),
+					RecalledAt:   msg.GetRecalledAt(),
+					RecalledBy:   msg.GetRecalledBy(),
 				},
 			},
 		}
@@ -663,6 +705,9 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 				MsgType:      msg.GetMsgType(),
 				IsGroup:      msg.GetIsGroup(),
 				RealFileName: msg.GetRealFileName(),
+				IsRecalled:   msg.GetIsRecalled(),
+				RecalledAt:   msg.GetRecalledAt(),
+				RecalledBy:   msg.GetRecalledBy(),
 			})
 		}
 
@@ -717,6 +762,38 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 
 	sugar.Debugf("storage响应已转发给用户: target_user=%d", storageResp.TargetUserId)
 	return nil
+}
+
+func mapStorageRecallResult(result storage.StorageResult) pb.MessageRecallResult {
+	switch result {
+	case storage.StorageResult_OK:
+		return pb.MessageRecallResult_MESSAGE_RECALL_OK
+	case storage.StorageResult_RECORD_NOT_EXIST:
+		return pb.MessageRecallResult_MESSAGE_RECALL_NOT_FOUND
+	case storage.StorageResult_FORBIDDEN:
+		return pb.MessageRecallResult_MESSAGE_RECALL_FORBIDDEN
+	case storage.StorageResult_ALREADY_RECALLED:
+		return pb.MessageRecallResult_MESSAGE_RECALL_ALREADY_RECALLED
+	case storage.StorageResult_RECALL_EXPIRED:
+		return pb.MessageRecallResult_MESSAGE_RECALL_EXPIRED
+	default:
+		return pb.MessageRecallResult_MESSAGE_RECALL_SERVICE_ERROR
+	}
+}
+
+func buildMessageRecallEvent(result storage.StorageResult, recall *storage.RecallMessageRsp) *pb.MessageRecallEvent {
+	if recall == nil {
+		recall = &storage.RecallMessageRsp{}
+	}
+	return &pb.MessageRecallEvent{
+		Result:         mapStorageRecallResult(result),
+		MessageId:      recall.GetMessageId(),
+		FromUserId:     recall.GetFromUserId(),
+		ToUserId:       recall.GetToUserId(),
+		IsGroup:        recall.GetIsGroup(),
+		OperatorUserId: recall.GetOperatorUserId(),
+		RecalledAt:     recall.GetRecalledAt(),
+	}
 }
 
 func buildPostAckResponse(storeMsgRsp *storage.StoreMsgRsp) *pb.ResponseMessage {

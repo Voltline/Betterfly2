@@ -48,6 +48,7 @@ message RequestMessage {
     UpdateGroupName update_group_name = 35;
     TransferGroupOwner transfer_group_owner = 36;
     ChangePassword change_password = 37;
+    RecallMessage recall_message = 38;
   }
 }
 
@@ -75,5 +76,6 @@ message ResponseMessage {
     RelationshipOperationRsp relationship_operation_rsp = 19;
     GroupMemberOperationRsp group_member_operation_rsp = 20;
     AccountSecurityRsp account_security_rsp = 21;
+    MessageRecallEvent message_recall_event = 22;
   }
 }

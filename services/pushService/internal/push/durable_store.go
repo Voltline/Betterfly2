@@ -36,6 +36,21 @@ INSERT INTO push_message_deliveries
 SELECT ?, id, ?, ?, 0, '', '', ?, ?, ? FROM eligible
 ON CONFLICT (message_id, token_id) DO NOTHING`
 
+const messageRecallFanoutSQL = `WITH targets AS (
+  SELECT DISTINCT value::bigint AS user_id
+  FROM jsonb_array_elements_text(CAST(? AS jsonb))
+)
+INSERT INTO push_message_deliveries
+  (message_id, token_id, job_id, status, attempt, claim_token, lease_until, next_retry_at, created_at, updated_at)
+SELECT ?, token.id, ?, ?, 0, '', '', ?, ?, ?
+FROM targets
+JOIN push_device_tokens AS token ON token.user_id = targets.user_id
+WHERE token.push_type = 'apns' AND token.is_active = TRUE
+ON CONFLICT (message_id, token_id) DO UPDATE SET
+  job_id = EXCLUDED.job_id, status = EXCLUDED.status, attempt = 0,
+  claim_token = '', lease_until = '', next_retry_at = EXCLUDED.next_retry_at,
+  last_error = '', apns_id = '', updated_at = EXCLUDED.updated_at`
+
 const voipFanoutSQL = `INSERT INTO push_vo_ip_deliveries
   (call_id, token_id, job_id, status, attempt, claim_token, lease_until, next_retry_at, created_at, updated_at)
 SELECT ?, id, ?, ?, 0, '', '', ?, ?, ?
@@ -53,6 +68,8 @@ func (s *GormStore) EnqueueRequest(ctx context.Context, operationKey string, req
 			return s.persistClientCommand(tx, operationKey, payload.ClientCommand, bundleID)
 		case *pushpb.RequestMessage_MessagePush:
 			return s.persistMessageJob(tx, operationKey, request, payload.MessagePush)
+		case *pushpb.RequestMessage_MessageRecall:
+			return s.persistMessageRecallJob(tx, operationKey, request, payload.MessageRecall)
 		case *pushpb.RequestMessage_VoipCall:
 			return s.persistVoIPJob(tx, operationKey, request, payload.VoipCall)
 		default:
@@ -170,6 +187,18 @@ func (s *GormStore) persistMessageJob(tx *gorm.DB, operationKey string, request 
 	if message == nil || message.GetMessageId() <= 0 || message.GetSenderUserId() <= 0 || message.GetConversationId() <= 0 || strings.TrimSpace(message.GetMessageType()) == "" || len(message.GetTargetUserIds()) == 0 {
 		return nil, nil, ErrInvalidRequest
 	}
+	messageState, err := lockMessageForPush(tx, message.GetMessageId())
+	if err != nil {
+		return nil, nil, err
+	}
+	if messageState.FromUserID != message.GetSenderUserId() || messageState.IsGroup != message.GetIsGroup() ||
+		message.GetIsGroup() && messageState.ToUserID != message.GetConversationId() ||
+		!message.GetIsGroup() && message.GetConversationId() != message.GetSenderUserId() {
+		return nil, nil, ErrInvalidRequest
+	}
+	if messageState.IsRecalled {
+		return nil, nil, nil
+	}
 	targets := uniquePushTargets(message.GetTargetUserIds(), message.GetSenderUserId())
 	targetJSON, err := json.Marshal(targets)
 	if err != nil {
@@ -194,6 +223,87 @@ func (s *GormStore) persistMessageJob(tx *gorm.DB, operationKey string, request 
 		}
 	}
 	return nil, nil, nil
+}
+
+func (s *GormStore) persistMessageRecallJob(tx *gorm.DB, operationKey string, request *pushpb.RequestMessage, recall *pushpb.MessageRecallPushRequest) ([]byte, []db.PendingOutboxEvent, error) {
+	if recall == nil || recall.GetMessageId() <= 0 || recall.GetConversationId() <= 0 || recall.GetOperatorUserId() <= 0 || len(recall.GetTargetUserIds()) == 0 {
+		return nil, nil, ErrInvalidRequest
+	}
+	recalledAt, err := time.Parse(time.RFC3339Nano, recall.GetRecalledAt())
+	if err != nil {
+		return nil, nil, ErrInvalidRequest
+	}
+	message, err := lockMessageForPush(tx, recall.GetMessageId())
+	if err != nil {
+		return nil, nil, err
+	}
+	if !message.IsRecalled || message.RecalledBy != recall.GetOperatorUserId() || message.RecalledAt != recalledAt.UTC().Format(time.RFC3339) ||
+		message.IsGroup != recall.GetIsGroup() || recall.GetIsGroup() && message.ToUserID != recall.GetConversationId() ||
+		!recall.GetIsGroup() && message.FromUserID != recall.GetConversationId() {
+		return nil, nil, ErrInvalidRequest
+	}
+
+	targets := uniquePushTargets(recall.GetTargetUserIds(), recall.GetOperatorUserId())
+	if len(targets) == 0 {
+		return nil, nil, nil
+	}
+	targetJSON, err := json.Marshal(targets)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		return nil, nil, err
+	}
+	now := db.FormatReliabilityTime(time.Now())
+	job := db.PushJob{
+		JobID: stableMessageRecallJobID(recall.GetMessageId()), OperationKey: operationKey, Kind: "message_recall",
+		RequestPayload: payload, Status: PushJobPending, CreatedAt: now, UpdatedAt: now,
+	}
+	created := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "job_id"}}, DoNothing: true}).Create(&job)
+	if created.Error != nil {
+		return nil, nil, created.Error
+	}
+	if created.RowsAffected == 0 {
+		return nil, nil, nil
+	}
+
+	terminalError := "message_recalled"
+	if err := tx.Model(&db.PushMessageDelivery{}).
+		Where("message_id = ? AND status IN ?", recall.GetMessageId(), []string{DeliveryPending, DeliveryClaimed, DeliveryRetryable}).
+		Updates(map[string]any{"status": DeliveryPermanent, "claim_token": "", "lease_until": "", "next_retry_at": "", "last_error": terminalError, "updated_at": now}).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Exec(`UPDATE push_jobs SET status = ?, completed_at = ?, updated_at = ?
+WHERE kind = 'message' AND job_id IN (SELECT job_id FROM push_message_deliveries WHERE message_id = ?)`,
+		PushJobCompleted, now, now, recall.GetMessageId()).Error; err != nil {
+		return nil, nil, err
+	}
+
+	deliveryKey := -recall.GetMessageId()
+	result := tx.Exec(messageRecallFanoutSQL, string(targetJSON), deliveryKey, job.JobID, DeliveryPending, now, now, now)
+	if result.Error != nil {
+		return nil, nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		if err := tx.Model(&db.PushJob{}).Where("job_id = ?", job.JobID).Updates(map[string]any{
+			"status": PushJobCompleted, "completed_at": now, "updated_at": now,
+		}).Error; err != nil {
+			return nil, nil, err
+		}
+	}
+	return nil, nil, nil
+}
+
+func lockMessageForPush(tx *gorm.DB, messageID int64) (*db.Message, error) {
+	var message db.Message
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&message, "message_id = ?", messageID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidRequest
+		}
+		return nil, err
+	}
+	return &message, nil
 }
 
 func (s *GormStore) persistVoIPJob(tx *gorm.DB, operationKey string, request *pushpb.RequestMessage, call *pushpb.VoIPCallRequest) ([]byte, []db.PendingOutboxEvent, error) {
@@ -252,6 +362,10 @@ func voipResultPayload(call *pushpb.VoIPCallRequest, accepted bool, reason strin
 func stablePushJobID(operationKey string) string {
 	digest := sha256.Sum256([]byte("betterfly-push:" + operationKey))
 	return "push-" + hex.EncodeToString(digest[:])
+}
+
+func stableMessageRecallJobID(messageID int64) string {
+	return fmt.Sprintf("push-recall-%d", messageID)
 }
 
 func validateRequestPayload(payload []byte) (*pushpb.RequestMessage, error) {

@@ -180,6 +180,8 @@ func validNotification(notification pushservice.Notification) bool {
 		return strings.TrimSpace(notification.CallID) != "" && notification.CallerUserID > 0 && notification.CalleeUserID > 0 && notification.ExpiresAt.After(time.Unix(0, 0))
 	case pushservice.NotificationMessage:
 		return notification.SenderUserID > 0 && notification.TargetUserID > 0 && notification.ConversationID > 0 && strings.TrimSpace(notification.MessageType) != "" && notification.ExpiresAt.After(time.Unix(0, 0))
+	case pushservice.NotificationRecall:
+		return notification.SenderUserID > 0 && notification.TargetUserID > 0 && notification.ConversationID > 0 && notification.MessageID > 0 && notification.ExpiresAt.After(time.Unix(0, 0))
 	case pushservice.NotificationBroadcast:
 		return notification.TargetUserID > 0 && strings.TrimSpace(notification.CampaignID) != "" && strings.TrimSpace(notification.Title) != "" && strings.TrimSpace(notification.Body) != "" && notification.ExpiresAt.After(time.Unix(0, 0))
 	default:
@@ -191,7 +193,7 @@ func (c *Client) requestMetadata(notification pushservice.Notification) (pushTyp
 	if notification.Kind == pushservice.NotificationVoIP {
 		return "voip", c.bundleID + ".voip", notification.CallID
 	}
-	if notification.Kind == pushservice.NotificationMessage && notification.MessageID > 0 {
+	if (notification.Kind == pushservice.NotificationMessage || notification.Kind == pushservice.NotificationRecall) && notification.MessageID > 0 {
 		return "alert", c.bundleID, "message-" + strconv.FormatInt(notification.MessageID, 10)
 	}
 	return "alert", c.bundleID, ""
@@ -265,6 +267,9 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 	if notification.Kind == pushservice.NotificationMessage {
 		return marshalMessagePayload(notification)
 	}
+	if notification.Kind == pushservice.NotificationRecall {
+		return marshalMessageRecallPayload(notification)
+	}
 	if notification.Kind == pushservice.NotificationBroadcast {
 		return marshalBroadcastPayload(notification)
 	}
@@ -285,6 +290,34 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 	}
 	if len(data) > maxVoIPPayloadSize {
 		return nil, fmt.Errorf("VoIP payload exceeds %d bytes", maxVoIPPayloadSize)
+	}
+	return data, nil
+}
+
+func marshalMessageRecallPayload(notification pushservice.Notification) ([]byte, error) {
+	threadID := "user:" + strconv.FormatInt(notification.SenderUserID, 10)
+	if notification.IsGroup {
+		threadID = "group:" + strconv.FormatInt(notification.ConversationID, 10)
+	}
+	identifier := "message-" + strconv.FormatInt(notification.MessageID, 10)
+	payload := map[string]any{
+		"aps": map[string]any{
+			"alert":             map[string]string{"title": "Betterfly", "body": "一条消息已被撤回"},
+			"content-available": 1, "mutable-content": 1,
+			"thread-id": threadID, "category": "MESSAGE_RECALL",
+		},
+		"event": "message_recalled", "message_id": notification.MessageID,
+		"conversation_id": notification.ConversationID, "is_group": notification.IsGroup,
+		"operator_user_id":        notification.SenderUserID,
+		"recalled_at":             notification.SentAt.UTC().Format(time.RFC3339Nano),
+		"notification_identifier": identifier,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAPNsPayloadSize {
+		return nil, fmt.Errorf("APNs payload exceeds %d bytes", maxAPNsPayloadSize)
 	}
 	return data, nil
 }

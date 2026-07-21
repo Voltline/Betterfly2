@@ -220,7 +220,7 @@ func completeMessageJobIfTerminalLocked(tx *gorm.DB, job db.PushJob) error {
 }
 
 func (s *GormStore) FinalizeMessageDelivery(ctx context.Context, update DurableDeliveryUpdate) error {
-	if strings.TrimSpace(update.JobID) == "" || update.MessageID <= 0 || update.Token.ID <= 0 || update.Attempt <= 0 || update.ClaimToken == "" {
+	if strings.TrimSpace(update.JobID) == "" || update.MessageID == 0 || update.Token.ID <= 0 || update.Attempt <= 0 || update.ClaimToken == "" {
 		return ErrInvalidRequest
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

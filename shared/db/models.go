@@ -115,6 +115,9 @@ type Message struct {
 	MessageType     string  `gorm:"type:varchar(10);comment:消息类型"`
 	RealFileName    string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
 	IsGroup         bool    `gorm:"type:bool;index:idx_messages_sync_target_time_id,priority:1;comment:消息是否来自于群聊"`
+	IsRecalled      bool    `gorm:"type:bool;default:false;comment:消息是否已撤回"`
+	RecalledAt      string  `gorm:"type:varchar(35);comment:消息撤回时间RFC3339"`
+	RecalledBy      int64   `gorm:"comment:执行撤回的用户ID"`
 }
 
 type FileMetadata struct {
@@ -180,7 +183,7 @@ type PushDeviceToken struct {
 }
 
 type PushMessageDelivery struct {
-	MessageID   int64  `gorm:"primaryKey;comment:消息ID"`
+	MessageID   int64  `gorm:"primaryKey;comment:消息ID，负数保留给对应消息的撤回通知"`
 	TokenID     int64  `gorm:"primaryKey;comment:APNs token记录ID"`
 	JobID       string `gorm:"type:varchar(255);index;comment:来源Push任务"`
 	Status      string `gorm:"type:varchar(20);default:sent;index:idx_push_delivery_retry;comment:claimed/sent/retryable/permanent"`
@@ -197,7 +200,7 @@ type PushMessageDelivery struct {
 type PushJob struct {
 	JobID          string `gorm:"primaryKey;type:varchar(255);comment:稳定任务ID"`
 	OperationKey   string `gorm:"uniqueIndex;type:varchar(512);comment:来源Kafka操作"`
-	Kind           string `gorm:"type:varchar(20);index;comment:message/voip/client"`
+	Kind           string `gorm:"type:varchar(20);index;comment:message/message_recall/voip/client"`
 	RequestPayload []byte `gorm:"type:bytea;comment:原始Push RequestMessage"`
 	Status         string `gorm:"type:varchar(20);index;comment:pending/processing/completed/failed"`
 	CreatedAt      string `gorm:"type:varchar(35);index;comment:创建时间"`

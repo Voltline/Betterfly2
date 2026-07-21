@@ -167,6 +167,10 @@ message QueryMessage {
   int64 message_id = 1;
 }
 
+message RecallMessage {
+  int64 message_id = 1;
+}
+
 // 同步消息（查询某个时间点之后的消息）
 message QuerySyncMessages {
   int64 to_user_id = 1;

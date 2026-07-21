@@ -11,6 +11,8 @@ enum StorageResult {
 
   RECORD_NOT_EXIST = 1;
   FORBIDDEN = 2;
+  ALREADY_RECALLED = 3;
+  RECALL_EXPIRED = 4;
 }
 
 message RequestMessage {
@@ -24,6 +26,7 @@ message RequestMessage {
     UpdateUserAvatar update_user_avatar = 7;
     QueryUser query_user = 8;
     QueryFileExists query_file_exists = 9;
+    RecallMessage recall_message = 10;
   }
 }
 
@@ -36,5 +39,6 @@ message ResponseMessage {
     SyncMessagesRsp sync_msgs_rsp = 5;
     UserInfoRsp user_info_rsp = 6;
     FileExistsRsp file_exists_rsp = 7;
+    RecallMessageRsp recall_message_rsp = 8;
   }
 }

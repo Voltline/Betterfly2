@@ -87,11 +87,23 @@ message MessagePushRequest {
   int64 message_id = 8;
 }
 
+// MessageRecallPushRequest asks clients to remove or replace the notification
+// previously delivered with apns-collapse-id "message-<message_id>".
+message MessageRecallPushRequest {
+  repeated int64 target_user_ids = 1;
+  int64 message_id = 2;
+  int64 conversation_id = 3;
+  bool is_group = 4;
+  int64 operator_user_id = 5;
+  string recalled_at = 6;
+}
+
 message RequestMessage {
   oneof payload {
     ClientCommand client_command = 1;
     VoIPCallRequest voip_call = 2;
     MessagePushRequest message_push = 3;
+    MessageRecallPushRequest message_recall = 4;
   }
 }
 

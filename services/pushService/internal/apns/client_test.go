@@ -136,6 +136,45 @@ func TestClientMapsUnregisteredResponse(t *testing.T) {
 	}
 }
 
+func TestClientSendsMessageRecallWithOriginalNotificationIdentifier(t *testing.T) {
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("apns-push-type") != "alert" || r.Header.Get("apns-collapse-id") != "message-99" || r.Header.Get("apns-topic") != "com.Voltline.Betterfly2" {
+			t.Errorf("unexpected recall APNs headers: %+v", r.Header)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["event"] != "message_recalled" || payload["message_id"] != float64(99) || payload["conversation_id"] != float64(88) || payload["notification_identifier"] != "message-99" || payload["operator_user_id"] != float64(1) {
+			t.Errorf("unexpected recall payload: %+v", payload)
+		}
+		aps := payload["aps"].(map[string]any)
+		if aps["thread-id"] != "group:88" || aps["category"] != "MESSAGE_RECALL" || aps["content-available"] != float64(1) || aps["mutable-content"] != float64(1) {
+			t.Errorf("unexpected recall aps payload: %+v", aps)
+		}
+		if _, exists := aps["sound"]; exists {
+			t.Errorf("recall update must not play a notification sound: %+v", aps)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	client := newTestClient(t)
+	client.httpClient = server.Client()
+	client.sandboxEndpoint = server.URL
+	recalledAt := time.Date(2026, 7, 21, 5, 0, 0, 0, time.UTC)
+	_, err := client.Send(context.Background(), pushservice.Notification{
+		Kind: pushservice.NotificationRecall, Token: strings.Repeat("ef", 32), Environment: pushpb.PushEnvironment_SANDBOX,
+		SenderUserID: 1, TargetUserID: 2, ConversationID: 88, IsGroup: true, MessageID: 99,
+		SentAt: recalledAt, ExpiresAt: recalledAt.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientSendsBroadcastAsOrdinaryAlertWithoutChatMetadata(t *testing.T) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("apns-push-type") != "alert" || !strings.HasPrefix(r.URL.Path, "/3/device/") {

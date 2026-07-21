@@ -22,6 +22,10 @@ func registerStorageRequestModules(router *dispatch.OneofRouter[dfRequestContext
 		logger.Sugar().Debugf("收到 QuerySyncMessages 消息: to_user_id=%d", payload.QuerySyncMessages.GetToUserId())
 		return dfRequestResult{}, handleQuerySyncMessages(ctx.fromID, ctx.message)
 	})
+	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_RecallMessage) (dfRequestResult, error) {
+		logger.Sugar().Debugf("收到 RecallMessage 消息: message_id=%d", payload.RecallMessage.GetMessageId())
+		return dfRequestResult{}, handleRecallMessage(ctx.fromID, ctx.message)
+	})
 	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryUser) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 QueryUser 消息")
 		return dfRequestResult{}, handleQueryUser(ctx.fromID, ctx.message)
@@ -34,6 +38,29 @@ func registerStorageRequestModules(router *dispatch.OneofRouter[dfRequestContext
 		logger.Sugar().Debugf("收到 UpdateUserAvatar 消息")
 		return dfRequestResult{}, handleUpdateUserAvatar(ctx.fromID, ctx.message)
 	})
+}
+
+func handleRecallMessage(fromID int64, message *pb.RequestMessage) error {
+	payload, err := authenticatedPayload(fromID, message, "撤回消息", "recall_message", (*pb.RequestMessage).GetRecallMessage)
+	if err != nil {
+		return err
+	}
+	if payload.GetMessageId() <= 0 {
+		return fmt.Errorf("待撤回的message_id无效")
+	}
+
+	storeReq := buildRecallMessageStorageRequest(fromID, payload.GetMessageId(), currentContainerTopic())
+	if err := publishStorageRequest(storeReq); err != nil {
+		return err
+	}
+	logger.Sugar().Debugf("消息撤回请求已发送到storageService: operator_user_id=%d message_id=%d", fromID, payload.GetMessageId())
+	return nil
+}
+
+func buildRecallMessageStorageRequest(fromID, messageID int64, responseTopic string) *storage.RequestMessage {
+	request := newStorageRequest(responseTopic, fromID)
+	request.Payload = &storage.RequestMessage_RecallMessage{RecallMessage: &storage.RecallMessage{MessageId: messageID}}
+	return request
 }
 
 // handleQueryMessage 处理查询单条消息请求

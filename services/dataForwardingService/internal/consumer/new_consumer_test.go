@@ -335,3 +335,27 @@ func TestBuildRelationshipResponsesPreserveStructuredResults(t *testing.T) {
 		t.Fatalf("group member operation mapping mismatch: %+v", member)
 	}
 }
+
+func TestBuildMessageRecallEventMapsResultsAndFields(t *testing.T) {
+	recall := &storage.RecallMessageRsp{
+		MessageId: 77, FromUserId: 1001, ToUserId: 9001, IsGroup: true,
+		OperatorUserId: 1001, RecalledAt: "2026-07-21T04:00:30Z",
+	}
+	event := buildMessageRecallEvent(storage.StorageResult_OK, recall)
+	if event.GetResult() != pb.MessageRecallResult_MESSAGE_RECALL_OK || event.GetMessageId() != 77 || event.GetFromUserId() != 1001 || event.GetToUserId() != 9001 || !event.GetIsGroup() || event.GetOperatorUserId() != 1001 || event.GetRecalledAt() != recall.GetRecalledAt() {
+		t.Fatalf("unexpected recall event: %+v", event)
+	}
+
+	tests := map[storage.StorageResult]pb.MessageRecallResult{
+		storage.StorageResult_RECORD_NOT_EXIST: pb.MessageRecallResult_MESSAGE_RECALL_NOT_FOUND,
+		storage.StorageResult_FORBIDDEN:        pb.MessageRecallResult_MESSAGE_RECALL_FORBIDDEN,
+		storage.StorageResult_ALREADY_RECALLED: pb.MessageRecallResult_MESSAGE_RECALL_ALREADY_RECALLED,
+		storage.StorageResult_RECALL_EXPIRED:   pb.MessageRecallResult_MESSAGE_RECALL_EXPIRED,
+		storage.StorageResult_SERVICE_ERROR:    pb.MessageRecallResult_MESSAGE_RECALL_SERVICE_ERROR,
+	}
+	for input, want := range tests {
+		if got := buildMessageRecallEvent(input, nil).GetResult(); got != want {
+			t.Fatalf("result %s mapped to %s, want %s", input, got, want)
+		}
+	}
+}

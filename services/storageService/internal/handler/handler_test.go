@@ -170,7 +170,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	// 设置数据库期望
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(12345))
 	mock.ExpectCommit()
 
@@ -206,7 +206,7 @@ func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *test
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false).
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT \\* FROM \"messages\" WHERE from_user_id = \\$1 AND client_message_id = \\$2 ORDER BY \"messages\".\"message_id\" LIMIT \\$3").
@@ -220,6 +220,68 @@ func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *test
 	if assert.NotNil(t, resp) && assert.NotNil(t, resp.GetStoreMsgRsp()) {
 		assert.Equal(t, int64(12345), resp.GetStoreMsgRsp().GetMessageId())
 		assert.False(t, resp.GetStoreMsgRsp().GetCreated())
+	}
+}
+
+func TestHandleRecallMessagePersistsAndReturnsRoutingMetadata(t *testing.T) {
+	mock := useMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	sentAt := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	mock.ExpectQuery(`SELECT \* FROM "messages" WHERE message_id = \$1 ORDER BY "messages"\."message_id" LIMIT \$2 FOR UPDATE`).
+		WithArgs(int64(77), int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group", "is_recalled", "recalled_at", "recalled_by",
+		}).AddRow(77, 1001, 9001, "hello", sentAt, "text", "", true, false, "", 0))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE "messages" SET "is_recalled"=\$1,"recalled_at"=\$2,"recalled_by"=\$3 WHERE message_id = \$4 AND is_recalled = \$5`).
+		WithArgs(true, sqlmock.AnyArg(), int64(1001), int64(77), false).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	cacheKeys := make([]string, 0, 2)
+	resp, err := handler.handleRecallMessageWithDB(handler.requestDatabase(),
+		&storage.RequestMessage{TargetUserId: 1001},
+		&storage.RecallMessage{MessageId: 77},
+		&cacheKeys,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recall := resp.GetRecallMessageRsp()
+	if resp.GetResult() != storage.StorageResult_OK || recall.GetMessageId() != 77 || recall.GetFromUserId() != 1001 || recall.GetToUserId() != 9001 || !recall.GetIsGroup() || recall.GetOperatorUserId() != 1001 || recall.GetRecalledAt() == "" {
+		t.Fatalf("unexpected recall response: %+v", resp)
+	}
+	if len(cacheKeys) != 2 || cacheKeys[0] != "message:77" || cacheKeys[1] != "user_messages:9001" {
+		t.Fatalf("unexpected cache keys: %v", cacheKeys)
+	}
+}
+
+func TestRecalledMessageResponsesDoNotExposeContent(t *testing.T) {
+	message := &db.Message{
+		MessageID: 78, FromUserID: 1001, ToUserID: 1002, Content: "secret",
+		MessageType: "file", RealFileName: "secret.pdf", IsRecalled: true,
+		RecalledAt: "2026-07-21T04:00:30Z", RecalledBy: 1001,
+	}
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	resp := handler.buildMessageResponse(&storage.RequestMessage{TargetUserId: 1002}, message)
+	got := resp.GetMsgRsp()
+	if got.GetContent() != "" || got.GetRealFileName() != "" || !got.GetIsRecalled() || got.GetRecalledAt() != message.RecalledAt || got.GetRecalledBy() != 1001 {
+		t.Fatalf("recalled message was not masked: %+v", got)
+	}
+}
+
+func TestStorageRecallResultMapping(t *testing.T) {
+	tests := map[db.MessageRecallStatus]storage.StorageResult{
+		db.MessageRecallOK:              storage.StorageResult_OK,
+		db.MessageRecallNotFound:        storage.StorageResult_RECORD_NOT_EXIST,
+		db.MessageRecallForbidden:       storage.StorageResult_FORBIDDEN,
+		db.MessageRecallAlreadyRecalled: storage.StorageResult_ALREADY_RECALLED,
+		db.MessageRecallExpired:         storage.StorageResult_RECALL_EXPIRED,
+	}
+	for input, want := range tests {
+		if got := storageResultForRecallStatus(input); got != want {
+			t.Fatalf("status %v mapped to %s, want %s", input, got, want)
+		}
 	}
 }
 

@@ -32,6 +32,9 @@ func TestMessageFanoutUsesFixedPlaceholderCountForTwentyThousandTargets(t *testi
 		t.Fatalf("fanout SQL placeholders scale with audience: got=%d want=10", placeholders)
 	}
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "messages" WHERE message_id = \$1`).
+		WithArgs(int64(20000), int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{"message_id", "from_user_id", "to_user_id", "is_group", "is_recalled"}).AddRow(20000, 1, 2, false, false))
 	mock.ExpectExec(`INSERT INTO "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`WITH targets AS`).WithArgs(
 		sqlmock.AnyArg(), int64(1), PushTypeAPNs, false, int64(20000), jobID,
@@ -48,6 +51,91 @@ func TestMessageFanoutUsesFixedPlaceholderCountForTwentyThousandTargets(t *testi
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPersistMessageRecallCancelsPendingOriginalAndFansOutDurably(t *testing.T) {
+	store, mock := newStoreMock(t)
+	operationKey := "push-service/1/77"
+	recalledAt := "2026-07-21T05:00:00Z"
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessageRecall{MessageRecall: &pushpb.MessageRecallPushRequest{
+		TargetUserIds: []int64{2, 3}, MessageId: 77, ConversationId: 9001, IsGroup: true,
+		OperatorUserId: 1, RecalledAt: recalledAt,
+	}}}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "messages" WHERE message_id = \$1`).
+		WithArgs(int64(77), int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "from_user_id", "to_user_id", "is_group", "is_recalled", "recalled_at", "recalled_by",
+		}).AddRow(77, 1, 9001, true, true, recalledAt, 1))
+	mock.ExpectExec(`INSERT INTO "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "push_message_deliveries" SET`).WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(`UPDATE push_jobs SET status`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`WITH targets AS`).WithArgs(
+		sqlmock.AnyArg(), int64(-77), stableMessageRecallJobID(77), DeliveryPending,
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	).WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectCommit()
+
+	err := store.db.Transaction(func(tx *gorm.DB) error {
+		_, _, persistErr := store.persistMessageRecallJob(tx, operationKey, request, request.GetMessageRecall())
+		return persistErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOriginalMessagePushIsSuppressedAfterRecall(t *testing.T) {
+	store, mock := newStoreMock(t)
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+		TargetUserIds: []int64{2}, SenderUserId: 1, ConversationId: 1, MessageType: "text", MessageId: 78,
+	}}}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "messages" WHERE message_id = \$1`).
+		WithArgs(int64(78), int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"message_id", "from_user_id", "to_user_id", "is_group", "is_recalled",
+		}).AddRow(78, 1, 2, false, true))
+	mock.ExpectCommit()
+
+	err := store.db.Transaction(func(tx *gorm.DB) error {
+		_, _, persistErr := store.persistMessageJob(tx, "push-service/1/78", request, request.GetMessagePush())
+		return persistErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareMessageRecallDelivery(t *testing.T) {
+	recalledAt := time.Date(2026, 7, 21, 5, 0, 0, 0, time.UTC)
+	request := &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessageRecall{MessageRecall: &pushpb.MessageRecallPushRequest{
+		TargetUserIds: []int64{2}, MessageId: 79, ConversationId: 1, OperatorUserId: 1,
+		RecalledAt: recalledAt.Format(time.RFC3339),
+	}}}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(&memoryStore{}, &memorySender{}, "com.Voltline.Betterfly2")
+	prepared := service.prepareDeliveries(context.Background(), deliveryKindMessage, []DurableDeliveryClaim{{
+		JobID: stableMessageRecallJobID(79), MessageID: -79, RequestPayload: payload,
+		Token: db.PushDeviceToken{ID: 9, UserID: 2, Token: "token", Environment: "production", PushType: PushTypeAPNs, IsActive: true},
+	}})
+	if len(prepared) != 1 || prepared[0].prepareErr != nil {
+		t.Fatalf("unexpected prepared recall: %+v", prepared)
+	}
+	notification := prepared[0].notification
+	if notification.Kind != NotificationRecall || notification.MessageID != 79 || notification.TargetUserID != 2 || notification.ConversationID != 1 || notification.SenderUserID != 1 || !notification.SentAt.Equal(recalledAt) {
+		t.Fatalf("unexpected recall notification: %+v", notification)
 	}
 }
 
@@ -68,6 +156,34 @@ func TestDurableFinalizeRejectsExpiredWorkerClaim(t *testing.T) {
 	})
 	if !errors.Is(err, ErrDeliveryFenced) {
 		t.Fatalf("expired worker updated a newer claim: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecallDeliveryWithNegativeLedgerKeyCanFinalize(t *testing.T) {
+	store, mock := newStoreMock(t)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT \* FROM "push_jobs"`).WillReturnRows(
+		sqlmock.NewRows([]string{"job_id", "status"}).AddRow(stableMessageRecallJobID(77), PushJobPending),
+	)
+	mock.ExpectExec(`UPDATE "push_message_deliveries"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "push_message_deliveries"`).WillReturnRows(
+		sqlmock.NewRows([]string{"count"}).AddRow(0),
+	)
+	mock.ExpectExec(`UPDATE "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := store.FinalizeMessageDelivery(context.Background(), DurableDeliveryUpdate{
+		DurableDeliveryClaim: DurableDeliveryClaim{
+			JobID: stableMessageRecallJobID(77), MessageID: -77, Token: db.PushDeviceToken{ID: 9},
+			Attempt: 1, ClaimToken: "recall-claim",
+		},
+		Status: DeliverySent,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

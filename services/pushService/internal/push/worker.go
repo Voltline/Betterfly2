@@ -120,6 +120,20 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 			}})
 			continue
 		}
+		if recall := request.GetMessageRecall(); recall != nil {
+			recalledAt, parseErr := time.Parse(time.RFC3339Nano, recall.GetRecalledAt())
+			if parseErr != nil {
+				prepared = append(prepared, preparedDelivery{claim: claim, prepareErr: ErrInvalidRequest})
+				continue
+			}
+			prepared = append(prepared, preparedDelivery{claim: claim, notification: Notification{
+				Kind: NotificationRecall, Token: claim.Token.Token, Environment: parseEnvironment(claim.Token.Environment),
+				TargetUserID: claim.Token.UserID, ConversationID: recall.GetConversationId(), IsGroup: recall.GetIsGroup(),
+				MessageID: recall.GetMessageId(), SenderUserID: recall.GetOperatorUserId(), SentAt: recalledAt,
+				ExpiresAt: recalledAt.Add(24 * time.Hour),
+			}})
+			continue
+		}
 
 		cached, exists := messageCache[claim.JobID]
 		if !exists {

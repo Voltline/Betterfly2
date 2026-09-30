@@ -570,6 +570,8 @@ message StoreNewMessage {
   string message_type = 4; // text, image, gif, file, audio, video, link
   bool is_group = 5;
   string real_file_name = 6; // 文件消息对应的原始文件名，非文件消息为空
+  string client_message_id = 7;
+  string client_timestamp = 8;
 }
 ```
 
@@ -578,6 +580,16 @@ message StoreNewMessage {
 ```protobuf
 message StoreMsgRsp {
   int64 message_id = 1;
+  string client_message_id = 2;
+  bool created = 3;
+  int64 from_user_id = 4;
+  int64 to_user_id = 5;
+  string content = 6;
+  string message_type = 7;
+  bool is_group = 8;
+  string real_file_name = 9;
+  string client_timestamp = 10;
+  string server_timestamp = 11;
 }
 ```
 
@@ -586,6 +598,8 @@ message StoreMsgRsp {
 ```protobuf
 message PostAckRsp {
   int64 message_id = 1;
+  string client_message_id = 2;
+  string timestamp = 3; // 服务端入库时间
 }
 ```
 
@@ -613,6 +627,9 @@ message MessageRsp {
   bool is_group = 6;
   string real_file_name = 7;
   int64 message_id = 8;
+  bool is_recalled = 9;
+  string recalled_at = 10;
+  int64 recalled_by = 11;
 }
 ```
 
@@ -626,6 +643,12 @@ message MessageRsp {
 message QuerySyncMessages {
   int64 to_user_id = 1;
   string timestamp = 2;
+  int32 page_size = 3;
+  string cursor_timestamp = 4;
+  int64 cursor_message_id = 5;
+  bool include_recalled_changes = 6;
+  string recall_cursor_timestamp = 7;
+  int64 recall_cursor_message_id = 8;
 }
 ```
 
@@ -634,8 +657,17 @@ message QuerySyncMessages {
 ```protobuf
 message SyncMessagesRsp {
   repeated MessageRsp msgs = 1;
+  bool has_more = 2;
+  string next_cursor_timestamp = 3;
+  int64 next_cursor_message_id = 4;
+  repeated MessageRsp recalled_msgs = 5;
+  bool recalls_has_more = 6;
+  string next_recall_cursor_timestamp = 7;
+  int64 next_recall_cursor_message_id = 8;
 }
 ```
+
+同步包含自己发送/接收的单聊和当前群成员入群后的群消息。只有认证用户本人能同步；`to_user_id` 可为 0 或本人 ID。普通消息与撤回使用两个独立的复合游标；详见 [客户端消息同步适配](CLIENT_MESSAGE_SYNC_ADAPTATION.md)。实时 `Post` 尾部新增 `message_id = 9`，时间与 ACK、同步均以数据库入库时间为准。
 
 ---
 

@@ -128,11 +128,14 @@ func buildSyncMessagesStorageRequest(fromID int64, payload *pb.QuerySyncMessages
 	req := newStorageRequest(currentContainerID, fromID)
 	req.Payload = &storage.RequestMessage_QuerySyncMessages{
 		QuerySyncMessages: &storage.QuerySyncMessages{
-			ToUserId:        fromID,
-			Timestamp:       payload.GetTimestamp(),
-			PageSize:        payload.GetPageSize(),
-			CursorTimestamp: payload.GetCursorTimestamp(),
-			CursorMessageId: payload.GetCursorMessageId(),
+			ToUserId:               fromID,
+			Timestamp:              payload.GetTimestamp(),
+			PageSize:               payload.GetPageSize(),
+			CursorTimestamp:        payload.GetCursorTimestamp(),
+			CursorMessageId:        payload.GetCursorMessageId(),
+			IncludeRecalledChanges: payload.GetIncludeRecalledChanges(),
+			RecallCursorTimestamp:  payload.GetRecallCursorTimestamp(),
+			RecallCursorMessageId:  payload.GetRecallCursorMessageId(),
 		},
 	}
 	return req

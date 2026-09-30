@@ -1,15 +1,42 @@
 package handlers
 
 import (
+	"errors"
 	"testing"
 
 	pb "Betterfly2/proto/data_forwarding"
+	"data_forwarding_service/internal/router"
 )
 
 func TestMembersWithoutSender(t *testing.T) {
 	targets := membersWithoutSender([]int64{1, 2, 3}, 1)
 	if len(targets) != 2 || targets[0] != 2 || targets[1] != 3 {
 		t.Fatalf("unexpected push targets: %v", targets)
+	}
+}
+
+func TestGroupPartialDeliveryFailureIsRetryableAndDoesNotSkipOtherPods(t *testing.T) {
+	localFailure := errors.New("local queue full")
+	remoteFailure := errors.New("Kafka unavailable")
+	var localCalls, remoteCalls int
+	err := routeGroupTargets([]int64{2, 3, 4, 5}, map[string]string{"2": "local", "3": "remote", "4": "remote"}, "local",
+		func(string, string) error { localCalls++; return localFailure },
+		func(topic string, users []int64) error {
+			remoteCalls++
+			if topic != "remote" || len(users) != 2 {
+				t.Fatalf("unexpected batch %s %v", topic, users)
+			}
+			return remoteFailure
+		})
+	if localCalls != 1 || remoteCalls != 1 || !errors.Is(err, localFailure) || !errors.Is(err, remoteFailure) || !errors.Is(err, router.ErrUserOffline) {
+		t.Fatalf("partial failure suppressed: local=%d remote=%d err=%v", localCalls, remoteCalls, err)
+	}
+}
+
+func TestGroupDeliverySuccess(t *testing.T) {
+	if err := routeGroupTargets([]int64{2, 3}, map[string]string{"2": "local", "3": "remote"}, "local",
+		func(string, string) error { return nil }, func(string, []int64) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 }
 

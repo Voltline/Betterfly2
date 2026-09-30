@@ -189,6 +189,8 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	assert.Equal(t, "client-message-1", storeRsp.ClientMessageId)
 	assert.True(t, storeRsp.Created)
 	assert.Equal(t, "2026-07-12T09:00:00Z", storeRsp.ClientTimestamp)
+	_, parseErr := time.Parse(time.RFC3339, storeRsp.GetServerTimestamp())
+	assert.NoError(t, parseErr)
 }
 
 func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *testing.T) {
@@ -213,13 +215,16 @@ func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *test
 		WithArgs(int64(1000), "client-message-1", int64(1)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "client_message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
-		}).AddRow(12345, "client-message-1", 1000, 1001, "Hello, World!", "2026-07-12T09:00:01Z", "text", "", false))
+		}).AddRow(12345, "client-message-1", 1000, 9999, "canonical original", "2026-07-12T09:00:01Z", "text", "", false))
 
 	resp, err := handler.handleStoreNewMessageWithDB(handler.requestDatabase(), req, msg, nil)
 	assert.NoError(t, err)
 	if assert.NotNil(t, resp) && assert.NotNil(t, resp.GetStoreMsgRsp()) {
 		assert.Equal(t, int64(12345), resp.GetStoreMsgRsp().GetMessageId())
 		assert.False(t, resp.GetStoreMsgRsp().GetCreated())
+		assert.Equal(t, "2026-07-12T09:00:01Z", resp.GetStoreMsgRsp().GetServerTimestamp())
+		assert.Equal(t, "canonical original", resp.GetStoreMsgRsp().GetContent())
+		assert.Equal(t, int64(9999), resp.GetStoreMsgRsp().GetToUserId())
 	}
 }
 
@@ -527,8 +532,8 @@ func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery(`(?s)SELECT \*.*m\.to_user_id = \$1.*m\.timestamp > \$2.*m\.timestamp = \$3.*m\.message_id > \$4.*m\.timestamp > \$5.*m\.timestamp = \$6.*m\.message_id > \$7.*gm\.user_id = \$8.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
+	mock.ExpectQuery(`(?s)SELECT \*.*m\.to_user_id = \$1 OR m\.from_user_id = \$2.*m\.timestamp > \$3.*m\.timestamp = \$4.*m\.message_id > \$5.*m\.timestamp > \$6.*m\.timestamp = \$7.*m\.message_id > \$8.*gm\.user_id = \$9.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$10`).
+		WithArgs(int64(1001), int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group",
 		}).
@@ -597,8 +602,8 @@ func TestHandleQuerySyncMessages_DefaultPageIsBounded(t *testing.T) {
 		)
 	}
 
-	mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`).
-		WithArgs(int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
+	mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$10`).
+		WithArgs(int64(1001), int64(1001), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), "2026-04-17T10:00:00Z", "2026-04-17T10:00:00Z", int64(0), int64(1001), 101).
 		WillReturnRows(rows)
 
 	resp, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), req, req.GetQuerySyncMessages())
@@ -628,11 +633,11 @@ func TestNormalizeSyncPageSizeDefaultsAndCaps(t *testing.T) {
 func TestSyncCompositeCursorDoesNotRepeatEqualTimestamps(t *testing.T) {
 	mock := useMockDB(t)
 	handler := &StorageHandler{l1Cache: newMockCache()}
-	queryPattern := `(?s)SELECT \*.*m\.timestamp = \$3 AND m\.message_id > \$4.*m\.timestamp = \$6 AND m\.message_id > \$7.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$9`
+	queryPattern := `(?s)SELECT \*.*m\.timestamp = \$4 AND m\.message_id > \$5.*m\.timestamp = \$7 AND m\.message_id > \$8.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$10`
 	timestamp := "2026-04-17T10:00:00Z"
 	columns := []string{"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group"}
 	mock.ExpectQuery(queryPattern).
-		WithArgs(int64(1001), timestamp, timestamp, int64(0), timestamp, timestamp, int64(0), int64(1001), 3).
+		WithArgs(int64(1001), int64(1001), timestamp, timestamp, int64(0), timestamp, timestamp, int64(0), int64(1001), 3).
 		WillReturnRows(sqlmock.NewRows(columns).
 			AddRow(1, 2, 1001, "direct", timestamp, "text", "", false).
 			AddRow(2, 3, 9001, "group", timestamp, "text", "", true).
@@ -647,7 +652,7 @@ func TestSyncCompositeCursorDoesNotRepeatEqualTimestamps(t *testing.T) {
 	}
 
 	mock.ExpectQuery(queryPattern).
-		WithArgs(int64(1001), timestamp, timestamp, int64(2), timestamp, timestamp, int64(2), int64(1001), 3).
+		WithArgs(int64(1001), int64(1001), timestamp, timestamp, int64(2), timestamp, timestamp, int64(2), int64(1001), 3).
 		WillReturnRows(sqlmock.NewRows(columns).AddRow(3, 4, 1001, "next", timestamp, "text", "", false))
 	request.GetQuerySyncMessages().CursorMessageId = 2
 	second, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), request, request.GetQuerySyncMessages())

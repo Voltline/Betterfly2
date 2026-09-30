@@ -633,25 +633,15 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 	case *storage.ResponseMessage_StoreMsgRsp:
 		storeRsp := payload.StoreMsgRsp
 		sugar.Debugf("收到消息存储响应: message_id=%d client_message_id=%s created=%t", storeRsp.GetMessageId(), storeRsp.GetClientMessageId(), storeRsp.GetCreated())
-		if err := handlers.CompletePostIdempotency(context.Background(), storeRsp.GetFromUserId(), storeRsp.GetClientMessageId(), storeRsp.GetMessageId()); err != nil {
-			sugar.Errorf("更新消息幂等ACK缓存失败: message_id=%d err=%v", storeRsp.GetMessageId(), err)
-		}
-		if storeRsp.GetCreated() {
-			post := &pb.Post{
-				FromId:          storeRsp.GetFromUserId(),
-				ToId:            storeRsp.GetToUserId(),
-				Msg:             storeRsp.GetContent(),
-				MsgType:         storeRsp.GetMessageType(),
-				IsGroup:         storeRsp.GetIsGroup(),
-				RealFileName:    storeRsp.GetRealFileName(),
-				Timestamp:       storeRsp.GetClientTimestamp(),
-				ClientMessageId: storeRsp.GetClientMessageId(),
+		return processStoredPostResponse(storeRsp, func() error {
+			return handlers.CompletePostIdempotency(context.Background(), storeRsp.GetFromUserId(), storeRsp.GetClientMessageId(), storeRsp.GetMessageId())
+		}, handlers.DeliverStoredPost, func(response *pb.ResponseMessage) error {
+			encoded, err := proto.Marshal(response)
+			if err != nil {
+				return err
 			}
-			if err := handlers.DeliverStoredPost(storeRsp.GetMessageId(), post); err != nil {
-				sugar.Errorf("存储成功后的消息投递失败: message_id=%d err=%v", storeRsp.GetMessageId(), err)
-			}
-		}
-		dfResp = buildPostAckResponse(payload.StoreMsgRsp)
+			return h.wsHandler.SendMessage(strconv.FormatInt(storageResp.TargetUserId, 10), encoded)
+		})
 
 	case *storage.ResponseMessage_RecallMessageRsp:
 		recall := payload.RecallMessageRsp
@@ -693,34 +683,7 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		syncMsgs := payload.SyncMsgsRsp
 		sugar.Debugf("收到同步消息查询响应: 消息数量=%d", len(syncMsgs.GetMsgs()))
 
-		// 转换为data_forwarding的MessageRsp列表
-		var dfMsgs []*pb.MessageRsp
-		for _, msg := range syncMsgs.GetMsgs() {
-			dfMsgs = append(dfMsgs, &pb.MessageRsp{
-				MessageId:    msg.GetMessageId(),
-				FromUserId:   msg.GetFromUserId(),
-				ToUserId:     msg.GetToUserId(),
-				Content:      msg.GetContent(),
-				Timestamp:    msg.GetTimestamp(),
-				MsgType:      msg.GetMsgType(),
-				IsGroup:      msg.GetIsGroup(),
-				RealFileName: msg.GetRealFileName(),
-				IsRecalled:   msg.GetIsRecalled(),
-				RecalledAt:   msg.GetRecalledAt(),
-				RecalledBy:   msg.GetRecalledBy(),
-			})
-		}
-
-		dfResp = &pb.ResponseMessage{
-			Payload: &pb.ResponseMessage_SyncMsgsRsp{
-				SyncMsgsRsp: &pb.SyncMessagesRsp{
-					Msgs:                dfMsgs,
-					HasMore:             syncMsgs.GetHasMore(),
-					NextCursorTimestamp: syncMsgs.GetNextCursorTimestamp(),
-					NextCursorMessageId: syncMsgs.GetNextCursorMessageId(),
-				},
-			},
-		}
+		dfResp = buildSyncMessagesResponse(syncMsgs)
 
 	case *storage.ResponseMessage_UserInfoRsp:
 		// 用户信息查询响应
@@ -802,7 +765,53 @@ func buildPostAckResponse(storeMsgRsp *storage.StoreMsgRsp) *pb.ResponseMessage 
 			PostAckRsp: &pb.PostAckRsp{
 				MessageId:       storeMsgRsp.GetMessageId(),
 				ClientMessageId: storeMsgRsp.GetClientMessageId(),
+				Timestamp:       storeMsgRsp.GetServerTimestamp(),
 			},
 		},
 	}
+}
+
+// ACK confirms persistence, not delivery. Return delivery/cache/ACK failures to
+// the existing retry/DLQ path even when the sender has already received its ACK.
+func processStoredPostResponse(stored *storage.StoreMsgRsp, complete func() error, deliver func(int64, *pb.Post) error, acknowledge func(*pb.ResponseMessage) error) error {
+	if stored == nil || stored.GetMessageId() <= 0 {
+		return permanentError("存储消息响应缺少message_id")
+	}
+	cacheErr := complete()
+	ackErr := acknowledge(buildPostAckResponse(stored))
+	var deliveryErr error
+	if stored.GetCreated() {
+		timestamp := stored.GetServerTimestamp()
+		if timestamp == "" {
+			timestamp = stored.GetClientTimestamp()
+		} // Older Storage during rolling deployment.
+		deliveryErr = deliver(stored.GetMessageId(), &pb.Post{
+			FromId: stored.GetFromUserId(), ToId: stored.GetToUserId(),
+			Msg: stored.GetContent(), MsgType: stored.GetMessageType(),
+			IsGroup: stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
+			Timestamp: timestamp, ClientMessageId: stored.GetClientMessageId(), MessageId: stored.GetMessageId(),
+		})
+	}
+	return errors.Join(cacheErr, ackErr, deliveryErr)
+}
+
+func convertStorageMessages(messages []*storage.MessageRsp) []*pb.MessageRsp {
+	result := make([]*pb.MessageRsp, 0, len(messages))
+	for _, msg := range messages {
+		result = append(result, &pb.MessageRsp{
+			MessageId: msg.GetMessageId(), FromUserId: msg.GetFromUserId(), ToUserId: msg.GetToUserId(),
+			Content: msg.GetContent(), Timestamp: msg.GetTimestamp(), MsgType: msg.GetMsgType(), IsGroup: msg.GetIsGroup(),
+			RealFileName: msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
+		})
+	}
+	return result
+}
+
+func buildSyncMessagesResponse(sync *storage.SyncMessagesRsp) *pb.ResponseMessage {
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_SyncMsgsRsp{SyncMsgsRsp: &pb.SyncMessagesRsp{
+		Msgs: convertStorageMessages(sync.GetMsgs()), HasMore: sync.GetHasMore(),
+		NextCursorTimestamp: sync.GetNextCursorTimestamp(), NextCursorMessageId: sync.GetNextCursorMessageId(),
+		RecalledMsgs: convertStorageMessages(sync.GetRecalledMsgs()), RecallsHasMore: sync.GetRecallsHasMore(),
+		NextRecallCursorTimestamp: sync.GetNextRecallCursorTimestamp(), NextRecallCursorMessageId: sync.GetNextRecallCursorMessageId(),
+	}}}
 }

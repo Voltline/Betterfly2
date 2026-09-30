@@ -27,6 +27,9 @@ message QuerySyncMessages {
   int32 page_size = 3;
   string cursor_timestamp = 4;
   int64 cursor_message_id = 5;
+  bool include_recalled_changes = 6;
+  string recall_cursor_timestamp = 7;
+  int64 recall_cursor_message_id = 8;
 }
 
 message UpdateUserName {

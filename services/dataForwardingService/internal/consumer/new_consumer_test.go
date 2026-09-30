@@ -359,3 +359,100 @@ func TestBuildMessageRecallEventMapsResultsAndFields(t *testing.T) {
 		}
 	}
 }
+
+func TestStoredPostUsesCanonicalIDAndTimeButSupportsOldStorage(t *testing.T) {
+	for _, serverTime := range []string{"2026-09-30T10:00:00Z", ""} {
+		stored := &storage.StoreMsgRsp{MessageId: 42, ClientMessageId: "client-42", Created: true,
+			FromUserId: 1, ToUserId: 2, Content: "hello", MessageType: "text",
+			ClientTimestamp: "wrong-client-time", ServerTimestamp: serverTime}
+		var post *pb.Post
+		var ack *pb.PostAckRsp
+		err := processStoredPostResponse(stored, func() error { return nil }, func(_ int64, msg *pb.Post) error { post = msg; return nil },
+			func(response *pb.ResponseMessage) error { ack = response.GetPostAckRsp(); return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := serverTime
+		if want == "" {
+			want = stored.GetClientTimestamp()
+		}
+		if post.GetMessageId() != 42 || ack.GetMessageId() != 42 || post.GetTimestamp() != want || ack.GetTimestamp() != serverTime {
+			t.Fatalf("canonical ID/time lost: post=%+v ack=%+v", post, ack)
+		}
+	}
+}
+
+func TestStoredPostFailuresReachConsumerRetryAndDLQ(t *testing.T) {
+	for _, failure := range []string{"cache", "ack", "delivery"} {
+		t.Run(failure, func(t *testing.T) {
+			attempts, acks, deliveries := 0, 0, 0
+			injected := errors.New("temporary " + failure + " failure")
+			stored := &storage.StoreMsgRsp{MessageId: 42, Created: true}
+			handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
+				attempts++
+				return processStoredPostResponse(stored, func() error {
+					if failure == "cache" && attempts == 1 {
+						return injected
+					}
+					return nil
+				},
+					func(int64, *pb.Post) error {
+						deliveries++
+						if failure == "delivery" && attempts == 1 {
+							return injected
+						}
+						return nil
+					},
+					func(*pb.ResponseMessage) error {
+						acks++
+						if failure == "ack" && attempts == 1 {
+							return injected
+						}
+						return nil
+					})
+			}, func(string, []byte, []sarama.RecordHeader) error {
+				t.Fatal("recovered failure entered DLQ")
+				return nil
+			})
+			session := &consumerTestSession{ctx: context.Background()}
+			if err := handler.ConsumeClaim(session, newConsumerTestClaim(&sarama.ConsumerMessage{Offset: 1})); err != nil {
+				t.Fatal(err)
+			}
+			if attempts != 2 || acks != 2 || deliveries != 2 || len(session.marked) != 1 {
+				t.Fatalf("failure swallowed: attempts=%d acks=%d deliveries=%d marked=%d", attempts, acks, deliveries, len(session.marked))
+			}
+		})
+	}
+	var dlqCalls int
+	handler := newProcessingTestHandler(func(*sarama.ConsumerMessage) error {
+		return processStoredPostResponse(&storage.StoreMsgRsp{MessageId: 42, Created: true}, func() error { return nil },
+			func(int64, *pb.Post) error { return errors.New("offline") }, func(*pb.ResponseMessage) error { return nil })
+	}, func(string, []byte, []sarama.RecordHeader) error { dlqCalls++; return errors.New("DLQ unavailable") })
+	session := &consumerTestSession{ctx: context.Background()}
+	if err := handler.ConsumeClaim(session, newConsumerTestClaim(&sarama.ConsumerMessage{Offset: 1}, &sarama.ConsumerMessage{Offset: 2})); err == nil || len(session.marked) != 0 || dlqCalls != 1 {
+		t.Fatalf("offline/DLQ failure committed: err=%v marked=%d dlq=%d", err, len(session.marked), dlqCalls)
+	}
+}
+
+func TestDuplicateStoredPostOnlyAcknowledges(t *testing.T) {
+	err := processStoredPostResponse(&storage.StoreMsgRsp{MessageId: 42}, func() error { return nil },
+		func(int64, *pb.Post) error { t.Fatal("duplicate insert replayed delivery"); return nil },
+		func(response *pb.ResponseMessage) error {
+			if response.GetPostAckRsp().GetMessageId() != 42 {
+				t.Fatal("ACK missing")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncResponsePreservesIndependentRecallCursor(t *testing.T) {
+	tombstone := &storage.MessageRsp{MessageId: 42, Timestamp: "2026-09-30T09:00:00Z", IsRecalled: true, RecalledAt: "2026-09-30T09:01:00Z", RecalledBy: 1, IsGroup: true}
+	response := buildSyncMessagesResponse(&storage.SyncMessagesRsp{NextCursorTimestamp: "2026-09-30T10:00:00Z", NextCursorMessageId: 100,
+		RecalledMsgs: []*storage.MessageRsp{tombstone}, RecallsHasMore: true, NextRecallCursorTimestamp: tombstone.RecalledAt, NextRecallCursorMessageId: 42}).GetSyncMsgsRsp()
+	if response.GetNextCursorMessageId() != 100 || response.GetNextRecallCursorMessageId() != 42 || !response.GetRecallsHasMore() || len(response.GetRecalledMsgs()) != 1 || response.GetRecalledMsgs()[0].GetTimestamp() != tombstone.Timestamp || response.GetRecalledMsgs()[0].GetRecalledBy() != 1 {
+		t.Fatalf("recall mapping failed: %+v", response)
+	}
+}

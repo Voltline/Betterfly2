@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/DATA-DOG/go-sqlmock"
 	"testing"
 	"time"
 )
@@ -15,6 +16,25 @@ func TestLoadPoolConfigDefaults(t *testing.T) {
 	}
 	if config.MaxOpenConns != 50 || config.MaxIdleConns != 10 || config.ConnMaxLifetime != time.Hour || config.ConnMaxIdleTime != 10*time.Minute {
 		t.Fatalf("unexpected pool defaults: %+v", config)
+	}
+}
+
+func TestStartupRequiresPublishedRecallSchema(t *testing.T) {
+	plan := migrationPlan()
+	if CurrentSchemaVersion != plan[len(plan)-1].Version {
+		t.Fatalf("startup version %d differs from migrations %d", CurrentSchemaVersion, plan[len(plan)-1].Version)
+	}
+	for _, version := range []int{4, 5, 6} {
+		database, mock := newInboxDatabase(t)
+		mock.ExpectQuery(`(?s)SELECT count\(\*\) FROM information_schema.tables`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		mock.ExpectQuery(`SELECT COALESCE\(MAX\(version\), 0\) FROM "schema_migrations"`).WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(version))
+		err := CheckSchemaVersion(database)
+		if (err != nil) != (version < 5) {
+			t.Fatalf("schema %d error=%v", version, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

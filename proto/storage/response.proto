@@ -13,6 +13,7 @@ message StoreMsgRsp {
   bool is_group = 8;
   string real_file_name = 9;
   string client_timestamp = 10;
+  string server_timestamp = 11;
 }
 
 message MessageRsp {
@@ -43,6 +44,10 @@ message SyncMessagesRsp {
   bool has_more = 2;
   string next_cursor_timestamp = 3;
   int64 next_cursor_message_id = 4;
+  repeated MessageRsp recalled_msgs = 5;
+  bool recalls_has_more = 6;
+  string next_recall_cursor_timestamp = 7;
+  int64 next_recall_cursor_message_id = 8;
 }
 
 message UserInfoRsp {

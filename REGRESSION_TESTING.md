@@ -2,6 +2,22 @@
 
 本文档记录当前可直接执行的回归测试入口，优先面向本地 `docker-compose` 联调环境。
 
+## 消息 ID、撤回增量同步与投递重试
+
+本轮回归测试分布在 `shared/db`、Storage 的 `internal/handler`、DataForwarding 的 `internal/handlers` 和 `internal/consumer`，以及 `proto/data_forwarding`：
+
+- 原消息早于普通同步游标，但其撤回仍能独立分页补收；空普通页不会吞掉撤回页。
+- 撤回墓碑遮蔽正文和文件名，沿用当前成员及入群时间权限；游标/身份错误在查询前拒绝，数据库错误不得返回部分成功。
+- 自己发送的单聊也参与同步；复合分页、默认上限和空页游标保持不变。
+- 入库响应、实时 Post 和 ACK 使用同一服务端 ID/时间；重复 client ID 返回原数据库内容和时间。
+- ACK/cache/实时投递失败进入现有 Kafka 重试/DLQ 路径，DLQ 失败不跨过当前 offset；群聊部分失败不会伪装成功。
+- 副作用短期占位崩溃恢复、旧 owner 的完成/删除 fencing，以及旧 Redis ACK 格式兼容。
+- 旧 Post/同步请求字节兼容，以及数据库 v4 拒绝、v5/更高版本接受。
+
+各模块执行 `go test ./...`；关键模块执行 `go test -race ./...`。这些测试使用 sqlmock、miniredis 和 Kafka mock，不等同于真实 Docker/APNs 端到端验证。客户端配合测试和部署顺序见 [适配说明](CLIENT_MESSAGE_SYNC_ADAPTATION.md)。
+
+2026-09-30 验证结果：全部 15 个 Go module 的 `go test ./...`、`go vet ./...` 通过；shared、DataForwarding、Storage、Push、`proto/data_forwarding` 的 `go test -race ./...` 通过；`make -C proto` 与 `git diff --check` 通过。`TestFriendServiceEndToEnd` 因未设置 `BETTERFLY_E2E=1` 跳过，真实 Docker/APNs 和双设备客户端联调未执行。
+
 ## Friend/Group 端到端回归测试
 
 当前好友与群聊主链路的端到端测试位于：

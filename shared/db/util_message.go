@@ -155,7 +155,7 @@ type SyncMessagesPage struct {
 
 // GetSyncMessagesPage 获取稳定分页的同步消息。
 // 当前会返回：
-// 1. 发给该用户的单聊消息
+// 1. 该用户发送或接收的单聊消息
 // 2. 该用户当前已加入群组中的群聊消息
 // 群聊消息会额外要求消息时间不早于该成员的入群时间，
 // 避免把用户入群前的旧消息同步回来。
@@ -184,7 +184,7 @@ FROM (
     m.recalled_by
   FROM messages AS m
   WHERE m.is_group = FALSE
-    AND m.to_user_id = ?
+    AND (m.to_user_id = ? OR m.from_user_id = ?)
     AND (m.timestamp > ? OR (m.timestamp = ? AND m.message_id > ?))
 
   UNION ALL
@@ -211,13 +211,53 @@ FROM (
 ) AS sync_messages
 ORDER BY timestamp ASC, message_id ASC
 LIMIT ?
-`, toUserID, cursorTimestamp, cursorTimestamp, cursorMessageID,
+`, toUserID, toUserID, cursorTimestamp, cursorTimestamp, cursorMessageID,
 		cursorTimestamp, cursorTimestamp, cursorMessageID, toUserID, pageSize+1).Scan(&messages).Error
 	if err != nil {
 		return nil, err
 	}
 
-	return buildSyncMessagesPage(messages, pageSize), nil
+	page := buildSyncMessagesPage(messages, pageSize)
+	if len(page.Messages) == 0 {
+		page.NextCursorTimestamp, page.NextCursorMessageID = cursorTimestamp, cursorMessageID
+	}
+	return page, nil
+}
+
+// Recall changes paginate on recalled_at, never on the original message time.
+// Authorization still uses the original time and current membership.
+func GetRecalledMessagesPageWithDB(database *gorm.DB, userID int64, cursorTimestamp string, cursorMessageID int64, pageSize int) (*SyncMessagesPage, error) {
+	if pageSize <= 0 {
+		pageSize = DefaultSyncPageSize
+	}
+	if pageSize > MaxSyncPageSize {
+		pageSize = MaxSyncPageSize
+	}
+	var messages []Message
+	err := database.Raw(`
+SELECT m.* FROM messages AS m
+WHERE m.is_recalled = TRUE
+  AND (m.recalled_at > ? OR (m.recalled_at = ? AND m.message_id > ?))
+  AND (
+    (m.is_group = FALSE AND (m.from_user_id = ? OR m.to_user_id = ?))
+    OR (m.is_group = TRUE AND (m.from_user_id = ? OR EXISTS (
+      SELECT 1 FROM group_members AS gm
+      WHERE gm.group_id = m.to_user_id AND gm.user_id = ?
+        AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time)
+    )))
+  )
+ORDER BY m.recalled_at ASC, m.message_id ASC LIMIT ?
+`, cursorTimestamp, cursorTimestamp, cursorMessageID, userID, userID, userID, userID, pageSize+1).Scan(&messages).Error
+	if err != nil {
+		return nil, err
+	}
+	page := buildSyncMessagesPage(messages, pageSize)
+	page.NextCursorTimestamp, page.NextCursorMessageID = cursorTimestamp, cursorMessageID
+	if len(page.Messages) > 0 {
+		last := page.Messages[len(page.Messages)-1]
+		page.NextCursorTimestamp, page.NextCursorMessageID = last.RecalledAt, last.MessageID
+	}
+	return page, nil
 }
 
 func buildSyncMessagesPage(messages []Message, pageSize int) *SyncMessagesPage {

@@ -215,13 +215,14 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 				MessageId:       storedMessage.MessageID,
 				ClientMessageId: msg.GetClientMessageId(),
 				Created:         created,
-				FromUserId:      msg.GetFromUserId(),
-				ToUserId:        msg.GetToUserId(),
-				Content:         msg.GetContent(),
-				MessageType:     msg.GetMessageType(),
-				IsGroup:         msg.GetIsGroup(),
-				RealFileName:    msg.GetRealFileName(),
+				FromUserId:      storedMessage.FromUserID,
+				ToUserId:        storedMessage.ToUserID,
+				Content:         storedMessage.Content,
+				MessageType:     storedMessage.MessageType,
+				IsGroup:         storedMessage.IsGroup,
+				RealFileName:    storedMessage.RealFileName,
 				ClientTimestamp: msg.GetClientTimestamp(),
+				ServerTimestamp: storedMessage.Timestamp,
 			},
 		},
 	}
@@ -364,6 +365,14 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 			TargetUserId: req.GetTargetUserId(),
 		}, nil
 	}
+	recallTimestamp := time.Unix(0, 0).UTC()
+	if raw := query.GetRecallCursorTimestamp(); query.GetIncludeRecalledChanges() && raw != "" {
+		var parseErr error
+		recallTimestamp, parseErr = time.Parse(time.RFC3339, raw)
+		if parseErr != nil {
+			return &storage.ResponseMessage{Result: storage.StorageResult_SERVICE_ERROR, TargetUserId: req.TargetUserId}, nil
+		}
+	}
 
 	// 新客户端优先使用复合游标；旧客户端继续使用 timestamp 作为初始下界。
 	cursorTimestamp := query.GetCursorTimestamp()
@@ -437,6 +446,25 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 				NextCursorMessageId: page.NextCursorMessageID,
 			},
 		},
+	}
+	if query.GetIncludeRecalledChanges() {
+		// Empty recall cursor deliberately starts at epoch, not the message cursor:
+		// a client upgrading must also recover recalls of previously synced messages.
+		recallCursorID := max(query.GetRecallCursorMessageId(), 0)
+		start = time.Now()
+		recalls, err := db.GetRecalledMessagesPageWithDB(database, query.ToUserId, recallTimestamp.UTC().Format(time.RFC3339), recallCursorID, pageSize)
+		metrics.RecordDatabaseQuery("select", start)
+		if err != nil {
+			metrics.RecordDatabaseError()
+			return nil, err
+		}
+		sync := resp.GetSyncMsgsRsp()
+		for _, msg := range recalls.Messages {
+			sync.RecalledMsgs = append(sync.RecalledMsgs, h.buildMessageResponse(req, &msg).GetMsgRsp())
+		}
+		sync.RecallsHasMore = recalls.HasMore
+		sync.NextRecallCursorTimestamp = recalls.NextCursorTimestamp
+		sync.NextRecallCursorMessageId = recalls.NextCursorMessageID
 	}
 
 	return resp, nil

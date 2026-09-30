@@ -8,11 +8,14 @@ import (
 func TestSyncMessagesCanOnlyBeRequestedForAuthenticatedUser(t *testing.T) {
 	payload := func(target int64) *pb.QuerySyncMessages {
 		return &pb.QuerySyncMessages{
-			ToUserId:        target,
-			Timestamp:       "2026-07-13T00:00:00Z",
-			PageSize:        250,
-			CursorTimestamp: "2026-07-13T01:00:00Z",
-			CursorMessageId: 42,
+			ToUserId:               target,
+			Timestamp:              "2026-07-13T00:00:00Z",
+			PageSize:               250,
+			CursorTimestamp:        "2026-07-13T01:00:00Z",
+			CursorMessageId:        42,
+			IncludeRecalledChanges: true,
+			RecallCursorTimestamp:  "2026-07-13T00:01:00Z",
+			RecallCursorMessageId:  41,
 		}
 	}
 
@@ -35,6 +38,9 @@ func TestSyncMessagesCanOnlyBeRequestedForAuthenticatedUser(t *testing.T) {
 		query := req.GetQuerySyncMessages()
 		if query.GetPageSize() != 250 || query.GetCursorTimestamp() != "2026-07-13T01:00:00Z" || query.GetCursorMessageId() != 42 {
 			t.Fatalf("pagination cursor was not preserved: %+v", query)
+		}
+		if !query.GetIncludeRecalledChanges() || query.GetRecallCursorTimestamp() != "2026-07-13T00:01:00Z" || query.GetRecallCursorMessageId() != 41 {
+			t.Fatalf("recall cursor lost: %+v", query)
 		}
 	}
 }

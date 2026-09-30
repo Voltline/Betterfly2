@@ -68,6 +68,7 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 	payload.FromId = fromID
+	payload.MessageId = 0
 	if err := validatePostPayload(payload); err != nil {
 		return err
 	}
@@ -92,7 +93,9 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	}
 	if !claim.acquired {
 		if claim.messageID > 0 {
-			return sendPostAck(fromID, claim.messageID, clientMessageID)
+			// Preserve the old Redis ACK format; the duplicate insert returns the
+			// original database timestamp and never repeats delivery (created=false).
+			return sendMessageToStorage(payload, currentContainerTopic())
 		}
 		logger.Sugar().Debugf("消息正在处理中，忽略重复请求: from=%d client_message_id=%s", fromID, clientMessageID)
 		return nil
@@ -110,14 +113,15 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 	if payload == nil {
 		return errors.New("待投递消息为空")
 	}
-	claimed, err := claimPostEffects(context.Background(), messageID)
+	owner, err := claimPostEffects(context.Background(), messageID)
 	if err != nil {
 		return err
 	}
-	if !claimed {
+	if owner == "" {
 		logger.Sugar().Debugf("消息副作用已执行，跳过重复Kafka响应: message_id=%d", messageID)
 		return nil
 	}
+	payload.MessageId = messageID
 
 	message := &pb.RequestMessage{Payload: &pb.RequestMessage_Post{Post: payload}}
 	currentContainerID := currentContainerTopic()
@@ -126,7 +130,7 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 	} else {
 		targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 		targetTopic, routeErr := redisClient.GetContainerByConnection(targetUserID)
-		publishMessagePushBestEffort([]int64{payload.GetToId()}, payload, messageID)
+		pushErr := publishMessagePush([]int64{payload.GetToId()}, payload, messageID)
 		if routeErr == nil {
 			err = routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message)
 		} else if errors.Is(routeErr, redisClient.ErrRouteNotFound) {
@@ -134,16 +138,14 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 		} else {
 			err = routeErr
 		}
+		err = errors.Join(err, pushErr)
 	}
-	if err != nil {
-		releasePostEffects(context.Background(), messageID)
-	}
-	return err
+	return errors.Join(err, finishPostEffects(context.Background(), messageID, owner, err == nil))
 }
 
 func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 	payload := message.GetPost()
-	logger.Sugar().Debugf("InplaceHandlePostMessage-payload: %s", payload.String())
+	logger.Sugar().Debugf("收到跨Pod消息: message_id=%d from=%d to=%d", payload.GetMessageId(), payload.GetFromId(), payload.GetToId())
 	if err := validatePostPayload(payload); err != nil {
 		return err
 	}
@@ -229,61 +231,69 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 	}
 
 	targetUserIDs := make([]string, 0, len(memberIDs))
-	memberIDByUserID := make(map[string]int64, len(memberIDs))
 	for _, memberID := range memberIDs {
 		if memberID == fromID {
 			continue
 		}
 		targetUserID := strconv.FormatInt(memberID, 10)
 		targetUserIDs = append(targetUserIDs, targetUserID)
-		memberIDByUserID[targetUserID] = memberID
 	}
-	publishMessagePushBestEffort(membersWithoutSender(memberIDs, fromID), payload, messageID)
+	pushErr := publishMessagePush(membersWithoutSender(memberIDs, fromID), payload, messageID)
 	containerByUserID, err := redisClient.GetContainersByConnections(targetUserIDs)
 	if err != nil {
-		return err
+		return errors.Join(err, pushErr)
 	}
 
-	delivered := 0
+	deliveryErr := routeGroupTargets(membersWithoutSender(memberIDs, fromID), containerByUserID, currentContainerID,
+		func(userID, topic string) error {
+			return routePostToTarget(userID, topic, currentContainerID, payload, message)
+		}, func(topic string, users []int64) error {
+			return routeGroupPostBatchCrossContainer(topic, users, payload)
+		})
+	return errors.Join(pushErr, deliveryErr)
+}
+
+func routeGroupTargets(memberIDs []int64, containerByUserID map[string]string, currentContainerID string, local func(string, string) error, remote func(string, []int64) error) error {
+	var deliveryErr error
 	crossContainerTargets := make(map[string][]int64)
-	for _, targetUserID := range targetUserIDs {
+	for _, memberID := range memberIDs {
+		targetUserID := strconv.FormatInt(memberID, 10)
 		targetTopic := containerByUserID[targetUserID]
 		if targetTopic == "" {
+			deliveryErr = errors.Join(deliveryErr, fmt.Errorf("群消息用户 %s: %w", targetUserID, routerpkg.ErrUserOffline))
 			continue
 		}
 
 		if targetTopic == currentContainerID {
-			if err := routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message); err != nil {
-				logger.Sugar().Errorf("群消息本地转发失败: group_id=%d, target_user=%s, err=%v", payload.GetToId(), targetUserID, err)
+			if err := local(targetUserID, targetTopic); err != nil {
+				deliveryErr = errors.Join(deliveryErr, err)
 				continue
 			}
-			delivered++
 			continue
 		}
 
-		memberID := memberIDByUserID[targetUserID]
 		crossContainerTargets[targetTopic] = append(crossContainerTargets[targetTopic], memberID)
 	}
 
 	for targetTopic, targetUserIDs := range crossContainerTargets {
-		if err := routeGroupPostBatchCrossContainer(targetTopic, targetUserIDs, payload); err != nil {
-			logger.Sugar().Errorf("群消息批量转发失败: group_id=%d, target_container=%s, targets=%d, err=%v", payload.GetToId(), targetTopic, len(targetUserIDs), err)
+		if err := remote(targetTopic, targetUserIDs); err != nil {
+			deliveryErr = errors.Join(deliveryErr, err)
 			continue
 		}
-		delivered += len(targetUserIDs)
 	}
 
-	logger.Sugar().Debugf("群消息处理完成: group_id=%d, delivered=%d", payload.GetToId(), delivered)
-	return nil
+	return deliveryErr
 }
 
-func publishMessagePushBestEffort(targetUserIDs []int64, payload *pb.Post, messageID int64) {
+func publishMessagePush(targetUserIDs []int64, payload *pb.Post, messageID int64) error {
 	if len(targetUserIDs) == 0 || payload == nil {
-		return
+		return nil
 	}
 	if err := publishPushRequest(buildMessagePushRequest(targetUserIDs, payload, messageID)); err != nil {
 		logger.Sugar().Warnf("发布普通消息APNs请求失败: sender_user_id=%d conversation_id=%d targets=%d error=%v", payload.GetFromId(), payload.GetToId(), len(targetUserIDs), err)
+		return err
 	}
+	return nil
 }
 
 func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post, messageID int64) *pushpb.RequestMessage {
@@ -404,7 +414,7 @@ func buildGroupPostDeliveryEnvelopeBytes(targetUserIDs []int64, payload *pb.Post
 func routePostToTarget(targetUserID, targetTopic, currentContainerID string, payload *pb.Post, message *pb.RequestMessage) error {
 	if targetTopic == "" {
 		logger.Sugar().Debugf("%s 用户不在线，消息已保存", targetUserID)
-		return nil
+		return routerpkg.ErrUserOffline
 	}
 
 	wsHandler := GetWebSocketHandler()

@@ -14,6 +14,7 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 
 - WebSocket + Protobuf 客户端长连接，Redis 保存跨 DataForwarding Pod 的路由状态。
 - Kafka 解耦消息存储、好友与群组、通话信令及推送任务。
+- [广播频道](CHANNELS.md)：公开发现/订阅、私有邀请、管理员发布与完整历史分页。
 - PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
 - Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
 - RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。

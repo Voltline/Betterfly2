@@ -3,8 +3,10 @@ package publisher
 import (
 	"Betterfly2/shared/logger"
 	"context"
+	"crypto/rand"
 	"data_forwarding_service/config"
 	"data_forwarding_service/internal/utils"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -85,7 +87,14 @@ func InitKafkaProducer() error {
 
 // PublishMessage 发布消息到 Kafka
 func PublishMessage(message string, targetTopic string) error {
-	return PublishRawMessage([]byte(message), targetTopic, nil)
+	// Assign identity before SendMessage so broker retries keep the same event ID.
+	var identity [16]byte
+	if _, err := rand.Read(identity[:]); err != nil {
+		return fmt.Errorf("生成Kafka事件ID失败: %w", err)
+	}
+	return PublishRawMessage([]byte(message), targetTopic, []sarama.RecordHeader{
+		{Key: []byte("event_id"), Value: []byte(hex.EncodeToString(identity[:]))},
+	})
 }
 
 // PublishRawMessage publishes binary data without string or JSON re-encoding.

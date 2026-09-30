@@ -41,8 +41,7 @@ func TestHandleMessageDatabaseFailureIsRetriedWithoutCompletedInbox(t *testing.T
 	mock.ExpectQuery(`SELECT friends\.friend_id AS user_id`).WillReturnRows(sqlmock.NewRows([]string{
 		"user_id", "account", "name", "avatar", "alias", "is_notify", "update_time",
 	}))
-	mock.ExpectExec(`INSERT INTO "outbox_events"`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := handler.HandleMessage(ctx, payload); err != nil {
 		t.Fatalf("retry after transient failure failed: %v", err)
@@ -114,6 +113,7 @@ func TestHandleQueryGroup_AllowsNonMemberLookup(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"group_id", "name", "avatar", "owner_user_id", "is_delete", "update_time",
 		}).AddRow(3001, "test-group", "group-avatar", 1001, false, "2026-04-16 12:00:00"))
+	expectOrdinaryGroup(t, mock, 3001)
 
 	resp, err := handler.handleQueryGroupWithDB(handler.database, req, req.GetQueryGroup())
 	if err != nil {
@@ -154,7 +154,7 @@ func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
 		},
 	}
 
-	mock.ExpectQuery(`SELECT groups\.group_id, groups\.name AS group_name, groups\.avatar, groups\.owner_user_id, groups\.update_time FROM "group_members" JOIN groups ON groups\.group_id = group_members\.group_id WHERE group_members\.user_id = \$1 AND groups\.is_delete = \$2 ORDER BY groups\.group_id ASC`).
+	mock.ExpectQuery(`(?s)SELECT groups\.group_id, groups\.name AS group_name.*AS is_channel.*LEFT JOIN channel_settings.*ORDER BY groups\.group_id ASC`).
 		WithArgs(int64(2001), false).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"group_id", "group_name", "avatar", "owner_user_id", "update_time",
@@ -197,6 +197,7 @@ func TestHandleRemoveGroupMember_LastOwnerLeavesAndClosesGroup(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
+	expectOrdinaryGroup(t, mock, 3001)
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END,update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows())
@@ -230,6 +231,7 @@ func TestHandleRemoveGroupMember_OwnerTransfersBeforeLeaving(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 ORDER BY "group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1001, "owner", "2026-07-11T01:00:00Z"))
+	expectOrdinaryGroup(t, mock, 3001)
 	mock.ExpectQuery(`SELECT \* FROM "group_members" WHERE group_id = \$1 AND user_id <> \$2 ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END,update_time ASC,user_id ASC,"group_members"\."group_id" LIMIT \$3 FOR UPDATE`).
 		WithArgs(int64(3001), int64(1001), 1).
 		WillReturnRows(groupMemberRows().AddRow(3001, 1002, "member", "2026-07-11T02:00:00Z"))
@@ -357,6 +359,7 @@ func TestHandleQueryGroupMembersMapsActiveMembers(t *testing.T) {
 	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
 		WithArgs(int64(3001), int64(1001)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	expectOrdinaryGroup(t, mock, 3001)
 	mock.ExpectQuery(`SELECT group_members\.user_id, users\.account, users\.name, users\.avatar, group_members\.role, group_members\.update_time FROM "group_members" JOIN users ON users\.id = group_members\.user_id WHERE group_members\.group_id = \$1 ORDER BY group_members\.user_id ASC`).
 		WithArgs(int64(3001)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "account", "name", "avatar", "role", "update_time"}).

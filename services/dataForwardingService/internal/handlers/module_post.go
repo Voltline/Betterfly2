@@ -26,10 +26,16 @@ func init() {
 	registerDFRequestModule(registerPostModule)
 }
 
+var errPostForbidden = errors.New("当前用户无群或频道发帖权限")
+
 func registerPostModule(router *dispatch.OneofRouter[dfRequestContext, dfRequestResult]) {
 	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_Post) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
-		return dfRequestResult{}, handlePostMessage(ctx.fromID, ctx.message)
+		err := handlePostMessage(ctx.fromID, ctx.message)
+		if errors.Is(err, errPostForbidden) {
+			return dfRequestResult{response: &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: errPostForbidden.Error()}}}}, nil
+		}
+		return dfRequestResult{}, err
 	})
 }
 
@@ -78,12 +84,12 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	}
 
 	if payload.GetIsGroup() {
-		isMember, err := sharedDB.IsActiveGroupMember(payload.GetToId(), fromID)
+		isMember, err := sharedDB.CanPublishGroupMessageWithDB(sharedDB.DB(), payload.GetToId(), fromID)
 		if err != nil {
 			return err
 		}
 		if !isMember {
-			return errors.New("当前用户不在该群中，无法发送群消息")
+			return errPostForbidden
 		}
 	}
 
@@ -221,7 +227,7 @@ func ValidatePostPayload(payload *pb.Post) error {
 }
 
 func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
-	isMember, err := sharedDB.IsActiveGroupMember(payload.GetToId(), fromID)
+	isMember, err := sharedDB.CanPublishGroupMessageWithDB(sharedDB.DB(), payload.GetToId(), fromID)
 	if err != nil {
 		return err
 	}

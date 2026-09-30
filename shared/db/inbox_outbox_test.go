@@ -32,8 +32,7 @@ func expectSuccessfulInboxTransaction(mock sqlmock.Sqlmock) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO test_side_effects`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`INSERT INTO "outbox_events"`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 }
 
@@ -114,6 +113,75 @@ func TestExecuteInboxOutboxReplaysCompletedOperationWithoutBusinessWrite(t *test
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExecuteInboxOutboxCompletionFailuresRollBack(t *testing.T) {
+	for _, failure := range []string{"write", "fencing", "commit", "invalid_event"} {
+		t.Run(failure, func(t *testing.T) {
+			database, mock := newInboxDatabase(t)
+			mock.ExpectBegin()
+			mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(`INSERT INTO test_side_effects`).WillReturnResult(sqlmock.NewResult(0, 1))
+			injected := errors.New("injected completion failure")
+			switch failure {
+			case "write":
+				mock.ExpectExec(`WITH persisted_events AS`).WillReturnError(injected)
+				mock.ExpectRollback()
+			case "fencing":
+				mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectRollback()
+			case "commit":
+				mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit().WillReturnError(injected)
+			case "invalid_event":
+				mock.ExpectRollback()
+			}
+			_, err := ExecuteInboxOutbox(context.Background(), database, "storage", "completion-failure", func(tx *gorm.DB) ([]byte, []PendingOutboxEvent, error) {
+				if err := tx.Exec(`INSERT INTO test_side_effects (id) VALUES (1)`).Error; err != nil {
+					return nil, nil, err
+				}
+				event := PendingOutboxEvent{EventID: "event-failure", Topic: "df-pod", Payload: []byte{0, 255, 42}}
+				if failure == "invalid_event" {
+					event.Topic = ""
+				}
+				return []byte("response"), []PendingOutboxEvent{event}, nil
+			})
+			if err == nil {
+				t.Fatal("failed completion was reported successful")
+			}
+			if failure == "fencing" && !errors.Is(err, ErrInboxIncomplete) {
+				t.Fatalf("expected fencing failure, got %v", err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestExecuteInboxOutboxZeroAndMultipleEventsUseOneCompletionStatement(t *testing.T) {
+	for _, count := range []int{0, 2} {
+		t.Run(map[int]string{0: "zero", 2: "multiple"}[count], func(t *testing.T) {
+			database, mock := newInboxDatabase(t)
+			mock.ExpectBegin()
+			mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+			_, err := ExecuteInboxOutbox(context.Background(), database, "push", "event-count", func(*gorm.DB) ([]byte, []PendingOutboxEvent, error) {
+				var events []PendingOutboxEvent
+				for i := 0; i < count; i++ {
+					events = append(events, PendingOutboxEvent{EventID: StableEventID("push", "event-count", strings.Repeat("x", i+1)), Topic: "df", Payload: []byte{0, 255}})
+				}
+				return []byte("response"), events, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

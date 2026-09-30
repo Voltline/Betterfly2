@@ -64,6 +64,8 @@ func TestDirectMessageAuthorizationFromCache(t *testing.T) {
 }
 
 func TestGroupMessageSenderCanReadWithoutMembership(t *testing.T) {
+	mock := useMockDB(t)
+	expectOrdinaryGroup(mock, 9001)
 	message := &db.Message{MessageID: 42, FromUserID: 1001, ToUserID: 9001, Timestamp: "2026-07-13T01:00:00Z", IsGroup: true}
 	l1 := newMockCache()
 	l1.Set("message:42", message, 0)
@@ -90,6 +92,7 @@ func TestGroupMessageAuthorizationUsesCurrentMembershipAndJoinedAt(t *testing.T)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := useMockDB(t)
+			expectOrdinaryGroup(mock, 9001)
 			mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 AND COALESCE\(NULLIF\(joined_at, ''\), update_time\) <= \$3`).
 				WithArgs(int64(9001), int64(1002), "2026-07-13T01:00:00Z").
 				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(test.memberCount))
@@ -113,6 +116,7 @@ func TestGroupMessageAuthorizationUsesCurrentMembershipAndJoinedAt(t *testing.T)
 
 func TestL2MessageCacheHitStillChecksAuthorization(t *testing.T) {
 	mock := useMockDB(t)
+	expectOrdinaryGroup(mock, 9001)
 	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 AND COALESCE\(NULLIF\(joined_at, ''\), update_time\) <= \$3`).
 		WithArgs(int64(9001), int64(1002), "2026-07-13T01:00:00Z").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))

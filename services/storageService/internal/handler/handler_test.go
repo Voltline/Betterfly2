@@ -19,7 +19,8 @@ import (
 
 func TestHandleMessageDatabaseFailureIsRetriedWithoutCompletedInbox(t *testing.T) {
 	database, mock := setupMockDB(t)
-	handler := &StorageHandler{l1Cache: newMockCache(), database: database}
+	committed := make(chan struct{}, 1)
+	handler := &StorageHandler{l1Cache: newMockCache(), database: database, outboxCommitted: committed}
 	request := &storage.RequestMessage{
 		FromKafkaTopic: "df-storage-test", TargetUserId: 1001,
 		Payload: &storage.RequestMessage_QueryMessage{QueryMessage: &storage.QueryMessage{MessageId: 77}},
@@ -38,20 +39,101 @@ func TestHandleMessageDatabaseFailureIsRetriedWithoutCompletedInbox(t *testing.T
 	if err := handler.HandleMessage(ctx, payload); !errors.Is(err, injected) {
 		t.Fatalf("expected transient database error, got %v", err)
 	}
+	if len(committed) != 0 {
+		t.Fatal("rolled-back operation woke the outbox relay")
+	}
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`SELECT \* FROM "messages"`).WillReturnRows(sqlmock.NewRows([]string{
 		"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "is_group",
 	}))
-	mock.ExpectExec(`INSERT INTO "outbox_events"`).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`UPDATE "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	if err := handler.HandleMessage(ctx, payload); err != nil {
 		t.Fatalf("retry after transient failure failed: %v", err)
 	}
+	if len(committed) != 1 {
+		t.Fatal("committed operation did not wake the outbox relay")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHandleMessageCommitFailureDoesNotWakeOutbox(t *testing.T) {
+	database, mock := setupMockDB(t)
+	committed := make(chan struct{}, 1)
+	handler := &StorageHandler{l1Cache: newMockCache(), database: database, outboxCommitted: committed}
+	payload, err := proto.Marshal(&storage.RequestMessage{
+		FromKafkaTopic: "df-test", TargetUserId: 1001,
+		Payload: &storage.RequestMessage_QueryMessage{QueryMessage: &storage.QueryMessage{MessageId: 88}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := kafkaconsumer.WithOperationKey(context.Background(), "commit-failure")
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT \* FROM "messages"`).WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
+	mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
+	injected := errors.New("commit failed")
+	mock.ExpectCommit().WillReturnError(injected)
+	if err := handler.HandleMessage(ctx, payload); !errors.Is(err, injected) {
+		t.Fatalf("expected commit failure, got %v", err)
+	}
+	if len(committed) != 0 {
+		t.Fatal("failed commit woke the relay")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHandleMessageWakeupCoalescesAndReplayDoesNotWake(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%t", replay), func(t *testing.T) {
+			database, mock := setupMockDB(t)
+			committed := make(chan struct{}, 1)
+			if !replay {
+				committed <- struct{}{} // A pending wakeup must never block another commit.
+			}
+			handler := &StorageHandler{l1Cache: newMockCache(), database: database, outboxCommitted: committed}
+			payload, err := proto.Marshal(&storage.RequestMessage{
+				FromKafkaTopic: "df-test", TargetUserId: 1001,
+				Payload: &storage.RequestMessage_QueryMessage{QueryMessage: &storage.QueryMessage{MessageId: 88}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mock.ExpectBegin()
+			if replay {
+				mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 0))
+				mock.ExpectQuery(`SELECT \* FROM "consumer_inboxes"`).WillReturnRows(sqlmock.NewRows([]string{"status", "response_payload"}).AddRow(db.InboxStatusCompleted, []byte("response")))
+			} else {
+				mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectQuery(`SELECT \* FROM "messages"`).WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
+				mock.ExpectExec(`WITH persisted_events AS`).WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectCommit()
+			ctx := kafkaconsumer.WithOperationKey(context.Background(), "coalesced-commit")
+			done := make(chan error, 1)
+			go func() { done <- handler.HandleMessage(ctx, payload) }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pending wakeup blocked the consumer")
+			}
+			if replay && len(committed) != 0 {
+				t.Fatal("completed replay generated another wakeup")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -237,6 +319,7 @@ func TestHandleRecallMessagePersistsAndReturnsRoutingMetadata(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"message_id", "from_user_id", "to_user_id", "content", "timestamp", "message_type", "real_file_name", "is_group", "is_recalled", "recalled_at", "recalled_by",
 		}).AddRow(77, 1001, 9001, "hello", sentAt, "text", "", true, false, "", 0))
+	expectOrdinaryGroup(mock, 9001)
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE "messages" SET "is_recalled"=\$1,"recalled_at"=\$2,"recalled_by"=\$3 WHERE message_id = \$4 AND is_recalled = \$5`).
 		WithArgs(true, sqlmock.AnyArg(), int64(1001), int64(77), false).

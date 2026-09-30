@@ -101,6 +101,8 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 
 	var dfResp *pb.ResponseMessage
 	switch payload := friendResp.Payload.(type) {
+	case *friend.ResponseMessage_ChannelResponse:
+		dfResp = &pb.ResponseMessage{Payload: &pb.ResponseMessage_ChannelResponse{ChannelResponse: payload.ChannelResponse}}
 	case *friend.ResponseMessage_RelationshipRequestListRsp:
 		dfResp = buildRelationshipRequestListResponse(payload.RelationshipRequestListRsp)
 	case *friend.ResponseMessage_RelationshipOperationRsp:
@@ -306,6 +308,7 @@ func buildGroupInfoResponse(groupInfo *friend.GroupInfoRsp) *pb.ResponseMessage 
 				ClientNeedSave: groupInfo.GetClientNeedSave(),
 				QueryGroupId:   groupInfo.GetGroupId(),
 				QueryGroupName: groupInfo.GetGroupName(),
+				IsChannel:      groupInfo.GetIsChannel(),
 				Avatar:         groupInfo.GetAvatar(),
 			},
 		},
@@ -344,6 +347,7 @@ func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.Respons
 			Avatar:      group.GetAvatar(),
 			OwnerUserId: group.GetOwnerUserId(),
 			UpdateTime:  group.GetUpdateTime(),
+			IsChannel:   group.GetIsChannel(),
 		})
 	}
 
@@ -578,6 +582,13 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 	// 构建data_forwarding响应消息
 	var dfResp *pb.ResponseMessage
 	var err error
+	if payload, ok := storageResp.Payload.(*storage.ResponseMessage_ChannelResponse); ok {
+		encoded, err := proto.Marshal(&pb.ResponseMessage{Payload: &pb.ResponseMessage_ChannelResponse{ChannelResponse: payload.ChannelResponse}})
+		if err != nil {
+			return err
+		}
+		return h.wsHandler.SendMessage(strconv.FormatInt(storageResp.GetTargetUserId(), 10), encoded)
+	}
 
 	// 处理没有payload的响应（如更新操作）
 	if storageResp.Payload == nil {

@@ -75,6 +75,7 @@ message GroupInfo {
   int64 query_group_id = 2;
   string query_group_name = 3;
   string avatar = 4;
+  bool is_channel = 5;
 }
 
 message GroupMemberInfo {
@@ -97,6 +98,7 @@ message JoinedGroupInfo {
   string avatar = 3;
   int64 owner_user_id = 4;
   string update_time = 5;
+  bool is_channel = 6;
 }
 
 message JoinedGroupsRsp {

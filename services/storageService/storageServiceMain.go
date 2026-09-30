@@ -18,6 +18,7 @@ import (
 
 	"storageService/internal/cache"
 	"storageService/internal/consumer"
+	"storageService/internal/handler"
 	"storageService/internal/http_server"
 	"storageService/internal/publisher"
 
@@ -57,6 +58,10 @@ func main() {
 
 	// Inbox事务提交后由Outbox后台投递响应，Kafka offset不再依赖同步网络发布。
 	database := db.DB()
+	committed := make(chan struct{}, 1)
+	storageHandler := handler.NewStorageHandler(committed)
+	relayConfig := outbox.LoadConfig("storage", "STORAGE")
+	relayConfig.Committed = committed
 	relay := outbox.New(database, func(publishCtx context.Context, event db.OutboxEvent) error {
 		headers := []sarama.RecordHeader{
 			{Key: []byte("event_id"), Value: []byte(event.EventID)},
@@ -64,7 +69,7 @@ func main() {
 			{Key: []byte("outbox_service"), Value: []byte(event.Service)},
 		}
 		return publisher.PublishRawMessageContext(publishCtx, event.Payload, event.Topic, headers)
-	}, outbox.LoadConfig("storage", "STORAGE"))
+	}, relayConfig)
 	go func() {
 		if err := relay.Run(ctx); err != nil && ctx.Err() == nil {
 			sugar.Errorf("Storage Outbox relay退出: %v", err)
@@ -105,7 +110,7 @@ func main() {
 	sugar.Infoln("启动 Kafka 消费者...")
 	consumerErrCh := make(chan error, 1)
 	go func() {
-		consumerErrCh <- startKafkaConsumer(ctx)
+		consumerErrCh <- startKafkaConsumer(ctx, storageHandler)
 	}()
 
 	sugar.Infoln("存储服务启动完成，等待终止信号...")
@@ -179,7 +184,7 @@ func initCache() {
 }
 
 // startKafkaConsumer 启动 Kafka 消费者并阻塞直到上下文取消或消费失败
-func startKafkaConsumer(ctx context.Context) error {
+func startKafkaConsumer(ctx context.Context, storageHandler *handler.StorageHandler) error {
 	sugar := logger.Sugar()
 
 	// 配置
@@ -230,7 +235,7 @@ func startKafkaConsumer(ctx context.Context) error {
 	}()
 
 	// 创建消息处理器
-	handler := consumer.NewKafkaConsumerGroupHandler(nil)
+	handler := consumer.NewKafkaConsumerGroupHandler(storageHandler)
 
 	// 消费循环遵循外部上下文，避免阻塞主启动流程。
 	sugar.Info("启动 Kafka 消息消费循环...")

@@ -50,6 +50,11 @@ func (s *GormStore) MessagePresentation(ctx context.Context, senderUserID, conve
 	presentation.AvatarIsGroup = true
 	presentation.ConversationName = groupName
 	presentation.ConversationAvatar = group.Avatar
+	settings, err := db.GetChannelSettingsWithDB(s.db.WithContext(ctx), conversationID)
+	if err != nil {
+		return MessagePresentation{}, err
+	}
+	presentation.IsChannel = settings != nil
 	return presentation, nil
 }
 

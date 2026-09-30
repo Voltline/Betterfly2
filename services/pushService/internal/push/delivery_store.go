@@ -40,10 +40,15 @@ SELECT updated.message_id, updated.token_id, updated.job_id, updated.attempt, up
   updated.delivery_created_at,
   token.user_id, token.device_id, token.token, token.environment, token.push_type, token.bundle_id,
   token.is_active, token.created_at AS token_created_at, token.updated_at AS token_updated_at,
-  job.request_payload
+  job.request_payload, (channel.group_id IS NOT NULL) AS is_channel,
+  (channel.group_id IS NOT NULL AND (active_group.group_id IS NULL OR member.user_id IS NULL)) AS recipient_excluded
 FROM updated
 LEFT JOIN push_device_tokens AS token ON token.id = updated.token_id
 JOIN push_jobs AS job ON job.job_id = updated.job_id
+LEFT JOIN messages AS message ON message.message_id = ABS(updated.message_id) AND message.is_group = TRUE
+LEFT JOIN channel_settings AS channel ON channel.group_id = message.to_user_id
+LEFT JOIN groups AS active_group ON active_group.group_id = channel.group_id AND active_group.is_delete = FALSE
+LEFT JOIN group_members AS member ON member.group_id = channel.group_id AND member.user_id = token.user_id
 ORDER BY updated.message_id ASC, updated.token_id ASC`
 
 const claimVoIPDeliverySQL = `WITH candidates AS (
@@ -77,6 +82,8 @@ JOIN push_jobs AS job ON job.job_id = updated.job_id
 ORDER BY updated.call_id ASC, updated.token_id ASC`
 
 type durableClaimRow struct {
+	IsChannel         bool   `gorm:"column:is_channel"`
+	RecipientExcluded bool   `gorm:"column:recipient_excluded"`
 	JobID             string `gorm:"column:job_id"`
 	MessageID         int64  `gorm:"column:message_id"`
 	CallID            string `gorm:"column:call_id"`
@@ -148,7 +155,9 @@ func (s *GormStore) claimDeliveryBatch(ctx context.Context, kind deliveryKind, q
 	for _, row := range rows {
 		queuedAt, _ := time.Parse(time.RFC3339Nano, row.DeliveryCreatedAt)
 		claims = append(claims, DurableDeliveryClaim{
-			JobID: row.JobID, MessageID: row.MessageID, CallID: row.CallID,
+			IsChannel:         row.IsChannel,
+			RecipientExcluded: row.RecipientExcluded,
+			JobID:             row.JobID, MessageID: row.MessageID, CallID: row.CallID,
 			Token: db.PushDeviceToken{
 				ID: row.TokenID, UserID: row.UserID, DeviceID: row.DeviceID, Token: row.TokenValue,
 				Environment: row.Environment, PushType: row.PushType, BundleID: row.BundleID,

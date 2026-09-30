@@ -160,7 +160,7 @@ func (s *Service) AdminSendMessage(ctx context.Context, request AdminMessageRequ
 	body := strings.TrimSpace(request.Body)
 	if body == "" {
 		body = defaultMessagePreview(request.MessageType)
-		if request.IsGroup && presentation.SenderName != "" {
+		if request.IsGroup && !presentation.IsChannel && presentation.SenderName != "" {
 			body = presentation.SenderName + "：" + body
 		}
 	}
@@ -170,6 +170,7 @@ func (s *Service) AdminSendMessage(ctx context.Context, request AdminMessageRequ
 			Kind: NotificationMessage, Token: token.Token, Environment: parseEnvironment(token.Environment),
 			SenderUserID: request.SenderUserID, TargetUserID: token.UserID,
 			ConversationID: request.ConversationID, IsGroup: request.IsGroup,
+			IsChannel:   presentation.IsChannel,
 			MessageType: strings.TrimSpace(request.MessageType), SentAt: now, ExpiresAt: now.Add(24 * time.Hour),
 			Title: title, Body: body, CustomData: request.CustomData,
 			SenderName: presentation.SenderName, SenderAvatar: presentation.SenderAvatar, GroupName: presentation.GroupName,

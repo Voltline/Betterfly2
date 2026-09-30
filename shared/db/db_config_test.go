@@ -29,7 +29,7 @@ func TestStartupRequiresPublishedRecallSchema(t *testing.T) {
 		mock.ExpectQuery(`(?s)SELECT count\(\*\) FROM information_schema.tables`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectQuery(`SELECT COALESCE\(MAX\(version\), 0\) FROM "schema_migrations"`).WillReturnRows(sqlmock.NewRows([]string{"version"}).AddRow(version))
 		err := CheckSchemaVersion(database)
-		if (err != nil) != (version < 5) {
+		if (err != nil) != (version < CurrentSchemaVersion) {
 			t.Fatalf("schema %d error=%v", version, err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {

@@ -98,7 +98,27 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 		return nil, err
 	}
 
-	if message.FromUserID != operatorUserID {
+	channelManager := false
+	if message.IsGroup {
+		settings, settingsErr := GetChannelSettingsWithDB(database, message.ToUserID)
+		if settingsErr != nil {
+			return nil, settingsErr
+		}
+		if settings != nil {
+			view, viewErr := GetChannelWithDB(database, operatorUserID, message.ToUserID, "")
+			if errors.Is(viewErr, ErrChannelNotFound) {
+				return &MessageRecallOutcome{Status: MessageRecallNotFound}, nil
+			}
+			if viewErr != nil {
+				return nil, viewErr
+			}
+			channelManager = view.MyRole == "owner" || view.MyRole == "admin"
+			if !channelManager {
+				return &MessageRecallOutcome{Status: MessageRecallForbidden}, nil
+			}
+		}
+	}
+	if !channelManager && message.FromUserID != operatorUserID {
 		canRead, authErr := CanUserReadMessageWithDB(database, operatorUserID, &message)
 		if authErr != nil {
 			return nil, authErr
@@ -117,7 +137,7 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 	if err != nil {
 		return nil, err
 	}
-	if now.UTC().Sub(sentAt.UTC()) > MessageRecallWindow {
+	if !channelManager && now.UTC().Sub(sentAt.UTC()) > MessageRecallWindow {
 		return &MessageRecallOutcome{Message: &message, Status: MessageRecallExpired}, nil
 	}
 
@@ -158,7 +178,7 @@ type SyncMessagesPage struct {
 // 1. 该用户发送或接收的单聊消息
 // 2. 该用户当前已加入群组中的群聊消息
 // 群聊消息会额外要求消息时间不早于该成员的入群时间，
-// 避免把用户入群前的旧消息同步回来。
+// 避免把用户入群前的旧消息同步回来。频道订阅者可以读取完整历史。
 func GetSyncMessagesPageWithDB(database *gorm.DB, toUserID int64, cursorTimestamp string, cursorMessageID int64, pageSize int) (*SyncMessagesPage, error) {
 	if pageSize <= 0 {
 		pageSize = DefaultSyncPageSize
@@ -205,9 +225,10 @@ FROM (
   JOIN messages AS m
     ON m.to_user_id = gm.group_id
    AND m.is_group = TRUE
-   AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time)
    AND (m.timestamp > ? OR (m.timestamp = ? AND m.message_id > ?))
+  LEFT JOIN channel_settings AS channel ON channel.group_id = gm.group_id
   WHERE gm.user_id = ?
+    AND (channel.group_id IS NOT NULL OR m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
 ) AS sync_messages
 ORDER BY timestamp ASC, message_id ASC
 LIMIT ?
@@ -240,10 +261,13 @@ WHERE m.is_recalled = TRUE
   AND (m.recalled_at > ? OR (m.recalled_at = ? AND m.message_id > ?))
   AND (
     (m.is_group = FALSE AND (m.from_user_id = ? OR m.to_user_id = ?))
-    OR (m.is_group = TRUE AND (m.from_user_id = ? OR EXISTS (
+    OR (m.is_group = TRUE AND ((m.from_user_id = ? AND NOT EXISTS (
+      SELECT 1 FROM channel_settings WHERE group_id = m.to_user_id
+    )) OR EXISTS (
       SELECT 1 FROM group_members AS gm
       WHERE gm.group_id = m.to_user_id AND gm.user_id = ?
-        AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time)
+        AND (EXISTS (SELECT 1 FROM channel_settings WHERE group_id = gm.group_id)
+          OR m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
     )))
   )
 ORDER BY m.recalled_at ASC, m.message_id ASC LIMIT ?
@@ -283,12 +307,23 @@ func CanUserReadMessageWithDB(database *gorm.DB, requesterID int64, message *Mes
 	if !message.IsGroup {
 		return requesterID == message.FromUserID || requesterID == message.ToUserID, nil
 	}
+	settings, err := GetChannelSettingsWithDB(database, message.ToUserID)
+	if err != nil {
+		return false, err
+	}
+	if settings != nil {
+		_, err := GetChannelWithDB(database, requesterID, message.ToUserID, "")
+		if errors.Is(err, ErrChannelNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	}
 	if requesterID == message.FromUserID {
 		return true, nil
 	}
 
 	var count int64
-	err := database.Model(&GroupMember{}).
+	err = database.Model(&GroupMember{}).
 		Where(
 			"group_id = ? AND user_id = ? AND COALESCE(NULLIF(joined_at, ''), update_time) <= ?",
 			message.ToUserID,

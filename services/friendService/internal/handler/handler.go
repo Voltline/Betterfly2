@@ -344,6 +344,19 @@ func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.Re
 		}, nil
 	}
 
+	settings, err := db.GetChannelSettingsWithDB(database, group.GroupID)
+	if err != nil {
+		return nil, err
+	}
+	if settings != nil && !settings.IsPublic {
+		member, err := db.IsActiveGroupMemberWithDB(database, group.GroupID, payload.GetRequestUserId())
+		if err != nil {
+			return nil, err
+		}
+		if !member {
+			return &friend.ResponseMessage{Result: friend.FriendResult_RECORD_NOT_EXIST, TargetUserId: req.TargetUserId}, nil
+		}
+	}
 	return &friend.ResponseMessage{
 		Result:       friend.FriendResult_FRIEND_OK,
 		TargetUserId: req.TargetUserId,
@@ -355,6 +368,7 @@ func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.Re
 				OwnerUserId:    group.OwnerUserID,
 				UpdateTime:     group.UpdateTime,
 				ClientNeedSave: payload.GetClientNeedSave(),
+				IsChannel:      settings != nil,
 			},
 		},
 	}, nil
@@ -438,6 +452,19 @@ func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *fr
 		}, nil
 	}
 
+	settings, err := db.GetChannelSettingsWithDB(database, payload.GetGroupId())
+	if err != nil {
+		return nil, err
+	}
+	if settings != nil {
+		_, manager, err := db.RequireGroupManagerWithDB(database, payload.GetGroupId(), payload.GetRequestUserId())
+		if err != nil {
+			return nil, err
+		}
+		if !manager {
+			return &friend.ResponseMessage{Result: friend.FriendResult_FORBIDDEN, TargetUserId: req.TargetUserId}, nil
+		}
+	}
 	members, err := db.GetGroupMembersWithDB(database, payload.GetGroupId())
 	if err != nil {
 		return nil, err
@@ -489,6 +516,7 @@ func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *fr
 			Avatar:      group.Avatar,
 			OwnerUserId: group.OwnerUserID,
 			UpdateTime:  group.UpdateTime,
+			IsChannel:   group.IsChannel,
 		})
 	}
 
@@ -533,6 +561,12 @@ func (h *FriendHandler) handleRemoveGroupMemberWithDB(database *gorm.DB, req *fr
 	database = h.resolveDatabase(database)
 
 	groupExists, removed, updateTime, err := db.RemoveUserFromGroupWithDB(database, payload.GetGroupId(), payload.GetUserId())
+	if errors.Is(err, db.ErrChannelInvalidState) {
+		return &friend.ResponseMessage{Result: friend.FriendResult_INVALID_STATE, TargetUserId: req.TargetUserId,
+			Payload: &friend.ResponseMessage_GroupOperationRsp{GroupOperationRsp: &friend.GroupOperationRsp{
+				Operation: "remove_group_member", GroupId: payload.GetGroupId(), UserId: payload.GetUserId(),
+			}}}, nil
+	}
 	if err != nil {
 		return nil, err
 	}

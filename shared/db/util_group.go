@@ -15,6 +15,7 @@ type GroupMemberContact struct {
 	Avatar     string `gorm:"column:avatar"`
 	Role       string `gorm:"column:role"`
 	UpdateTime string `gorm:"column:update_time"`
+	JoinedAt   string `gorm:"column:joined_at"`
 }
 
 type JoinedGroupContact struct {
@@ -23,6 +24,7 @@ type JoinedGroupContact struct {
 	Avatar      string `gorm:"column:avatar"`
 	OwnerUserID int64  `gorm:"column:owner_user_id"`
 	UpdateTime  string `gorm:"column:update_time"`
+	IsChannel   bool   `gorm:"column:is_channel"`
 }
 
 func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
@@ -48,6 +50,16 @@ func CreateGroupWithOwnerWithDB(database *gorm.DB, ownerUserID, groupID int64, g
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var group Group
 		err := tx.Where("group_id = ?", groupID).First(&group).Error
+		if err == nil && group.IsDelete {
+			settings, lookupErr := GetChannelSettingsWithDB(tx, groupID)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			if settings != nil {
+				alreadyExists = true // Legacy group creation cannot revive a deleted channel.
+				return nil
+			}
+		}
 		if err == nil && !group.IsDelete {
 			alreadyExists = true
 			return nil
@@ -166,8 +178,9 @@ func GetJoinedGroupsWithDB(database *gorm.DB, userID int64) ([]JoinedGroupContac
 	var groups []JoinedGroupContact
 	err := database.
 		Table("group_members").
-		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time").
+		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time, (channel_settings.group_id IS NOT NULL) AS is_channel").
 		Joins("JOIN groups ON groups.group_id = group_members.group_id").
+		Joins("LEFT JOIN channel_settings ON channel_settings.group_id = groups.group_id").
 		Where("group_members.user_id = ? AND groups.is_delete = ?", userID, false).
 		Order("groups.group_id ASC").
 		Scan(&groups).Error
@@ -204,6 +217,13 @@ func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, 
 		}
 
 		if group.OwnerUserID == userID {
+			settings, err := GetChannelSettingsWithDB(tx, groupID)
+			if err != nil {
+				return err
+			}
+			if settings != nil {
+				return ErrChannelInvalidState
+			}
 			var successor GroupMember
 			err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("group_id = ? AND user_id <> ?", groupID, userID).

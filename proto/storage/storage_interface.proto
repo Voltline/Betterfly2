@@ -4,6 +4,7 @@ option go_package = "Betterfly2/proto/storage";
 
 import "storage/request.proto";
 import "storage/response.proto";
+import "channel/channel.proto";
 
 enum StorageResult {
   OK = 0;
@@ -27,6 +28,7 @@ message RequestMessage {
     QueryUser query_user = 8;
     QueryFileExists query_file_exists = 9;
     RecallMessage recall_message = 10;
+    channel_interface.QueryChannelHistory query_channel_history = 11;
   }
 }
 
@@ -40,5 +42,6 @@ message ResponseMessage {
     UserInfoRsp user_info_rsp = 6;
     FileExistsRsp file_exists_rsp = 7;
     RecallMessageRsp recall_message_rsp = 8;
+    channel_interface.ChannelResponse channel_response = 9;
   }
 }

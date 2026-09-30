@@ -43,7 +43,7 @@ func (h *KafkaConsumerGroupHandler) ConsumeClaim(session sarama.ConsumerGroupSes
 
 func (h *KafkaConsumerGroupHandler) initialize() {
 	if h.handler == nil {
-		h.handler = handler.NewStorageHandler()
+		h.handler = handler.NewStorageHandler(nil)
 	}
 	if h.reliable != nil {
 		return

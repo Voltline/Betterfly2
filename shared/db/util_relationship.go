@@ -99,6 +99,13 @@ func CreateGroupJoinRequestWithDB(database *gorm.DB, userID, groupID int64, mess
 		}
 		return nil, false, err
 	}
+	settings, err := GetChannelSettingsWithDB(database, groupID)
+	if err != nil {
+		return nil, false, err
+	}
+	if settings != nil && !settings.IsPublic {
+		return nil, false, ErrRelationshipNotFound
+	}
 	key := fmt.Sprintf("group_join:%d:%d", groupID, userID)
 	request, created, err := createPendingRequest(database, RelationshipRequest{
 		RequestType: RequestTypeGroupJoin, RequesterUserID: userID, GroupID: groupID,

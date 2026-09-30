@@ -312,6 +312,9 @@ func marshalMessageRecallPayload(notification pushservice.Notification) ([]byte,
 		"recalled_at":             notification.SentAt.UTC().Format(time.RFC3339Nano),
 		"notification_identifier": identifier,
 	}
+	if notification.IsChannel {
+		payload["is_channel"] = true
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -382,6 +385,9 @@ func marshalMessagePayload(notification pushservice.Notification) ([]byte, error
 		"conversation_name":          strings.TrimSpace(notification.ConversationName),
 		"conversation_avatar":        strings.TrimSpace(notification.ConversationAvatar),
 		"communication_notification": true,
+	}
+	if notification.IsChannel {
+		payload["is_channel"] = true
 	}
 	if len(notification.CustomData) > 0 {
 		payload["debug_data"] = notification.CustomData

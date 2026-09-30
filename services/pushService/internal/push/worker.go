@@ -93,6 +93,10 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 		err          error
 	})
 	for _, claim := range claims {
+		if claim.RecipientExcluded {
+			prepared = append(prepared, preparedDelivery{claim: claim, prepareErr: errors.New("channel_subscription_ended")})
+			continue
+		}
 		request, err := decodeClaimRequest(claim)
 		if err != nil {
 			prepared = append(prepared, preparedDelivery{claim: claim, prepareErr: err})
@@ -129,6 +133,7 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 			prepared = append(prepared, preparedDelivery{claim: claim, notification: Notification{
 				Kind: NotificationRecall, Token: claim.Token.Token, Environment: parseEnvironment(claim.Token.Environment),
 				TargetUserID: claim.Token.UserID, ConversationID: recall.GetConversationId(), IsGroup: recall.GetIsGroup(),
+				IsChannel: claim.IsChannel,
 				MessageID: recall.GetMessageId(), SenderUserID: recall.GetOperatorUserId(), SentAt: recalledAt,
 				ExpiresAt: recalledAt.Add(24 * time.Hour),
 			}})
@@ -160,14 +165,15 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 			preview = defaultMessagePreview(message.GetMessageType())
 		}
 		body := preview
-		if message.GetIsGroup() && strings.TrimSpace(cached.presentation.SenderName) != "" {
+		if message.GetIsGroup() && !cached.presentation.IsChannel && strings.TrimSpace(cached.presentation.SenderName) != "" {
 			body = cached.presentation.SenderName + "：" + preview
 		}
 		prepared = append(prepared, preparedDelivery{claim: claim, notification: Notification{
 			Kind: NotificationMessage, Token: claim.Token.Token, Environment: parseEnvironment(claim.Token.Environment),
 			SenderUserID: message.GetSenderUserId(), TargetUserID: claim.Token.UserID,
 			ConversationID: message.GetConversationId(), IsGroup: message.GetIsGroup(), MessageType: strings.TrimSpace(message.GetMessageType()),
-			SentAt: sentAt, MessageID: message.GetMessageId(), ExpiresAt: sentAt.Add(24 * time.Hour),
+			IsChannel: cached.presentation.IsChannel,
+			SentAt:    sentAt, MessageID: message.GetMessageId(), ExpiresAt: sentAt.Add(24 * time.Hour),
 			Title: cached.presentation.Title, Body: body, SenderName: cached.presentation.SenderName, SenderAvatar: cached.presentation.SenderAvatar,
 			GroupName: cached.presentation.GroupName, Avatar: cached.presentation.Avatar, AvatarIsGroup: cached.presentation.AvatarIsGroup,
 			ConversationName: cached.presentation.ConversationName, ConversationAvatar: cached.presentation.ConversationAvatar,

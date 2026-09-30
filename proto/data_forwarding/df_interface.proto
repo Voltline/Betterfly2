@@ -7,6 +7,7 @@ import "data_forwarding/request.proto";
 import "data_forwarding/response.proto";
 import "call/call_interface.proto";
 import "push/push_interface.proto";
+import "channel/channel.proto";
 
 message RequestMessage {
   string jwt = 1;
@@ -49,6 +50,8 @@ message RequestMessage {
     TransferGroupOwner transfer_group_owner = 36;
     ChangePassword change_password = 37;
     RecallMessage recall_message = 38;
+    channel_interface.ChannelRequest channel_request = 39;
+    channel_interface.QueryChannelHistory query_channel_history = 40;
   }
 }
 
@@ -77,5 +80,6 @@ message ResponseMessage {
     GroupMemberOperationRsp group_member_operation_rsp = 20;
     AccountSecurityRsp account_security_rsp = 21;
     MessageRecallEvent message_recall_event = 22;
+    channel_interface.ChannelResponse channel_response = 23;
   }
 }

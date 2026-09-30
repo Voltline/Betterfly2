@@ -95,15 +95,26 @@ func TestPendingMigrationsSupportsFirstRepeatAndLegacyUpgrade(t *testing.T) {
 
 func TestMigrationPlanIncludesMessageRecallV5(t *testing.T) {
 	plan := migrationPlan()
-	if len(plan) != 5 || plan[4].Version != 5 || plan[4].Name != "message recall state" || plan[4].Apply == nil {
+	if len(plan) != 6 || plan[4].Version != 5 || plan[4].Name != "message recall state" || plan[4].Apply == nil {
 		t.Fatalf("unexpected migration plan tail: %+v", plan)
 	}
 	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 1 || pending[0].Version != 5 {
-		t.Fatalf("schema v4 upgrade pending=%+v, want only v5", pending)
+	if len(pending) != 2 || pending[0].Version != 5 || pending[1].Version != 6 {
+		t.Fatalf("schema v4 upgrade pending=%+v, want v5 and v6", pending)
+	}
+}
+
+func TestMigrationPlanChannelsV6IsAdditive(t *testing.T) {
+	plan := migrationPlan()
+	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5})
+	if err != nil || len(pending) != 1 || pending[0].Version != 6 || pending[0].Name != "broadcast channels" {
+		t.Fatalf("schema v5 upgrade pending=%+v err=%v", pending, err)
+	}
+	if pending, err = pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6}); err != nil || len(pending) != 0 {
+		t.Fatalf("repeat migration pending=%v err=%v", pending, err)
 	}
 }
 

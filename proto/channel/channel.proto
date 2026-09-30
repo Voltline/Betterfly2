@@ -1,0 +1,129 @@
+syntax = "proto3";
+package channel_interface;
+option go_package = "Betterfly2/proto/channel";
+
+enum ChannelResult {
+  CHANNEL_OK = 0;
+  CHANNEL_NOT_FOUND = 1;
+  CHANNEL_INVALID_ARGUMENT = 2;
+  CHANNEL_FORBIDDEN = 3;
+  CHANNEL_ALREADY_EXISTS = 4;
+  CHANNEL_INVALID_STATE = 5;
+  CHANNEL_SERVICE_ERROR = 10;
+}
+
+enum Visibility {
+  PUBLIC = 0;
+  PRIVATE = 1;
+}
+
+message CreateChannel {
+  int64 channel_id = 1; // Same ID namespace as groups; keep stable across retries.
+  string name = 2;
+  string description = 3;
+  string username = 4; // Optional unique public handle, ASCII letters/digits/underscore.
+  Visibility visibility = 5;
+  string avatar_hash = 6;
+}
+
+message UpdateChannel {
+  int64 channel_id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional string avatar_hash = 4;
+  optional string username = 5;
+  optional Visibility visibility = 6;
+}
+
+message GetChannel {
+  int64 channel_id = 1;
+  string username = 2; // Supply either channel_id or username, not both.
+}
+
+message SearchChannels {
+  string query = 1;
+  int32 page_size = 2; // Default 50, maximum 100.
+  int64 cursor_channel_id = 3;
+}
+
+message SubscribeChannel { int64 channel_id = 1; }
+message UnsubscribeChannel { int64 channel_id = 1; }
+message DeleteChannel { int64 channel_id = 1; }
+message ListSubscribedChannels {
+  int32 page_size = 1;
+  int64 cursor_channel_id = 2;
+}
+message ListChannelMembers {
+  int64 channel_id = 1;
+  int32 page_size = 2;
+  int64 cursor_user_id = 3;
+}
+
+message ChannelRequest {
+  string request_id = 1; // Correlates response; not an authorization or deduplication key.
+  oneof payload {
+    CreateChannel create = 2;
+    UpdateChannel update = 3;
+    GetChannel get = 4;
+    SearchChannels search = 5;
+    SubscribeChannel subscribe = 6;
+    UnsubscribeChannel unsubscribe = 7;
+    ListSubscribedChannels list_subscribed = 8;
+    ListChannelMembers list_members = 9;
+    DeleteChannel delete = 10;
+  }
+}
+
+message QueryChannelHistory {
+  string request_id = 1;
+  int64 channel_id = 2;
+  int32 page_size = 3; // Default 50, maximum 100; newest first.
+  int64 before_message_id = 4; // Zero starts at the latest post.
+}
+
+message ChannelInfo {
+  int64 channel_id = 1;
+  string name = 2;
+  string description = 3;
+  string avatar_hash = 4;
+  string username = 5;
+  Visibility visibility = 6;
+  int64 owner_user_id = 7;
+  int64 subscriber_count = 8;
+  bool subscribed = 9;
+  string my_role = 10; // owner/admin/member; member means read-only subscriber.
+  string update_time = 11;
+}
+
+message ChannelMember {
+  int64 user_id = 1;
+  string name = 2;
+  string avatar_hash = 3;
+  string role = 4;
+  string joined_at = 5;
+}
+
+message ChannelPost {
+  int64 message_id = 1;
+  int64 author_user_id = 2;
+  string content = 3;
+  string msg_type = 4;
+  string real_file_name = 5;
+  string timestamp = 6;
+  bool is_recalled = 7;
+  string recalled_at = 8;
+  int64 recalled_by = 9;
+}
+
+message ChannelResponse {
+  string request_id = 1;
+  ChannelResult result = 2;
+  string operation = 3;
+  ChannelInfo channel = 4;
+  repeated ChannelInfo channels = 5;
+  repeated ChannelMember members = 6;
+  bool has_more = 7;
+  int64 next_cursor_id = 8; // Channel ID for lists; user ID for member lists.
+  int64 next_before_message_id = 9;
+  repeated ChannelPost posts = 10;
+}

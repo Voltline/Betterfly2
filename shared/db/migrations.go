@@ -32,6 +32,7 @@ func migrationPlan() []Migration {
 		{Version: 3, Name: "legacy compatibility and query indexes", Apply: migrateLegacyCompatibility},
 		{Version: 4, Name: "transactional inbox outbox and durable push", Apply: migrateReliabilitySchema},
 		{Version: 5, Name: "message recall state", Apply: migrateMessageRecallSchema},
+		{Version: 6, Name: "broadcast channels", Apply: migrateChannelSchema},
 	}
 }
 
@@ -240,6 +241,10 @@ END $$`).Error; err != nil {
 
 func migrateMessageRecallSchema(tx *gorm.DB) error {
 	return migrateModelsAdditive(tx, &Message{})
+}
+
+func migrateChannelSchema(tx *gorm.DB) error {
+	return migrateModelsAdditive(tx, &ChannelSettings{})
 }
 
 type additiveSchemaMigrator interface {

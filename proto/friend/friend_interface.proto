@@ -1,6 +1,7 @@
 syntax = "proto3";
 package friend_interface;
 option go_package = "Betterfly2/proto/friend";
+import "channel/channel.proto";
 
 message AddDirectFriend {
   int64 user_id = 1;
@@ -175,6 +176,7 @@ message GroupInfoRsp {
   int64 owner_user_id = 4;
   string update_time = 5;
   bool client_need_save = 6;
+  bool is_channel = 7;
 }
 
 message GroupOperationRsp {
@@ -207,6 +209,7 @@ message JoinedGroupContact {
   string avatar = 3;
   int64 owner_user_id = 4;
   string update_time = 5;
+  bool is_channel = 6;
 }
 
 message JoinedGroupListRsp {
@@ -283,6 +286,7 @@ message RequestMessage {
     UpdateGroupMemberRole update_group_member_role = 23;
     UpdateGroupName update_group_name = 24;
     TransferGroupOwner transfer_group_owner = 25;
+    channel_interface.ChannelRequest channel_request = 26;
   }
 }
 
@@ -300,5 +304,6 @@ message ResponseMessage {
     JoinedGroupListRsp joined_group_list_rsp = 9;
     RelationshipRequestListRsp relationship_request_list_rsp = 10;
     RelationshipOperationRsp relationship_operation_rsp = 11;
+    channel_interface.ChannelResponse channel_response = 12;
   }
 }

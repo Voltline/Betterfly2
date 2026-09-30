@@ -29,6 +29,8 @@ type Config struct {
 	MaxBackoff         time.Duration
 	AlertAfterAttempts int
 	Now                func() time.Time
+	// Committed coalesces local post-commit wakeups; polling remains the recovery path.
+	Committed <-chan struct{}
 }
 
 func LoadConfig(service, prefix string) Config {
@@ -104,6 +106,7 @@ func (r *Relay) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+		case <-r.config.Committed:
 		}
 	}
 }
@@ -126,55 +129,39 @@ func (r *Relay) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (r *Relay) claim(ctx context.Context) (db.OutboxEvent, bool, error) {
+	token, err := randomToken()
+	if err != nil {
+		return db.OutboxEvent{}, false, err
+	}
+	now := r.config.Now().UTC()
+	nowValue := db.FormatReliabilityTime(now)
 	var claimed db.OutboxEvent
-	found := false
-	err := r.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := r.config.Now().UTC()
-		nowValue := db.FormatReliabilityTime(now)
-		var candidate db.OutboxEvent
-		err := tx.Raw(`SELECT * FROM outbox_events
+	// One PostgreSQL statement holds the row lock through the claim update.
+	err = r.database.WithContext(ctx).Raw(`WITH candidate AS (
+SELECT event_id FROM outbox_events
 WHERE service = ? AND (
   (status IN (?, ?, ?) AND (next_attempt_at = '' OR next_attempt_at <= ?)) OR
   (status = ? AND lease_until <= ?)
 )
 ORDER BY created_at ASC, event_id ASC
+LIMIT 1
 FOR UPDATE SKIP LOCKED
-LIMIT 1`, r.config.Service, db.OutboxStatusPending, db.OutboxStatusRetryable, db.OutboxStatusFailed, nowValue,
-			db.OutboxStatusClaimed, nowValue).Scan(&candidate).Error
-		if err != nil {
-			return err
-		}
-		if candidate.EventID == "" {
-			return nil
-		}
-		token, err := randomToken()
-		if err != nil {
-			return err
-		}
-		leaseUntil := db.FormatReliabilityTime(now.Add(r.config.Lease))
-		result := tx.Model(&db.OutboxEvent{}).
-			Where("event_id = ? AND status = ?", candidate.EventID, candidate.Status).
-			Updates(map[string]any{"status": db.OutboxStatusClaimed, "claim_token": token, "lease_until": leaseUntil, "attempt": gorm.Expr("attempt + 1"), "updated_at": nowValue})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return nil
-		}
-		candidate.Status = db.OutboxStatusClaimed
-		candidate.ClaimToken = token
-		candidate.LeaseUntil = leaseUntil
-		candidate.Attempt++
-		claimed = candidate
-		found = true
-		return nil
-	})
-	return claimed, found, err
+)
+UPDATE outbox_events AS event
+SET status = ?, claim_token = ?, lease_until = ?, attempt = event.attempt + 1, updated_at = ?
+FROM candidate
+WHERE event.event_id = candidate.event_id
+RETURNING event.*`, r.config.Service, db.OutboxStatusPending, db.OutboxStatusRetryable, db.OutboxStatusFailed, nowValue,
+		db.OutboxStatusClaimed, nowValue, db.OutboxStatusClaimed, token, db.FormatReliabilityTime(now.Add(r.config.Lease)), nowValue).Scan(&claimed).Error
+	if err != nil {
+		return db.OutboxEvent{}, false, err
+	}
+	return claimed, claimed.EventID != "", nil
 }
 
 func (r *Relay) markPublished(ctx context.Context, event db.OutboxEvent) error {
 	now := db.FormatReliabilityTime(r.config.Now())
-	result := r.database.WithContext(ctx).Model(&db.OutboxEvent{}).
+	result := r.database.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&db.OutboxEvent{}).
 		Where("event_id = ? AND status = ? AND claim_token = ?", event.EventID, db.OutboxStatusClaimed, event.ClaimToken).
 		Updates(map[string]any{"status": db.OutboxStatusPublished, "claim_token": "", "lease_until": "", "published_at": now, "updated_at": now, "last_error": ""})
 	if result.Error != nil {
@@ -189,7 +176,7 @@ func (r *Relay) markPublished(ctx context.Context, event db.OutboxEvent) error {
 func (r *Relay) markFailure(ctx context.Context, event db.OutboxEvent, publishErr error) error {
 	now := r.config.Now().UTC()
 	next := db.FormatReliabilityTime(now.Add(r.backoff(event.Attempt)))
-	result := r.database.WithContext(ctx).Model(&db.OutboxEvent{}).
+	result := r.database.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&db.OutboxEvent{}).
 		Where("event_id = ? AND status = ? AND claim_token = ?", event.EventID, db.OutboxStatusClaimed, event.ClaimToken).
 		Updates(map[string]any{"status": db.OutboxStatusRetryable, "claim_token": "", "lease_until": "", "next_attempt_at": next, "last_error": summarize(publishErr), "updated_at": db.FormatReliabilityTime(now)})
 	if result.Error != nil {

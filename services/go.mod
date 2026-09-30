@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	Betterfly2/proto v0.0.0 // indirect
 	Betterfly2/proto/call v0.0.0 // indirect
 	Betterfly2/proto/push v0.0.0 // indirect
 )

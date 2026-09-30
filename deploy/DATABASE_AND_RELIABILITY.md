@@ -12,15 +12,15 @@ docker compose -f services/docker-compose.yml run --rm db_migrate
 
 Migrations are an explicit ordered list. Each version is committed to
 `schema_migrations` only after that version succeeds, and one PostgreSQL session
-advisory lock covers the complete migration run. For schema v5, publish the
-immutable `betterfly2/db-migrate:schema-v5` image (prefer a digest in production),
+advisory lock covers the complete migration run. For schema v6, publish the
+immutable `betterfly2/db-migrate:schema-v6` image (prefer a digest in production),
 run the versioned Job, and wait for it before rolling business Deployments:
 
 ```bash
 kubectl apply -f deploy/k8s/base/namespace.yaml
 kubectl apply -f deploy/k8s/base/configmap.yaml -f /tmp/betterfly2-secret.yaml
 kubectl apply -k deploy/k8s/migrations
-kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v5 --timeout=5m
+kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v6 --timeout=5m
 kubectl apply -k deploy/k8s/base
 kubectl -n betterfly2 wait --for=condition=complete job/betterfly-kafka-topics --timeout=5m
 ```
@@ -37,6 +37,10 @@ Its versioned name makes every schema release execute once. The included Argo CD
 other deployment systems must implement the same ordered gate explicitly.
 Migrations v1-v5 are frozen release history: future model changes must use a new
 explicit migration version rather than editing a historical migration function.
+
+Schema v6 adds only the channel settings table and its indexes; existing groups,
+membership and message columns are unchanged. See [channel rollout](../CHANNELS.md)
+for the migration-first, Friend/Storage/Push-before-DataForwarding upgrade order.
 
 `DB_AUTO_MIGRATE=true` remains available for a single-process development setup.
 It is disabled by default and must not be enabled on production business Pods.

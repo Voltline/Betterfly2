@@ -65,9 +65,10 @@ func newStorageRequestRouter() *dispatch.OneofRouter[storageRequestContext, *sto
 
 // StorageHandler 存储服务处理器
 type StorageHandler struct {
-	l1Cache  cache.Cache
-	l2Cache  cache.Cache // L2 Redis缓存，可能为nil
-	database *gorm.DB
+	l1Cache         cache.Cache
+	l2Cache         cache.Cache // L2 Redis缓存，可能为nil
+	database        *gorm.DB
+	outboxCommitted chan<- struct{}
 }
 
 type fileExistsCacheEntry struct {
@@ -77,7 +78,7 @@ type fileExistsCacheEntry struct {
 }
 
 // NewStorageHandler 创建新的存储处理器
-func NewStorageHandler() *StorageHandler {
+func NewStorageHandler(committed chan<- struct{}) *StorageHandler {
 	_ = db.DB()
 
 	// 初始化L1缓存
@@ -95,9 +96,10 @@ func NewStorageHandler() *StorageHandler {
 	}
 
 	return &StorageHandler{
-		l1Cache:  l1Cache,
-		l2Cache:  l2Cache,
-		database: db.DB(),
+		l1Cache:         l1Cache,
+		l2Cache:         l2Cache,
+		database:        db.DB(),
+		outboxCommitted: committed,
 	}
 }
 
@@ -156,6 +158,12 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 			cacheKeys = mutationCacheKeys(req)
 		}
 		h.clearCacheKeys(cacheKeys)
+		if !execution.Replayed {
+			select {
+			case h.outboxCommitted <- struct{}{}:
+			default:
+			}
+		}
 	}
 	return err
 }
@@ -178,6 +186,20 @@ func mutationCacheKeys(req *storage.RequestMessage) []string {
 // handleStoreNewMessage 处理存储新消息请求
 func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
+	if msg.GetIsGroup() {
+		allowed := false
+		var err error
+		if req.GetTargetUserId() > 0 && req.GetTargetUserId() == msg.GetFromUserId() {
+			allowed, err = db.CanPublishGroupMessageWithDB(database, msg.GetToUserId(), req.GetTargetUserId())
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			sugar.Warnw("拒绝未授权群或频道发帖", "requester_id", req.GetTargetUserId(), "conversation_id", msg.GetToUserId())
+			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+		}
+	}
 
 	// 保存到数据库
 	start := time.Now()
@@ -326,7 +348,7 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 }
 
 func (h *StorageHandler) authorizedMessageResponseWithDB(database *gorm.DB, req *storage.RequestMessage, message *db.Message) (*storage.ResponseMessage, error) {
-	if database == nil && message != nil && message.IsGroup && req.GetTargetUserId() != message.FromUserID {
+	if database == nil && message != nil && message.IsGroup {
 		database = h.requestDatabase()
 	}
 	allowed, err := db.CanUserReadMessageWithDB(database, req.GetTargetUserId(), message)

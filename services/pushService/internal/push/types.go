@@ -53,6 +53,7 @@ type Notification struct {
 	TargetUserID       int64
 	ConversationID     int64
 	IsGroup            bool
+	IsChannel          bool
 	MessageType        string
 	MessageID          int64
 	SentAt             time.Time
@@ -120,14 +121,16 @@ type DurableStore interface {
 }
 
 type DurableDeliveryClaim struct {
-	JobID          string
-	MessageID      int64
-	CallID         string
-	Token          db.PushDeviceToken
-	QueuedAt       time.Time
-	Attempt        int
-	ClaimToken     string
-	RequestPayload []byte
+	IsChannel         bool
+	RecipientExcluded bool
+	JobID             string
+	MessageID         int64
+	CallID            string
+	Token             db.PushDeviceToken
+	QueuedAt          time.Time
+	Attempt           int
+	ClaimToken        string
+	RequestPayload    []byte
 }
 
 type DurableDeliveryUpdate struct {
@@ -158,6 +161,7 @@ type TokenSummary struct {
 }
 
 type MessagePresentation struct {
+	IsChannel          bool
 	Title              string
 	SenderName         string
 	SenderAvatar       string

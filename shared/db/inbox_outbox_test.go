@@ -1,9 +1,11 @@
 package db
 
 import (
+	"Betterfly2/shared/kafkaconsumer"
 	"bytes"
 	"context"
 	"errors"
+	"github.com/IBM/sarama"
 	"strings"
 	"testing"
 
@@ -112,6 +114,30 @@ func TestExecuteInboxOutboxReplaysCompletedOperationWithoutBusinessWrite(t *test
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReplayedKafkaOffsetUsesCompletedInboxWithoutBusinessWrite(t *testing.T) {
+	for _, key := range []string{"friend-service/1/7", "event/event-42"} {
+		t.Run(key, func(t *testing.T) {
+			database, mock := newInboxDatabase(t)
+			mock.ExpectBegin()
+			mock.ExpectExec(`INSERT INTO "consumer_inboxes"`).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT \* FROM "consumer_inboxes"`).WithArgs("friend", key, 1).WillReturnRows(sqlmock.NewRows([]string{"service", "operation_key", "status", "response_payload"}).AddRow("friend", key, InboxStatusCompleted, []byte("original-response")))
+			mock.ExpectCommit()
+			message := &sarama.ConsumerMessage{Topic: "friend-service", Partition: 3, Offset: 999,
+				Headers: []*sarama.RecordHeader{{Key: []byte("operation_key"), Value: []byte(key)}}}
+			execution, err := ExecuteInboxOutbox(context.Background(), database, "friend", kafkaconsumer.OperationKey(message), func(*gorm.DB) ([]byte, []PendingOutboxEvent, error) {
+				t.Fatal("DLQ replay executed relationship mutation again")
+				return nil, nil, nil
+			})
+			if err != nil || !execution.Replayed || string(execution.ResponsePayload) != "original-response" {
+				t.Fatalf("replay did not use completed inbox: %+v err=%v", execution, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

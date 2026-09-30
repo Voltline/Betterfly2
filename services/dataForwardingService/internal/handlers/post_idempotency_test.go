@@ -9,10 +9,11 @@ import (
 	pb "Betterfly2/proto/data_forwarding"
 	"data_forwarding_service/internal/publisher"
 	redisClient "data_forwarding_service/internal/redis"
-	"data_forwarding_service/internal/router"
 	"github.com/IBM/sarama/mocks"
 	"github.com/alicebob/miniredis/v2"
+	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
+	"time"
 )
 
 func TestEnsurePostClientMessageIDPreservesExplicitID(t *testing.T) {
@@ -135,21 +136,42 @@ func TestPostAckCachePreservesOldEntryFormat(t *testing.T) {
 	}
 }
 
-func TestDeliverStoredPostOfflineDoesNotCompleteEffects(t *testing.T) {
+func TestDeliverStoredPostOfflineCompletesDeferredEffectsWithoutRepeatingPush(t *testing.T) {
 	server := postTestRedis(t)
 	producer := mocks.NewSyncProducer(t, nil)
 	previous := publisher.KafkaProducer
 	publisher.KafkaProducer = producer
 	t.Cleanup(func() { publisher.KafkaProducer = previous; _ = producer.Close() })
 	post := &pb.Post{FromId: 1, ToId: 2, MsgType: "text", Timestamp: "2026-09-30T10:00:00Z"}
+	producer.ExpectSendMessageAndSucceed()
 	for attempt := 0; attempt < 2; attempt++ {
-		producer.ExpectSendMessageAndSucceed()
-		if err := DeliverStoredPost(42, post); !errors.Is(err, router.ErrUserOffline) {
-			t.Fatalf("offline silently succeeded: %v", err)
+		if err := DeliverStoredPost(42, post); err != nil {
+			t.Fatalf("offline synchronization was treated as a fault: %v", err)
 		}
-		if server.Exists("post:effects:42") {
-			t.Fatal("failed delivery marked permanently complete")
+		if value, err := server.Get("post:effects:42"); err != nil || value != "1" {
+			t.Fatalf("deferred effects were not completed: value=%q err=%v", value, err)
 		}
+	}
+}
+
+func TestDeliverStoredPostRedisFaultIsNotDeferred(t *testing.T) {
+	server := postTestRedis(t)
+	producer := mocks.NewSyncProducer(t, nil)
+	previous := publisher.KafkaProducer
+	publisher.KafkaProducer = producer
+	t.Cleanup(func() { publisher.KafkaProducer = previous; _ = producer.Close() })
+	producer.ExpectSendMessageAndSucceed()
+	server.SetError("injected Redis fault")
+	// Claim failure must not publish any push or mark completion.
+	if err := DeliverStoredPost(42, &pb.Post{FromId: 1, ToId: 2, MsgType: "text"}); err == nil {
+		t.Fatal("Redis fault was treated as offline")
+	}
+	server.SetError("")
+	if server.Exists("post:effects:42") {
+		t.Fatal("Redis failure completed effects")
+	}
+	if err := DeliverStoredPost(42, &pb.Post{FromId: 1, ToId: 2, MsgType: "text"}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -205,4 +227,91 @@ func TestStoredPostCompletesOnlyAfterKafkaDeliveryAndSuppressesReplay(t *testing
 	if post.GetMessageId() != 42 {
 		t.Fatal("realtime server ID missing")
 	}
+}
+
+func TestStoredPostRouteLossAndCrossPodOfflineAreDeferredButRedisFaultIsNot(t *testing.T) {
+	server := postTestRedis(t)
+	previousHandler := GetWebSocketHandler()
+	SetGlobalWebSocketHandler(testWebSocketHandler(testWebSocketConfig()))
+	t.Cleanup(func() { SetGlobalWebSocketHandler(previousHandler) })
+	post := &pb.Post{MessageId: 42, FromId: 1, ToId: 2, MsgType: "text"}
+	request := &pb.RequestMessage{Payload: &pb.RequestMessage_Post{Post: post}}
+	// The initially selected route disappeared before the router reread its lease.
+	if err := routePostToTarget("2", "local", "local", post, request); err != nil {
+		t.Fatalf("route loss retried a persisted post: %v", err)
+	}
+	if err := InplaceHandlePostMessage(request); err != nil {
+		t.Fatalf("cross-Pod offline post retried: %v", err)
+	}
+	post.MessageId = 0
+	if err := InplaceHandlePostMessage(request); err == nil {
+		t.Fatal("legacy post without persistence ID silently discarded")
+	}
+	post.MessageId = 42
+	server.SetError("injected Redis failure")
+	if err := routePostToTarget("2", "local", "local", post, request); err == nil {
+		t.Fatal("Redis route failure was treated as offline")
+	}
+	if err := InplaceHandlePostMessage(request); err == nil {
+		t.Fatal("cross-Pod Redis failure was treated as offline")
+	}
+}
+
+func TestKickHandlerDoesNotCloseNewOwnerAndKeepsLegacyBehavior(t *testing.T) {
+	postTestRedis(t)
+	config := testWebSocketConfig()
+	config.authTimeout = 5 * time.Second
+	config.pongWait = 5 * time.Second
+	config.pingInterval = time.Second
+	handler := testWebSocketHandler(config)
+	url, closeServer := startWebSocketTestServer(t, handler)
+	defer closeServer()
+	firstClient, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstClient.Close()
+	first := waitForConnection(t, handler, firstClient)
+	if err := handler.connManager.Login(context.Background(), first.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	previousOwner := first.OwnerToken
+	secondClient, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondClient.Close()
+	second := waitForConnection(t, handler, secondClient)
+	if err := handler.connManager.Login(context.Background(), second.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	handler.StopClientIfOwner("7", previousOwner)
+	if second.IsClosed() {
+		t.Fatal("old owner kicked the new connection")
+	}
+	if _, err := redisClient.GetContainerByConnection("7"); err != nil {
+		t.Fatalf("old kick removed new route: %v", err)
+	}
+	handler.StopClientIfOwner("7", second.OwnerToken)
+	if !second.IsClosed() {
+		t.Fatal("current owner kick did not close connection")
+	}
+	if _, err := redisClient.GetContainerByConnection("7"); err == nil {
+		t.Fatal("current kick retained route")
+	}
+	// Legacy kicks intentionally retain their unconditional local-close behavior.
+	thirdClient, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thirdClient.Close()
+	third := waitForConnection(t, handler, thirdClient)
+	if err := handler.connManager.Login(context.Background(), third.ID, "7"); err != nil {
+		t.Fatal(err)
+	}
+	handler.StopClient("7")
+	if !third.IsClosed() {
+		t.Fatal("legacy kick behavior changed")
+	}
+	waitForConnectionCount(t, handler, 0)
 }

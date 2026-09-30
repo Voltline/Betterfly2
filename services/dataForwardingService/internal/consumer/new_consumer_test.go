@@ -128,7 +128,7 @@ func TestConsumeClaimMarksAfterRetryExhaustionAndSuccessfulDLQ(t *testing.T) {
 		t.Fatalf("unexpected retry/mark result: attempts=%d marked=%d", attempts, len(session.marked))
 	}
 	headers := headerMap(dlqHeaders)
-	if len(headers) != 10 || string(dlqPayload) != "original" || headers["schema_version"] != "1" || headers["original_topic"] != "source" || headers["original_partition"] != "3" || headers["original_offset"] != "42" || headers["retry_count"] != "2" || headers["error_class"] != string(failureTransient) || headers["first_failure_time"] == "" || headers["final_failure_time"] == "" || headers["sanitized_error_summary"] == "" {
+	if headers["operation_key"] != "source/3/42" || string(dlqPayload) != "original" || headers["schema_version"] != "1" || headers["original_topic"] != "source" || headers["original_partition"] != "3" || headers["original_offset"] != "42" || headers["retry_count"] != "2" || headers["error_class"] != string(failureTransient) || headers["first_failure_time"] == "" || headers["final_failure_time"] == "" || headers["sanitized_error_summary"] == "" {
 		t.Fatalf("incomplete DLQ record: payload=%q headers=%+v", dlqPayload, headers)
 	}
 }

@@ -134,7 +134,7 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 		if routeErr == nil {
 			err = routePostToTarget(targetUserID, targetTopic, currentContainerID, payload, message)
 		} else if errors.Is(routeErr, redisClient.ErrRouteNotFound) {
-			err = routerpkg.ErrUserOffline
+			logger.Sugar().Infow("已存消息等待离线同步", "message_id", messageID, "user_id", targetUserID)
 		} else {
 			err = routeErr
 		}
@@ -173,6 +173,10 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 
 	targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 	err = wsHandler.router.RouteMessage(targetUserID, rspBytes)
+	if payload.GetMessageId() > 0 && errors.Is(err, routerpkg.ErrUserOffline) {
+		logger.Sugar().Infow("跨Pod已存消息等待离线同步", "message_id", payload.GetMessageId(), "user_id", targetUserID)
+		return nil
+	}
 	if err != nil {
 		logger.Sugar().Errorf("路由器发送消息失败: %v", err)
 		return err
@@ -244,7 +248,7 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 		return errors.Join(err, pushErr)
 	}
 
-	deliveryErr := routeGroupTargets(membersWithoutSender(memberIDs, fromID), containerByUserID, currentContainerID,
+	deliveryErr := routeGroupTargets(messageID, membersWithoutSender(memberIDs, fromID), containerByUserID, currentContainerID,
 		func(userID, topic string) error {
 			return routePostToTarget(userID, topic, currentContainerID, payload, message)
 		}, func(topic string, users []int64) error {
@@ -253,14 +257,14 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 	return errors.Join(pushErr, deliveryErr)
 }
 
-func routeGroupTargets(memberIDs []int64, containerByUserID map[string]string, currentContainerID string, local func(string, string) error, remote func(string, []int64) error) error {
+func routeGroupTargets(messageID int64, memberIDs []int64, containerByUserID map[string]string, currentContainerID string, local func(string, string) error, remote func(string, []int64) error) error {
 	var deliveryErr error
 	crossContainerTargets := make(map[string][]int64)
 	for _, memberID := range memberIDs {
 		targetUserID := strconv.FormatInt(memberID, 10)
 		targetTopic := containerByUserID[targetUserID]
 		if targetTopic == "" {
-			deliveryErr = errors.Join(deliveryErr, fmt.Errorf("群消息用户 %s: %w", targetUserID, routerpkg.ErrUserOffline))
+			logger.Sugar().Infow("已存群消息等待离线同步", "message_id", messageID, "user_id", targetUserID)
 			continue
 		}
 
@@ -413,8 +417,8 @@ func buildGroupPostDeliveryEnvelopeBytes(targetUserIDs []int64, payload *pb.Post
 
 func routePostToTarget(targetUserID, targetTopic, currentContainerID string, payload *pb.Post, message *pb.RequestMessage) error {
 	if targetTopic == "" {
-		logger.Sugar().Debugf("%s 用户不在线，消息已保存", targetUserID)
-		return routerpkg.ErrUserOffline
+		logger.Sugar().Infow("已存消息等待离线同步", "message_id", payload.GetMessageId(), "user_id", targetUserID)
+		return nil
 	}
 
 	wsHandler := GetWebSocketHandler()
@@ -429,6 +433,10 @@ func routePostToTarget(targetUserID, targetTopic, currentContainerID string, pay
 	}
 
 	if err := wsHandler.router.RouteMessage(targetUserID, messageBytes); err != nil {
+		if errors.Is(err, routerpkg.ErrUserOffline) {
+			logger.Sugar().Infow("已存消息路由消失，等待离线同步", "message_id", payload.GetMessageId(), "user_id", targetUserID)
+			return nil
+		}
 		logger.Sugar().Errorf("路由器发送消息失败: %v", err)
 		return err
 	}

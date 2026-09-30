@@ -212,3 +212,41 @@ func TestOperationKeyIsStableAndAvailableInProcessorContext(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOperationKeyAndDLQPreserveReplayIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		headers []*sarama.RecordHeader
+		want    string
+	}{
+		{"event", []*sarama.RecordHeader{{Key: []byte("event_id"), Value: []byte("event-42")}}, "event/event-42"},
+		{"replayed_offset", []*sarama.RecordHeader{{Key: []byte("operation_key"), Value: []byte("friend-service/1/7")}}, "friend-service/1/7"},
+		{"event_precedence", []*sarama.RecordHeader{{Key: []byte("operation_key"), Value: []byte("other/0/0")}, {Key: []byte("event_id"), Value: []byte("event-42")}}, "event/event-42"},
+		{"empty", []*sarama.RecordHeader{{Key: []byte("operation_key"), Value: []byte(" ")}}, "friend-service/2/99"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := &sarama.ConsumerMessage{Topic: "friend-service", Partition: 2, Offset: 99, Headers: test.headers}
+			if got := OperationKey(message); got != test.want {
+				t.Fatalf("identity=%q want=%q", got, test.want)
+			}
+			dlq := DLQHeaders("friend", message, EnvelopeType(nil), Permanent(errors.New("injected")), time.Now(), time.Now(), 0)
+			var operationKey, eventID string
+			for _, header := range dlq {
+				if string(header.Key) == "operation_key" {
+					operationKey = string(header.Value)
+				}
+				if string(header.Key) == "event_id" {
+					eventID = string(header.Value)
+				}
+			}
+			if operationKey != test.want {
+				t.Fatalf("DLQ lost identity: %q", operationKey)
+			}
+			if test.name == "event" || test.name == "event_precedence" {
+				if eventID != "event-42" {
+					t.Fatalf("DLQ lost event_id: %q", eventID)
+				}
+			}
+		})
+	}
+}

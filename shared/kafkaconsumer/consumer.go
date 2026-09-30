@@ -262,6 +262,12 @@ func DLQHeaders(service string, message *sarama.ConsumerMessage, envelopeType en
 	for _, value := range values {
 		headers = append(headers, sarama.RecordHeader{Key: []byte(value[0]), Value: []byte(value[1])})
 	}
+	for _, header := range message.Headers {
+		if string(header.Key) == "event_id" && strings.TrimSpace(string(header.Value)) != "" {
+			headers = append(headers, sarama.RecordHeader{Key: []byte("event_id"), Value: header.Value})
+			break
+		}
+	}
 	return headers
 }
 
@@ -293,6 +299,14 @@ func OperationKey(message *sarama.ConsumerMessage) string {
 		if string(header.Key) == "event_id" {
 			if eventID := strings.TrimSpace(string(header.Value)); eventID != "" {
 				return "event/" + eventID
+			}
+		}
+	}
+	// Restricted DLQ replay preserves this identity across new Kafka offsets.
+	for _, header := range message.Headers {
+		if string(header.Key) == "operation_key" {
+			if key := strings.TrimSpace(string(header.Value)); key != "" {
+				return key
 			}
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"Betterfly2/shared/logger"
 	"context"
 	"data_forwarding_service/internal/handlers"
+	"data_forwarding_service/internal/router"
 	"errors"
 	"fmt"
 	"regexp"
@@ -556,7 +557,11 @@ func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, ta
 	for _, targetUserID := range targetUserIDs {
 		targetUserIDStr := strconv.FormatInt(targetUserID, 10)
 		if err := h.wsHandler.SendMessage(targetUserIDStr, respBytes); err != nil {
-			return fmt.Errorf("转发群消息给用户 %s 失败: %v", targetUserIDStr, err)
+			if post.GetMessageId() > 0 && errors.Is(err, router.ErrUserOffline) {
+				logger.Sugar().Infow("跨Pod已存群消息等待离线同步", "message_id", post.GetMessageId(), "user_id", targetUserIDStr)
+				continue
+			}
+			return fmt.Errorf("转发群消息给用户 %s 失败: %w", targetUserIDStr, err)
 		}
 	}
 	return nil

@@ -34,7 +34,10 @@ func (r *Router) RouteMessage(toUserID string, message []byte) error {
 	sugar := logger.Sugar()
 
 	// 1. 先尝试本地路由
-	if r.routeLocally(toUserID, message) {
+	if routed, err := r.routeLocally(toUserID, message); err != nil {
+		metrics.RecordRoutingError()
+		return err
+	} else if routed {
 		sugar.Debugf("消息本地路由成功: %s", toUserID)
 		metrics.RecordMessageRouted("local", start)
 		return nil
@@ -58,25 +61,25 @@ func (r *Router) RouteMessage(toUserID string, message []byte) error {
 		return routeErr
 	}
 
-	// 离线消息已经由 storageService 持久化；实时投递失败必须显式返回，不能伪装成功。
+	// Report offline explicitly; only a persisted-message caller may defer to sync.
 	sugar.Infow("用户没有有效WebSocket路由", "user_id", toUserID)
 	metrics.RecordRoutingError()
 	return ErrUserOffline
 }
 
 // routeLocally 尝试本地路由
-func (r *Router) routeLocally(toUserID string, message []byte) bool {
+func (r *Router) routeLocally(toUserID string, message []byte) (bool, error) {
 	// 检查用户是否在本地连接
 	if _, exists := r.connManager.GetConnectionByUserID(toUserID); exists {
 		// 发送消息到本地连接
 		err := r.connManager.SendMessageToUser(toUserID, message)
 		if err != nil {
 			logger.Sugar().Errorf("本地消息发送失败: %v", err)
-			return false
+			return false, err
 		}
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // routeCrossContainer 跨容器路由
@@ -93,7 +96,9 @@ func (r *Router) routeCrossContainer(toUserID string, targetContainerID string, 
 	if targetContainerID == currentContainerID {
 		sugar.Warnf("Redis连接映射异常：用户 %s 应该在本地容器但本地路由失败，尝试重试本地路由", toUserID)
 		// Redis数据可能过期，重试本地路由
-		if r.routeLocally(toUserID, message) {
+		if routed, err := r.routeLocally(toUserID, message); err != nil {
+			return err
+		} else if routed {
 			sugar.Debugf("重试本地路由成功: %s", toUserID)
 			return nil
 		}

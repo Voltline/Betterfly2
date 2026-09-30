@@ -10,7 +10,7 @@
 - 撤回墓碑遮蔽正文和文件名，沿用当前成员及入群时间权限；游标/身份错误在查询前拒绝，数据库错误不得返回部分成功。
 - 自己发送的单聊也参与同步；复合分页、默认上限和空页游标保持不变。
 - 入库响应、实时 Post 和 ACK 使用同一服务端 ID/时间；重复 client ID 返回原数据库内容和时间。
-- ACK/cache/实时投递失败进入现有 Kafka 重试/DLQ 路径，DLQ 失败不跨过当前 offset；群聊部分失败不会伪装成功。
+- ACK/cache/实时投递的基础设施故障进入现有 Kafka 重试/DLQ 路径，DLQ 失败不跨过当前 offset；已存普通消息的明确离线等待同步，见文末收口回归。
 - 副作用短期占位崩溃恢复、旧 owner 的完成/删除 fencing，以及旧 Redis ACK 格式兼容。
 - 旧 Post/同步请求字节兼容，以及数据库 v4 拒绝、v5/更高版本接受。
 
@@ -86,3 +86,22 @@ ok  	data_forwarding_service/integration
 ```
 
 具体耗时取决于镜像状态、Kafka 就绪速度和数据库网络，不在文档中固化某次运行结果。
+
+## 可靠性收口回归（2026-09-30）
+
+本轮无协议或 schema 变更。自动回归覆盖：已保存普通消息离线延后同步；群内离线成员不触发整批重试；跨 Pod 批次离线后继续处理在线目标；Redis/Kafka 故障仍重试；APNs 请求成功后的存储响应重放不重复发布；DLQ 两轮重放保持操作身份；重放发布/元数据失败不跨过当前 offset；已完成 Inbox 不重复业务；新旧 Kafka kick 解析和 owner fencing。
+
+在对应 Go module 下执行：
+
+```bash
+# services/dataForwardingService
+go test ./...
+go test -race ./internal/consumer ./internal/handlers ./internal/connection ./internal/router ./tools/dlq-replay
+go vet ./...
+# shared
+go test ./...
+go test -race ./kafkaconsumer ./db
+go vet ./...
+```
+
+这些测试使用 miniredis、Kafka producer mock、SQL mock 和本地 WebSocket，不代表真实 Docker/Kafka/PostgreSQL/APNs 端到端环境已经通过。手工回归：发送者在线，群内一人在线、一人离线，发送一次消息；确认在线成员显示一次、离线成员重新上线同步取得同一 `message_id`，且正常离线不新增 DLQ 记录。真实故障后的至少一次重试仍允许重复网络投递。

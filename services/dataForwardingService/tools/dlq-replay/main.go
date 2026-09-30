@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -22,7 +23,7 @@ type replayConfig struct {
 
 type replayHandler struct {
 	config  replayConfig
-	publish func(string, []byte) error
+	publish func(string, []byte, []sarama.RecordHeader) error
 	cancel  context.CancelFunc
 	seen    atomic.Int64
 }
@@ -58,11 +59,46 @@ func (h *replayHandler) process(message *sarama.ConsumerMessage) (bool, error) {
 			topic, headers["original_partition"], headers["original_offset"], headers["envelope_type"], headers["error_class"])
 		return false, nil
 	}
-	if err := h.publish(topic, message.Value); err != nil {
+	replayHeaders, err := replayIdentityHeaders(headers)
+	if err != nil {
+		return false, err
+	}
+	if err := h.publish(topic, message.Value, replayHeaders); err != nil {
 		return false, err
 	}
 	log.Printf("DLQ replay success: topic=%s partition=%s offset=%s", topic, headers["original_partition"], headers["original_offset"])
 	return true, nil
+}
+
+func replayIdentityHeaders(metadata map[string]string) ([]sarama.RecordHeader, error) {
+	key := strings.TrimSpace(metadata["operation_key"])
+	eventID := strings.TrimSpace(metadata["event_id"])
+	if eventID != "" {
+		if key != "" && key != "event/"+eventID {
+			return nil, fmt.Errorf("DLQ event_id与operation_key不一致，拒绝重放")
+		}
+		key = "event/" + eventID
+	}
+	if key == "" {
+		partition, partitionErr := strconv.ParseInt(metadata["original_partition"], 10, 32)
+		offset, offsetErr := strconv.ParseInt(metadata["original_offset"], 10, 64)
+		if metadata["original_topic"] == "" || partitionErr != nil || offsetErr != nil || partition < 0 || offset < 0 {
+			return nil, fmt.Errorf("DLQ缺少有效原始操作身份，拒绝重放")
+		}
+		key = metadata["original_topic"] + "/" + strconv.FormatInt(partition, 10) + "/" + strconv.FormatInt(offset, 10)
+	}
+	// Older shared DLQs kept the event identity only in operation_key.
+	if strings.HasPrefix(key, "event/") {
+		eventID = strings.TrimPrefix(key, "event/")
+		if eventID == "" {
+			return nil, fmt.Errorf("DLQ事件身份为空，拒绝重放")
+		}
+	}
+	headers := []sarama.RecordHeader{{Key: []byte("operation_key"), Value: []byte(key)}}
+	if eventID != "" {
+		headers = append(headers, sarama.RecordHeader{Key: []byte("event_id"), Value: []byte(eventID)})
+	}
+	return headers, nil
 }
 
 func headerValues(headers []*sarama.RecordHeader) map[string]string {
@@ -117,8 +153,8 @@ func main() {
 	handler := &replayHandler{
 		config: replayConfig{dryRun: *dryRun, max: *maxMessages, allowed: parseAllowlist(*allowTopics), dlqTopic: *dlqTopic, groupID: *groupID},
 		cancel: cancel,
-		publish: func(topic string, value []byte) error {
-			_, _, err := producer.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(value)})
+		publish: func(topic string, value []byte, headers []sarama.RecordHeader) error {
+			_, _, err := producer.SendMessage(&sarama.ProducerMessage{Topic: topic, Value: sarama.ByteEncoder(value), Headers: headers})
 			return err
 		},
 	}

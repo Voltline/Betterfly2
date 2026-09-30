@@ -52,6 +52,28 @@ go run ./tools/dlq-replay -allow-topics=<pod-topic>,storage-service -max=100
 go run ./tools/dlq-replay -dry-run=false -allow-topics=<pod-topic> -max=20
 ```
 
-Only successful non-dry-run publishes commit a DLQ offset. Replayed business
-payloads still pass through the normal `client_message_id` and side-effect
-idempotency mechanisms.
+Only successful non-dry-run publishes mark a DLQ offset. A publish failure or
+unrecoverable operation identity stops that partition without marking the failed
+record or processing subsequent records. Dry-run neither publishes nor marks.
+
+Replay preserves `operation_key` and, when present, `event_id`; changing the
+Kafka partition/offset must not create a new logical business operation. Older
+shared-consumer DLQs stored `event/<id>` in `operation_key`; replay restores the
+corresponding `event_id`. Legacy offset-based records are reconstructed from
+`original_topic`, `original_partition`, and `original_offset`. Missing/invalid
+identity metadata or conflicting event/operation identities are rejected, not
+silently assigned a new operation. Dry-run may still inspect such records.
+
+Upgrade Storage/Friend/Call/Push with the updated shared consumer before using
+the updated replay tool. Old consumers do not recognize the replayed
+`operation_key` for offset-based operations. No new topic, schema, or client
+protocol is required. Kafka headers are internal trusted metadata; keep replay
+and source-topic WRITE access restricted as described above.
+
+Replayed payloads still pass through existing Inbox, `client_message_id`, and
+device-delivery ledgers within their retention windows. A completed transactional
+Inbox operation is not executed again, but its replay does not recreate an
+already-published response event. Replaying a DataForwarding delivery after
+partial success can still duplicate a network delivery: stable `event_id` does
+not by itself make that consumer deduplicate all events. Kafka and Outbox remain
+at-least-once, not end-to-end exactly-once.

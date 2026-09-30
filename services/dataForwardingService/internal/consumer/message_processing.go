@@ -6,6 +6,7 @@ import (
 	friend "Betterfly2/proto/friend"
 	pushpb "Betterfly2/proto/push"
 	storage "Betterfly2/proto/storage"
+	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
 	"context"
@@ -187,6 +188,7 @@ func (h *NewKafkaConsumerGroupHandler) publishDeadLetter(msg *sarama.ConsumerMes
 func dlqHeaders(msg *sarama.ConsumerMessage, envelopeType envelope.MessageType, class failureClass, processingErr error, firstFailure, finalFailure time.Time, retryCount int) []sarama.RecordHeader {
 	values := [][2]string{
 		{"schema_version", "1"},
+		{"operation_key", kafkaconsumer.OperationKey(msg)},
 		{"original_topic", msg.Topic},
 		{"original_partition", strconv.FormatInt(int64(msg.Partition), 10)},
 		{"original_offset", strconv.FormatInt(msg.Offset, 10)},
@@ -200,6 +202,12 @@ func dlqHeaders(msg *sarama.ConsumerMessage, envelopeType envelope.MessageType, 
 	headers := make([]sarama.RecordHeader, 0, len(values))
 	for _, value := range values {
 		headers = append(headers, sarama.RecordHeader{Key: []byte(value[0]), Value: []byte(value[1])})
+	}
+	for _, header := range msg.Headers {
+		if string(header.Key) == "event_id" && strings.TrimSpace(string(header.Value)) != "" {
+			headers = append(headers, sarama.RecordHeader{Key: []byte("event_id"), Value: header.Value})
+			break
+		}
 	}
 	return headers
 }
@@ -225,7 +233,7 @@ func envelopeTypeOf(payload []byte) envelope.MessageType {
 }
 
 func (h *NewKafkaConsumerGroupHandler) processMessage(msg *sarama.ConsumerMessage) error {
-	if matches := deleteUserPatternCapture.FindStringSubmatch(string(msg.Value)); len(matches) == 3 {
+	if matches := deleteUserPatternCapture.FindStringSubmatch(string(msg.Value)); len(matches) == 4 {
 		currentContainerID := envString("HOSTNAME", "local")
 		if matches[2] != currentContainerID {
 			return nil

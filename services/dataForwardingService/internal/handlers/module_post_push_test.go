@@ -19,7 +19,7 @@ func TestGroupPartialDeliveryFailureIsRetryableAndDoesNotSkipOtherPods(t *testin
 	localFailure := errors.New("local queue full")
 	remoteFailure := errors.New("Kafka unavailable")
 	var localCalls, remoteCalls int
-	err := routeGroupTargets([]int64{2, 3, 4, 5}, map[string]string{"2": "local", "3": "remote", "4": "remote"}, "local",
+	err := routeGroupTargets(42, []int64{2, 3, 4, 5}, map[string]string{"2": "local", "3": "remote", "4": "remote"}, "local",
 		func(string, string) error { localCalls++; return localFailure },
 		func(topic string, users []int64) error {
 			remoteCalls++
@@ -28,15 +28,36 @@ func TestGroupPartialDeliveryFailureIsRetryableAndDoesNotSkipOtherPods(t *testin
 			}
 			return remoteFailure
 		})
-	if localCalls != 1 || remoteCalls != 1 || !errors.Is(err, localFailure) || !errors.Is(err, remoteFailure) || !errors.Is(err, router.ErrUserOffline) {
+	if localCalls != 1 || remoteCalls != 1 || !errors.Is(err, localFailure) || !errors.Is(err, remoteFailure) || errors.Is(err, router.ErrUserOffline) {
 		t.Fatalf("partial failure suppressed: local=%d remote=%d err=%v", localCalls, remoteCalls, err)
 	}
 }
 
 func TestGroupDeliverySuccess(t *testing.T) {
-	if err := routeGroupTargets([]int64{2, 3}, map[string]string{"2": "local", "3": "remote"}, "local",
+	if err := routeGroupTargets(42, []int64{2, 3}, map[string]string{"2": "local", "3": "remote"}, "local",
 		func(string, string) error { return nil }, func(string, []int64) error { return nil }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStoredGroupOfflineMemberDoesNotFailOnlineDelivery(t *testing.T) {
+	var localCalls, remoteCalls int
+	err := routeGroupTargets(42, []int64{4, 2, 3}, map[string]string{"2": "local", "3": "remote"}, "local",
+		func(userID, _ string) error {
+			localCalls++
+			if userID != "2" {
+				t.Fatalf("unexpected local target: %s", userID)
+			}
+			return nil
+		}, func(_ string, users []int64) error {
+			remoteCalls++
+			if len(users) != 1 || users[0] != 3 {
+				t.Fatalf("unexpected remote targets: %v", users)
+			}
+			return nil
+		})
+	if err != nil || localCalls != 1 || remoteCalls != 1 {
+		t.Fatalf("offline member triggered whole-message failure: local=%d remote=%d err=%v", localCalls, remoteCalls, err)
 	}
 }
 

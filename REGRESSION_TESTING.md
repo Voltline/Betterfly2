@@ -343,3 +343,31 @@ DB_MAX_OPEN_CONNS=2 DB_MAX_IDLE_CONNS=1 BETTERFLY_ACCEPTANCE=1 go test -race -ru
 真实 PostgreSQL 推送资格测试通过，测试耗时 1.43 秒；APNs payload 另用本地模拟端点验收。
 本轮未进行 iOS/Notification Service Extension 实机或真实 APNs 新频道通知验收，需客户端完成适配。
 百万订阅者容量、评论/反应、静音、邀请链接不在本轮范围。没有 commit/push。
+
+## 单张图片与配文（2026-10-01）
+
+协议与客户端适配说明见 [IMAGE_CAPTIONS.md](IMAGE_CAPTIONS.md)。
+本轮使用全新 v7 迁移追加 messages.caption，不重写已发布迁移。
+
+覆盖 PB 旧字节兼容及六个新增字段往返；4096 code points/16KiB、非法 UTF-8、
+换行/Markdown 原文保留、非 image 拒绝；Storage 新插入及不同正文重试返回原记录。
+覆盖查询、普通/独立撤回同步、频道历史的配文透传和三字段撤回遮蔽；
+图片 L1/L2 旧缓存命中回源，源/目标 DF 抑制已撤回图片 Kafka 重放，数据库失败仍重试。
+覆盖一次副作用及 canonical ACK、频道只读鉴权、频道/普通群/私聊 APNs 摘要和头像标识。
+
+执行结果：15 个 Go module 各自 go test ./...、go build ./...、go vet ./... 通过；
+shared、DF、Storage、Friend、Call、Push、AB Test、proto/data_forwarding
+各自 go test -race ./... 通过。make -C proto、gofmt 检查及 git diff --check 通过。
+
+新增 TestImageCaptionEndToEnd 的显式启用入口：
+
+```bash
+# 已迁移 v7 且已重建的专用 Compose
+cd services/dataForwardingService
+BETTERFLY_ACCEPTANCE=1 go test -race -run '^TestImageCaptionEndToEnd$' -count=1 -v -timeout 3m ./integration
+```
+
+本轮 docker compose ps 未发现运行容器，因此真实 WSS/Kafka/PostgreSQL 图文 E2E
+未运行（默认测试跳过不代表实测通过），未执行远端/本地数据库 v7 迁移。
+真实上传对象、APNs 设备通知和 iOS/NSE 仍需部署/客户端适配后验证。
+无 iOS 工作区变更，未 commit/push。

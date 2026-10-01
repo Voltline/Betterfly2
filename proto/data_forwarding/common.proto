@@ -19,6 +19,7 @@ message Post {
   string real_file_name = 7; // 仅对文件生效，为了保证到达时文件名可以复原
   string client_message_id = 8; // 客户端生成的稳定消息ID，重试时必须保持不变
   int64 message_id = 9; // 服务端入库后填入；客户端发送时忽略
+  string caption = 10; // image配文，保留换行及Markdown原文
 }
 
 enum MessageRecallResult {

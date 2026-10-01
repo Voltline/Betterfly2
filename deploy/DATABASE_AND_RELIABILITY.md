@@ -12,15 +12,15 @@ docker compose -f services/docker-compose.yml run --rm db_migrate
 
 Migrations are an explicit ordered list. Each version is committed to
 `schema_migrations` only after that version succeeds, and one PostgreSQL session
-advisory lock covers the complete migration run. For schema v6, publish the
-immutable `betterfly2/db-migrate:schema-v6` image (prefer a digest in production),
+advisory lock covers the complete migration run. For schema v7, publish the
+immutable `betterfly2/db-migrate:schema-v7` image (prefer a digest in production),
 run the versioned Job, and wait for it before rolling business Deployments:
 
 ```bash
 kubectl apply -f deploy/k8s/base/namespace.yaml
 kubectl apply -f deploy/k8s/base/configmap.yaml -f /tmp/betterfly2-secret.yaml
 kubectl apply -k deploy/k8s/migrations
-kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v6 --timeout=5m
+kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v7 --timeout=5m
 kubectl apply -k deploy/k8s/base
 kubectl -n betterfly2 wait --for=condition=complete job/betterfly-kafka-topics --timeout=5m
 ```
@@ -35,12 +35,18 @@ The migration Job is deliberately absent from the normal base kustomization.
 Its versioned name makes every schema release execute once. The included Argo CD
 `PreSync` annotation makes migration success a Deployment rollout prerequisite;
 other deployment systems must implement the same ordered gate explicitly.
-Migrations v1-v5 are frozen release history: future model changes must use a new
+Migrations v1-v6 are frozen release history: future model changes must use a new
 explicit migration version rather than editing a historical migration function.
 
 Schema v6 adds only the channel settings table and its indexes; existing groups,
 membership and message columns are unchanged. See [channel rollout](../CHANNELS.md)
 for the migration-first, Friend/Storage/Push-before-DataForwarding upgrade order.
+
+Schema v7 adds only `messages.caption text NOT NULL DEFAULT ''`. It does not
+rewrite content or add any table. See [image captions](../IMAGE_CAPTIONS.md).
+Apply v7 before deploying code compiled with schema version 7. Older binaries
+accept the newer schema, but all Storage/DF replicas must be upgraded before
+clients enable captions; old field-by-field conversions can drop the new field.
 
 `DB_AUTO_MIGRATE=true` remains available for a single-process development setup.
 It is disabled by default and must not be enabled on production business Pods.

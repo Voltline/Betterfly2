@@ -9,6 +9,7 @@ import (
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/metrics"
 	"Betterfly2/shared/mq"
+	"Betterfly2/shared/utils"
 	"context"
 	"errors"
 	"fmt"
@@ -76,6 +77,13 @@ type fileExistsCacheEntry struct {
 	FileSize    int64
 	StoragePath string
 }
+
+// Database errors may contain a failing row. Keep caption text out of logs and
+// DLQ summaries while preserving error identity for retry classification.
+type captionStorageError struct{ cause error }
+
+func (e captionStorageError) Error() string { return "image message persistence failed" }
+func (e captionStorageError) Unwrap() error { return e.cause }
 
 // NewStorageHandler 创建新的存储处理器
 func NewStorageHandler(committed chan<- struct{}) *StorageHandler {
@@ -153,6 +161,9 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
 		}}, nil
 	})
+	if err != nil && req.GetStoreNewMessage().GetCaption() != "" {
+		err = captionStorageError{cause: err}
+	}
 	if err == nil {
 		if execution.Replayed && len(cacheKeys) == 0 {
 			cacheKeys = mutationCacheKeys(req)
@@ -186,6 +197,9 @@ func mutationCacheKeys(req *storage.RequestMessage) []string {
 // handleStoreNewMessage 处理存储新消息请求
 func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
+	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil {
+		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+	}
 	if msg.GetIsGroup() {
 		allowed := false
 		var err error
@@ -211,9 +225,13 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		msg.GetRealFileName(),
 		msg.IsGroup,
 		msg.GetClientMessageId(),
+		msg.GetCaption(),
 	)
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
+		if msg.GetCaption() != "" {
+			err = captionStorageError{cause: err}
+		}
 		sugar.Errorf("保存消息到数据库失败: %v", err)
 		metrics.RecordDatabaseError()
 		return nil, err
@@ -240,6 +258,7 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 				FromUserId:      storedMessage.FromUserID,
 				ToUserId:        storedMessage.ToUserID,
 				Content:         storedMessage.Content,
+				Caption:         storedMessage.Caption,
 				MessageType:     storedMessage.MessageType,
 				IsGroup:         storedMessage.IsGroup,
 				RealFileName:    storedMessage.RealFileName,
@@ -247,6 +266,10 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 				ServerTimestamp: storedMessage.Timestamp,
 			},
 		},
+	}
+	if storedMessage.IsRecalled {
+		stored := resp.GetStoreMsgRsp()
+		stored.Content, stored.Caption, stored.RealFileName = "", "", ""
 	}
 
 	return resp, nil
@@ -318,7 +341,11 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 	if cached, ok := h.getFromCache(cacheKey); ok {
 		if msg, ok := cached.(*db.Message); ok {
 			sugar.Debugf("从缓存获取消息: message_id=%d", query.MessageId)
-			return h.authorizedMessageResponseWithDB(database, req, msg)
+			// Older cache writers do not know caption; image state must also be
+			// refreshed after recall, even if cache invalidation failed.
+			if msg.MessageType != "image" {
+				return h.authorizedMessageResponseWithDB(database, req, msg)
+			}
 		}
 	}
 
@@ -446,6 +473,7 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 			FromUserId:   msg.FromUserID,
 			ToUserId:     msg.ToUserID,
 			Content:      msg.Content,
+			Caption:      msg.Caption,
 			Timestamp:    msg.Timestamp,
 			MsgType:      msg.MessageType,
 			IsGroup:      msg.IsGroup,
@@ -610,6 +638,7 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 				FromUserId:   msg.FromUserID,
 				ToUserId:     msg.ToUserID,
 				Content:      msg.Content,
+				Caption:      msg.Caption,
 				Timestamp:    msg.Timestamp,
 				MsgType:      msg.MessageType,
 				IsGroup:      msg.IsGroup,
@@ -629,6 +658,7 @@ func maskRecalledStorageMessage(message *storage.MessageRsp) {
 		return
 	}
 	message.Content = ""
+	message.Caption = ""
 	message.RealFileName = ""
 }
 

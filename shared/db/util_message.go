@@ -27,7 +27,10 @@ type MessageRecallOutcome struct {
 	Status  MessageRecallStatus
 }
 
-func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID string) (*Message, bool, error) {
+func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID, caption string) (*Message, bool, error) {
+	if err := utils.ValidateImageCaption(messageType, caption); err != nil {
+		return nil, false, err
+	}
 	clientMessageID = strings.TrimSpace(clientMessageID)
 	var clientMessageIDPtr *string
 	if clientMessageID != "" {
@@ -38,6 +41,7 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 		FromUserID:      fromUserID,
 		ToUserID:        toUserID,
 		Content:         content,
+		Caption:         caption,
 		Timestamp:       utils.NowTime(),
 		MessageType:     messageType,
 		RealFileName:    realFileName,
@@ -195,6 +199,7 @@ FROM (
     m.from_user_id,
     m.to_user_id,
     m.content,
+    m.caption,
     m.timestamp,
     m.message_type,
     m.real_file_name,
@@ -214,6 +219,7 @@ FROM (
     m.from_user_id,
     m.to_user_id,
     m.content,
+    m.caption,
     m.timestamp,
     m.message_type,
     m.real_file_name,

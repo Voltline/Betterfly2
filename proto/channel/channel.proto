@@ -113,6 +113,7 @@ message ChannelPost {
   bool is_recalled = 7;
   string recalled_at = 8;
   int64 recalled_by = 9;
+  string caption = 10;
 }
 
 message ChannelResponse {

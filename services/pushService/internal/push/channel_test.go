@@ -44,3 +44,31 @@ func TestChannelPresentationReadsSettingsAndPreservesGroupAvatar(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestImageCaptionNotificationKeepsChannelGroupAndDirectIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		group, channel bool
+		title, body    string
+	}{
+		{"channel", true, true, "公告频道", "[图片] 公告内容"},
+		{"group", true, false, "普通群", "发送者：[图片] 公告内容"},
+		{"direct", false, false, "发送者", "[图片] 公告内容"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &memoryStore{presentation: MessagePresentation{Title: test.title, IsChannel: test.channel, SenderName: "发送者", Avatar: "avatar-hash", AvatarIsGroup: test.group}}
+			service := &Service{store: store, now: time.Now}
+			payload, err := proto.Marshal(&pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
+				MessageId: 41, SenderUserId: 1, ConversationId: 9, IsGroup: test.group, MessageType: "image", Preview: "[图片] 公告内容", SentAt: "2026-10-01T00:00:00Z",
+			}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared := service.prepareDeliveries(context.Background(), deliveryKindMessage, []DurableDeliveryClaim{{MessageID: 41, JobID: "image-job", RequestPayload: payload, Token: db.PushDeviceToken{Token: "valid", IsActive: true}}})
+			n := prepared[0].notification
+			if prepared[0].prepareErr != nil || n.Title != test.title || n.Body != test.body || n.Avatar != "avatar-hash" || n.IsChannel != test.channel || n.AvatarIsGroup != test.group || n.MessageID != 41 {
+				t.Fatal("image notification lost identity or added wrong prefix")
+			}
+		})
+	}
+}

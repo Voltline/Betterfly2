@@ -111,6 +111,7 @@ type Message struct {
 	FromUserID      int64   `gorm:"type:int8;uniqueIndex:uidx_messages_sender_client_id,priority:1;comment:消息来源用户ID"`
 	ToUserID        int64   `gorm:"type:int8;index:idx_messages_sync_target_time_id,priority:2;comment:消息去向用户ID"`
 	Content         string  `gorm:"type:varchar(700);comment:消息内容"`
+	Caption         string  `gorm:"type:text;not null;default:'';comment:图片配文，保留原文"`
 	Timestamp       string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time_id,priority:3;comment:消息产生时间"`
 	MessageType     string  `gorm:"type:varchar(10);comment:消息类型"`
 	RealFileName    string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`

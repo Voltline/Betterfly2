@@ -95,26 +95,52 @@ func TestPendingMigrationsSupportsFirstRepeatAndLegacyUpgrade(t *testing.T) {
 
 func TestMigrationPlanIncludesMessageRecallV5(t *testing.T) {
 	plan := migrationPlan()
-	if len(plan) != 6 || plan[4].Version != 5 || plan[4].Name != "message recall state" || plan[4].Apply == nil {
+	if len(plan) != 7 || plan[4].Version != 5 || plan[4].Name != "message recall state" || plan[4].Apply == nil {
 		t.Fatalf("unexpected migration plan tail: %+v", plan)
 	}
 	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 2 || pending[0].Version != 5 || pending[1].Version != 6 {
-		t.Fatalf("schema v4 upgrade pending=%+v, want v5 and v6", pending)
+	if len(pending) != 3 || pending[0].Version != 5 || pending[1].Version != 6 || pending[2].Version != 7 {
+		t.Fatalf("schema v4 upgrade pending=%+v, want v5-v7", pending)
 	}
 }
 
 func TestMigrationPlanChannelsV6IsAdditive(t *testing.T) {
 	plan := migrationPlan()
 	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5})
-	if err != nil || len(pending) != 1 || pending[0].Version != 6 || pending[0].Name != "broadcast channels" {
+	if err != nil || len(pending) != 2 || pending[0].Version != 6 || pending[0].Name != "broadcast channels" {
 		t.Fatalf("schema v5 upgrade pending=%+v err=%v", pending, err)
 	}
-	if pending, err = pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6}); err != nil || len(pending) != 0 {
+	if pending, err = pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6}); err != nil || len(pending) != 1 || pending[0].Version != 7 {
 		t.Fatalf("repeat migration pending=%v err=%v", pending, err)
+	}
+}
+
+func TestImageCaptionMigrationV7RepeatAndFailure(t *testing.T) {
+	pending, err := pendingMigrations(migrationPlan(), []int{1, 2, 3, 4, 5, 6})
+	if err != nil || len(pending) != 1 || pending[0].Version != 7 {
+		t.Fatalf("v7 upgrade: %v %v", pending, err)
+	}
+	if pending, err = pendingMigrations(migrationPlan(), []int{1, 2, 3, 4, 5, 6, 7}); err != nil || len(pending) != 0 {
+		t.Fatalf("v7 repeat: %v %v", pending, err)
+	}
+	database, mock := newInboxDatabase(t)
+	injected := errors.New("DDL interrupted")
+	statement := `ALTER TABLE messages ADD COLUMN IF NOT EXISTS caption text NOT NULL DEFAULT ''`
+	mock.ExpectExec(statement).WillReturnError(injected)
+	if err := migrateImageCaptionSchema(database); !errors.Is(err, injected) {
+		t.Fatalf("migration failure hidden: %v", err)
+	}
+	for range 2 {
+		mock.ExpectExec(statement).WillReturnResult(sqlmock.NewResult(0, 0))
+		if err := migrateImageCaptionSchema(database); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -11,6 +11,7 @@ message StoreNewMessage {
   string real_file_name = 6;
   string client_message_id = 7;
   string client_timestamp = 8;
+  string caption = 9;
 }
 
 message QueryMessage {

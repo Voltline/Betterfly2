@@ -119,8 +119,9 @@ docker compose run --rm --no-deps db_migrate
 旧客户端和旧序列化字段仍可解析；旧客户端忽略 is_channel，可能将频道当普通群显示，
 但旧 DF 的群发言路径仍受到新版 Storage 的只读检查。
 协议生成文件按仓库现有方式生成，不手工编辑 pb.go。
-Kubernetes 活动 migration manifest 为 schema-v6 Job，需构建相应固定镜像，
-等待成功后再 rollout；schema-v5 Job 留作历史文件但不在活动 kustomization 中。
+频道最初使用 schema-v6 Job；当前活动 migration manifest 为 schema-v7 Job
+（追加图片配文列），需构建相应固定镜像并等待成功后再 rollout。
+schema-v5/v6 Job 留作历史文件但不在活动 kustomization 中。
 
 ## 本轮边界
 

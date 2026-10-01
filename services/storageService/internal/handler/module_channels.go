@@ -26,9 +26,9 @@ func init() {
 						messages = messages[:size]
 					}
 					for _, message := range messages {
-						post := &channel.ChannelPost{MessageId: message.MessageID, AuthorUserId: message.FromUserID, Content: message.Content, MsgType: message.MessageType, RealFileName: message.RealFileName, Timestamp: message.Timestamp, IsRecalled: message.IsRecalled, RecalledAt: message.RecalledAt, RecalledBy: message.RecalledBy}
+						post := &channel.ChannelPost{MessageId: message.MessageID, AuthorUserId: message.FromUserID, Content: message.Content, Caption: message.Caption, MsgType: message.MessageType, RealFileName: message.RealFileName, Timestamp: message.Timestamp, IsRecalled: message.IsRecalled, RecalledAt: message.RecalledAt, RecalledBy: message.RecalledBy}
 						if message.IsRecalled {
-							post.Content, post.RealFileName = "", ""
+							post.Content, post.Caption, post.RealFileName = "", "", ""
 						}
 						response.Posts = append(response.Posts, post)
 						response.NextBeforeMessageId = message.MessageID

@@ -9,6 +9,7 @@ import (
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
+	"Betterfly2/shared/utils"
 	"context"
 	"data_forwarding_service/internal/monitor"
 	"data_forwarding_service/internal/publisher"
@@ -16,10 +17,13 @@ import (
 	routerpkg "data_forwarding_service/internal/router"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 func init() {
@@ -32,8 +36,8 @@ func registerPostModule(router *dispatch.OneofRouter[dfRequestContext, dfRequest
 	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_Post) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
 		err := handlePostMessage(ctx.fromID, ctx.message)
-		if errors.Is(err, errPostForbidden) {
-			return dfRequestResult{response: &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: errPostForbidden.Error()}}}}, nil
+		if errors.Is(err, errPostForbidden) || errors.Is(err, utils.ErrInvalidCaption) {
+			return dfRequestResult{response: &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: err.Error()}}}}, nil
 		}
 		return dfRequestResult{}, err
 	})
@@ -58,6 +62,7 @@ func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID str
 			FromUserId:      payload.GetFromId(),
 			ToUserId:        payload.GetToId(),
 			Content:         payload.GetMsg(),
+			Caption:         payload.GetCaption(),
 			MessageType:     payload.GetMsgType(),
 			IsGroup:         payload.GetIsGroup(),
 			RealFileName:    payload.GetRealFileName(),
@@ -119,6 +124,10 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 	if payload == nil {
 		return errors.New("待投递消息为空")
 	}
+	payload.MessageId = messageID
+	if allowed, err := ImagePostDeliveryAllowed(payload); err != nil || !allowed {
+		return err
+	}
 	owner, err := claimPostEffects(context.Background(), messageID)
 	if err != nil {
 		return err
@@ -153,6 +162,9 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 	payload := message.GetPost()
 	logger.Sugar().Debugf("收到跨Pod消息: message_id=%d from=%d to=%d", payload.GetMessageId(), payload.GetFromId(), payload.GetToId())
 	if err := validatePostPayload(payload); err != nil {
+		return err
+	}
+	if allowed, err := ImagePostDeliveryAllowed(payload); err != nil || !allowed {
 		return err
 	}
 
@@ -196,6 +208,9 @@ func validatePostPayload(payload *pb.Post) error {
 	if payload == nil {
 		return errors.New("post消息为空")
 	}
+	if err := utils.ValidateImageCaption(payload.GetMsgType(), payload.GetCaption()); err != nil {
+		return err
+	}
 
 	msgType := strings.TrimSpace(payload.GetMsgType())
 	msg := strings.TrimSpace(payload.GetMsg())
@@ -224,6 +239,20 @@ func validatePostPayload(payload *pb.Post) error {
 // ValidatePostPayload validates an internal post before it enters the delivery path.
 func ValidatePostPayload(payload *pb.Post) error {
 	return validatePostPayload(payload)
+}
+
+// Persisted image envelopes may outlive a recall in Kafka. Check committed
+// state at each delivery Pod; never trust the old envelope or a cache here.
+func ImagePostDeliveryAllowed(post *pb.Post) (bool, error) {
+	if post.GetMessageId() <= 0 || strings.TrimSpace(post.GetMsgType()) != "image" {
+		return true, nil
+	}
+	var state struct{ IsRecalled bool }
+	result := sharedDB.DB().Model(&sharedDB.Message{}).Select("is_recalled").Where("message_id = ?", post.GetMessageId()).Take(&state)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	return result.Error == nil && !state.IsRecalled, result.Error
 }
 
 func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
@@ -332,7 +361,10 @@ func messagePushPreview(payload *pb.Post) string {
 	case "text", "link":
 		preview = strings.TrimSpace(payload.GetMsg())
 	case "image":
-		preview = "发送了一张图片"
+		preview = "[图片]"
+		if caption := imageCaptionPreview(payload.GetCaption()); caption != "" {
+			preview += " " + caption
+		}
 	case "gif":
 		preview = "发送了一个 GIF"
 	case "file":
@@ -356,6 +388,20 @@ func messagePushPreview(payload *pb.Post) string {
 		preview = string(runes[:180]) + "…"
 	}
 	return preview
+}
+
+var captionMarkdownLink = regexp.MustCompile(`!?\[([^\]]*)\]\([^)]*\)`)
+
+func imageCaptionPreview(caption string) string {
+	caption = captionMarkdownLink.ReplaceAllString(caption, "$1")
+	caption = strings.NewReplacer("*", "", "_", "", "`", "", "~", "", "#", "", ">", "").Replace(caption)
+	caption = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, caption)
+	return strings.Join(strings.Fields(caption), " ")
 }
 
 func membersWithoutSender(memberIDs []int64, senderID int64) []int64 {

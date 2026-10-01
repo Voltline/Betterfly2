@@ -38,3 +38,24 @@ func TestChannelPayloadCarriesIdentityAndOptionalChannelMarker(t *testing.T) {
 		}
 	}
 }
+
+func TestImageCaptionAPNsPayloadContainsOnlySummary(t *testing.T) {
+	n := pushservice.Notification{IsGroup: true, IsChannel: true, ConversationID: 9, MessageID: 41, MessageType: "image", Title: "公告频道", Body: "[图片] 公告内容", Avatar: "channel-avatar", AvatarIsGroup: true, SentAt: time.Now()}
+	raw, err := marshalMessagePayload(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	alert := payload["aps"].(map[string]any)["alert"].(map[string]any)
+	if alert["title"] != "公告频道" || alert["body"] != "[图片] 公告内容" || payload["is_channel"] != true || payload["avatar"] != "channel-avatar" {
+		t.Fatal("APNs image summary/identity changed")
+	}
+	for _, field := range []string{"caption", "image", "image_data", "file_hash"} {
+		if _, present := payload[field]; present {
+			t.Fatal("unexpected image attachment/full caption protocol")
+		}
+	}
+}

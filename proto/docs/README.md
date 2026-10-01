@@ -1,5 +1,8 @@
 # Protobuf 协议
 
+图片配文的实际字段号、兼容约束与 iOS 生成文件见
+[单张图片与配文](../../IMAGE_CAPTIONS.md)。
+
 `proto/` 保存 Betterfly2 的客户端和服务间协议：
 
 | 目录 | 用途 |

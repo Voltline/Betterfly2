@@ -80,7 +80,7 @@ func TestMessagePushPreviewHidesStorageIdentifiers(t *testing.T) {
 		post *pb.Post
 		want string
 	}{
-		{&pb.Post{MsgType: "image", Msg: "private-file-hash"}, "发送了一张图片"},
+		{&pb.Post{MsgType: "image", Msg: "private-file-hash"}, "[图片]"},
 		{&pb.Post{MsgType: "file", Msg: "private-file-hash", RealFileName: "report.pdf"}, "发送了文件：report.pdf"},
 		{&pb.Post{MsgType: "audio", Msg: "private-file-hash"}, "发送了一条语音"},
 	}

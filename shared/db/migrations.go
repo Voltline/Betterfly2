@@ -24,7 +24,7 @@ var nonPostgresMigrationLock sync.Mutex
 const legacySnapshotMigrationVersion = 3
 
 func migrationPlan() []Migration {
-	// Versions 1-5 are published history. Do not add newly introduced models to
+	// Versions 1-6 are published history. Do not add newly introduced models to
 	// these functions; the next schema change must be an explicit new version.
 	return []Migration{
 		{Version: 1, Name: "core schema", Apply: migrateCoreSchema},
@@ -33,6 +33,7 @@ func migrationPlan() []Migration {
 		{Version: 4, Name: "transactional inbox outbox and durable push", Apply: migrateReliabilitySchema},
 		{Version: 5, Name: "message recall state", Apply: migrateMessageRecallSchema},
 		{Version: 6, Name: "broadcast channels", Apply: migrateChannelSchema},
+		{Version: 7, Name: "image message caption", Apply: migrateImageCaptionSchema},
 	}
 }
 
@@ -245,6 +246,16 @@ func migrateMessageRecallSchema(tx *gorm.DB) error {
 
 func migrateChannelSchema(tx *gorm.DB) error {
 	return migrateModelsAdditive(tx, &ChannelSettings{})
+}
+
+func migrateImageCaptionSchema(tx *gorm.DB) error {
+	if tx.Dialector.Name() == "postgres" {
+		return tx.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS caption text NOT NULL DEFAULT ''`).Error
+	}
+	if !tx.Migrator().HasColumn(&Message{}, "Caption") {
+		return tx.Migrator().AddColumn(&Message{}, "Caption")
+	}
+	return nil
 }
 
 type additiveSchemaMigrator interface {

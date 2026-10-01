@@ -548,6 +548,9 @@ func (h *NewKafkaConsumerGroupHandler) deliverMessageRecallToUsers(event *pb.Mes
 }
 
 func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, targetUserIDs []int64) error {
+	if allowed, err := handlers.ImagePostDeliveryAllowed(post); err != nil || !allowed {
+		return err
+	}
 	resp := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Post{
 			Post: post,
@@ -616,6 +619,8 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 					Warn: &pb.Warn{WarningMessage: "无权访问该资源"},
 				},
 			}
+		case storage.StorageResult_INVALID_ARGUMENT:
+			dfResp = &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: "消息参数不合法"}}}
 		default:
 			dfResp = &pb.ResponseMessage{
 				Payload: &pb.ResponseMessage_Warn{
@@ -683,6 +688,7 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 					FromUserId:   msg.GetFromUserId(),
 					ToUserId:     msg.GetToUserId(),
 					Content:      msg.GetContent(),
+					Caption:      msg.GetCaption(),
 					Timestamp:    msg.GetTimestamp(),
 					MsgType:      msg.GetMsgType(),
 					IsGroup:      msg.GetIsGroup(),
@@ -804,6 +810,7 @@ func processStoredPostResponse(stored *storage.StoreMsgRsp, complete func() erro
 		deliveryErr = deliver(stored.GetMessageId(), &pb.Post{
 			FromId: stored.GetFromUserId(), ToId: stored.GetToUserId(),
 			Msg: stored.GetContent(), MsgType: stored.GetMessageType(),
+			Caption: stored.GetCaption(),
 			IsGroup: stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
 			Timestamp: timestamp, ClientMessageId: stored.GetClientMessageId(), MessageId: stored.GetMessageId(),
 		})
@@ -817,6 +824,7 @@ func convertStorageMessages(messages []*storage.MessageRsp) []*pb.MessageRsp {
 		result = append(result, &pb.MessageRsp{
 			MessageId: msg.GetMessageId(), FromUserId: msg.GetFromUserId(), ToUserId: msg.GetToUserId(),
 			Content: msg.GetContent(), Timestamp: msg.GetTimestamp(), MsgType: msg.GetMsgType(), IsGroup: msg.GetIsGroup(),
+			Caption:      msg.GetCaption(),
 			RealFileName: msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
 		})
 	}

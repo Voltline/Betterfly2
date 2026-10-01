@@ -76,7 +76,7 @@ func TestChannelPublicationStorageGateCannotBeBypassedByOldForwarder(t *testing.
 		if mismatch {
 			sender = 3
 		}
-		resp, err := (&StorageHandler{database: database}).handleStoreNewMessageWithDB(database, &storage.RequestMessage{TargetUserId: 2}, &storage.StoreNewMessage{FromUserId: sender, ToUserId: 9, IsGroup: true, Content: "not allowed", MessageType: "text"}, nil)
+		resp, err := (&StorageHandler{database: database}).handleStoreNewMessageWithDB(database, &storage.RequestMessage{TargetUserId: 2}, &storage.StoreNewMessage{FromUserId: sender, ToUserId: 9, IsGroup: true, Content: "image-hash", MessageType: "image", Caption: fixtureCaption}, nil)
 		if err != nil || resp.Result != storage.StorageResult_FORBIDDEN {
 			t.Fatalf("publication bypass: %v %v", resp, err)
 		}

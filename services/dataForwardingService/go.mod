@@ -12,6 +12,7 @@ require (
 	Betterfly2/proto/push v0.0.0
 	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/IBM/sarama v1.45.2
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/gorilla/websocket v1.5.3
@@ -20,6 +21,8 @@ require (
 	golang.org/x/crypto v0.45.0
 	google.golang.org/grpc v1.64.1
 	google.golang.org/protobuf v1.36.6
+	gorm.io/driver/postgres v1.5.11
+	gorm.io/gorm v1.25.12
 )
 
 require (
@@ -60,8 +63,6 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240318140521-94a12d6c2237 // indirect
-	gorm.io/driver/postgres v1.5.11 // indirect
-	gorm.io/gorm v1.25.12 // indirect
 )
 
 replace (

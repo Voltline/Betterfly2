@@ -29,7 +29,7 @@ func TestLegacyPostAndSyncRequestBytes(t *testing.T) {
 
 func TestLegacyClientCanReadPostWithServerMessageID(t *testing.T) {
 	descriptor := protodesc.ToDescriptorProto((&Post{}).ProtoReflect().Descriptor())
-	descriptor.Field = descriptor.Field[:len(descriptor.Field)-1] // Original fields 1-8.
+	descriptor.Field = descriptor.Field[:8] // Original fields 1-8.
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
 		Name: proto.String("legacy_post.proto"), Syntax: proto.String("proto3"), MessageType: []*descriptorpb.DescriptorProto{descriptor},
 	}, nil)

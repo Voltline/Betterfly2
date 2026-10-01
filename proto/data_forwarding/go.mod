@@ -4,6 +4,7 @@ require (
 	Betterfly2/proto v0.0.0
 	Betterfly2/proto/call v0.0.0
 	Betterfly2/proto/push v0.0.0
+	Betterfly2/proto/storage v0.0.0
 	google.golang.org/protobuf v1.36.6
 )
 
@@ -16,3 +17,5 @@ replace Betterfly2/proto/call => ../call
 replace Betterfly2/proto/push => ../push
 
 replace Betterfly2/proto => ..
+
+replace Betterfly2/proto/storage => ../storage

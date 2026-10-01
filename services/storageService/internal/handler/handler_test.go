@@ -252,7 +252,7 @@ func TestHandleStoreNewMessage(t *testing.T) {
 	// 设置数据库期望
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", "", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(12345))
 	mock.ExpectCommit()
 
@@ -290,7 +290,7 @@ func TestHandleStoreNewMessageReturnsExistingMessageForDuplicateClientID(t *test
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").
-		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
+		WithArgs("client-message-1", int64(1000), int64(1001), "Hello, World!", "", sqlmock.AnyArg(), "text", "", false, false, "", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT \\* FROM \"messages\" WHERE from_user_id = \\$1 AND client_message_id = \\$2 ORDER BY \"messages\".\"message_id\" LIMIT \\$3").

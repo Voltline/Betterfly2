@@ -13,6 +13,7 @@ message StoreNewMessage {
   string client_timestamp = 8;
   string caption = 9;
   int64 reply_to_message_id = 10;
+  int64 discussion_root_message_id = 11;
 }
 
 message QueryMessage {

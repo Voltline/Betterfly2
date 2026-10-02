@@ -553,6 +553,13 @@ func (h *NewKafkaConsumerGroupHandler) deliverGroupPostToUsers(post *pb.Post, ta
 	if allowed, err := handlers.ImagePostDeliveryAllowed(post); err != nil || !allowed {
 		return err
 	}
+	if post.GetDiscussionRootMessageId() > 0 {
+		ids, err := handlers.DiscussionDeliveryRecipients(post, targetUserIDs)
+		if err != nil {
+			return err
+		}
+		targetUserIDs = ids
+	}
 	resp := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_Post{
 			Post: post,
@@ -673,6 +680,11 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 			if err := handlers.DeliverMessageRecall(event); err != nil {
 				return fmt.Errorf("投递消息撤回事件失败: %v", err)
 			}
+			if recall.GetDiscussionRoot() != nil {
+				if err := handlers.DeliverMessageRecall(buildMessageRecallEvent(storage.StorageResult_OK, recall.GetDiscussionRoot())); err != nil {
+					return err
+				}
+			}
 		}
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_MessageRecallEvent{MessageRecallEvent: event},
@@ -686,19 +698,21 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_MessageRsp{
 				MessageRsp: &pb.MessageRsp{
-					MessageId:        msg.GetMessageId(),
-					FromUserId:       msg.GetFromUserId(),
-					ToUserId:         msg.GetToUserId(),
-					Content:          msg.GetContent(),
-					Caption:          msg.GetCaption(),
-					ReplyToMessageId: msg.GetReplyToMessageId(),
-					Timestamp:        msg.GetTimestamp(),
-					MsgType:          msg.GetMsgType(),
-					IsGroup:          msg.GetIsGroup(),
-					RealFileName:     msg.GetRealFileName(),
-					IsRecalled:       msg.GetIsRecalled(),
-					RecalledAt:       msg.GetRecalledAt(),
-					RecalledBy:       msg.GetRecalledBy(),
+					MessageId:               msg.GetMessageId(),
+					FromUserId:              msg.GetFromUserId(),
+					ToUserId:                msg.GetToUserId(),
+					Content:                 msg.GetContent(),
+					Caption:                 msg.GetCaption(),
+					ReplyToMessageId:        msg.GetReplyToMessageId(),
+					DiscussionRootMessageId: msg.GetDiscussionRootMessageId(),
+					SourceChannelMessageId:  msg.GetSourceChannelMessageId(),
+					Timestamp:               msg.GetTimestamp(),
+					MsgType:                 msg.GetMsgType(),
+					IsGroup:                 msg.GetIsGroup(),
+					RealFileName:            msg.GetRealFileName(),
+					IsRecalled:              msg.GetIsRecalled(),
+					RecalledAt:              msg.GetRecalledAt(),
+					RecalledBy:              msg.GetRecalledBy(),
 				},
 			},
 		}
@@ -802,6 +816,9 @@ func processStoredPostResponse(stored *storage.StoreMsgRsp, complete func() erro
 	if stored == nil || stored.GetMessageId() <= 0 {
 		return permanentError("存储消息响应缺少message_id")
 	}
+	if stored.GetSourceChannelMessageId() > 0 {
+		return deliver(stored.GetMessageId(), &pb.Post{FromId: stored.GetFromUserId(), ToId: stored.GetToUserId(), IsGroup: true, MsgType: "text", Timestamp: stored.GetServerTimestamp(), MessageId: stored.GetMessageId(), DiscussionRootMessageId: stored.GetDiscussionRootMessageId(), SourceChannelMessageId: stored.GetSourceChannelMessageId()})
+	}
 	cacheErr := complete()
 	ackErr := acknowledge(buildPostAckResponse(stored))
 	var deliveryErr error
@@ -813,9 +830,11 @@ func processStoredPostResponse(stored *storage.StoreMsgRsp, complete func() erro
 		deliveryErr = deliver(stored.GetMessageId(), &pb.Post{
 			FromId: stored.GetFromUserId(), ToId: stored.GetToUserId(),
 			Msg: stored.GetContent(), MsgType: stored.GetMessageType(),
-			Caption:          stored.GetCaption(),
-			ReplyToMessageId: stored.GetReplyToMessageId(),
-			IsGroup:          stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
+			Caption:                 stored.GetCaption(),
+			ReplyToMessageId:        stored.GetReplyToMessageId(),
+			DiscussionRootMessageId: stored.GetDiscussionRootMessageId(),
+			SourceChannelMessageId:  stored.GetSourceChannelMessageId(),
+			IsGroup:                 stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
 			Timestamp: timestamp, ClientMessageId: stored.GetClientMessageId(), MessageId: stored.GetMessageId(),
 		})
 	}
@@ -828,9 +847,11 @@ func convertStorageMessages(messages []*storage.MessageRsp) []*pb.MessageRsp {
 		result = append(result, &pb.MessageRsp{
 			MessageId: msg.GetMessageId(), FromUserId: msg.GetFromUserId(), ToUserId: msg.GetToUserId(),
 			Content: msg.GetContent(), Timestamp: msg.GetTimestamp(), MsgType: msg.GetMsgType(), IsGroup: msg.GetIsGroup(),
-			Caption:          msg.GetCaption(),
-			ReplyToMessageId: msg.GetReplyToMessageId(),
-			RealFileName:     msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
+			Caption:                 msg.GetCaption(),
+			ReplyToMessageId:        msg.GetReplyToMessageId(),
+			DiscussionRootMessageId: msg.GetDiscussionRootMessageId(),
+			SourceChannelMessageId:  msg.GetSourceChannelMessageId(),
+			RealFileName:            msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
 		})
 	}
 	return result

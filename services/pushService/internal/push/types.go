@@ -41,34 +41,35 @@ var (
 )
 
 type Notification struct {
-	Kind               NotificationKind
-	Token              string
-	Environment        pushpb.PushEnvironment
-	CallID             string
-	CallerUserID       int64
-	CalleeUserID       int64
-	CallType           string
-	ExpiresAt          time.Time
-	SenderUserID       int64
-	TargetUserID       int64
-	ConversationID     int64
-	IsGroup            bool
-	IsChannel          bool
-	MessageType        string
-	MessageID          int64
-	SentAt             time.Time
-	Title              string
-	Body               string
-	CustomData         map[string]any
-	SenderName         string
-	SenderAvatar       string
-	GroupName          string
-	Avatar             string
-	AvatarIsGroup      bool
-	ConversationName   string
-	ConversationAvatar string
-	CampaignID         string
-	DeepLink           string
+	Kind                    NotificationKind
+	Token                   string
+	Environment             pushpb.PushEnvironment
+	CallID                  string
+	CallerUserID            int64
+	CalleeUserID            int64
+	CallType                string
+	ExpiresAt               time.Time
+	SenderUserID            int64
+	TargetUserID            int64
+	ConversationID          int64
+	IsGroup                 bool
+	IsChannel               bool
+	MessageType             string
+	MessageID               int64
+	DiscussionRootMessageID int64
+	SentAt                  time.Time
+	Title                   string
+	Body                    string
+	CustomData              map[string]any
+	SenderName              string
+	SenderAvatar            string
+	GroupName               string
+	Avatar                  string
+	AvatarIsGroup           bool
+	ConversationName        string
+	ConversationAvatar      string
+	CampaignID              string
+	DeepLink                string
 }
 
 type SendResult struct {

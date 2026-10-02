@@ -174,7 +174,8 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 			ConversationID: message.GetConversationId(), IsGroup: message.GetIsGroup(), MessageType: strings.TrimSpace(message.GetMessageType()),
 			IsChannel: cached.presentation.IsChannel,
 			SentAt:    sentAt, MessageID: message.GetMessageId(), ExpiresAt: sentAt.Add(24 * time.Hour),
-			Title: cached.presentation.Title, Body: body, SenderName: cached.presentation.SenderName, SenderAvatar: cached.presentation.SenderAvatar,
+			DiscussionRootMessageID: message.GetDiscussionRootMessageId(),
+			Title:                   cached.presentation.Title, Body: body, SenderName: cached.presentation.SenderName, SenderAvatar: cached.presentation.SenderAvatar,
 			GroupName: cached.presentation.GroupName, Avatar: cached.presentation.Avatar, AvatarIsGroup: cached.presentation.AvatarIsGroup,
 			ConversationName: cached.presentation.ConversationName, ConversationAvatar: cached.presentation.ConversationAvatar,
 		}})

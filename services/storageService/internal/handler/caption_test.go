@@ -43,7 +43,7 @@ func TestImageCaptionStoreAndDuplicateUseCanonicalRecord(t *testing.T) {
 			message := &storage.StoreNewMessage{FromUserId: 1, ToUserId: 2, Content: "original-image-hash", MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}
 			req := &storage.RequestMessage{TargetUserId: 1}
 			mock.ExpectBegin()
-			mock.ExpectQuery("INSERT INTO \"messages\"").WithArgs("image-1", int64(1), int64(2), "original-image-hash", fixtureCaption, int64(0), sqlmock.AnyArg(), "image", "", false, false, "", int64(0)).WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
+			mock.ExpectQuery("INSERT INTO \"messages\"").WithArgs("image-1", int64(1), int64(2), "original-image-hash", fixtureCaption, int64(0), int64(0), int64(0), sqlmock.AnyArg(), "image", "", false, false, "", int64(0), false).WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
 			mock.ExpectCommit()
 			resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), req, message, nil)
 			if err != nil || !resp.GetStoreMsgRsp().GetCreated() || resp.GetStoreMsgRsp().GetCaption() != fixtureCaption {
@@ -167,6 +167,7 @@ func TestChannelManagersCanStoreImageCaption(t *testing.T) {
 		mock.ExpectQuery("INSERT INTO \"messages\"").WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
 		mock.ExpectCommit()
 		h := &StorageHandler{l1Cache: newMockCache()}
+		mock.ExpectQuery(`SELECT \* FROM "channel_settings"`).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 		resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), &storage.RequestMessage{TargetUserId: sender}, &storage.StoreNewMessage{FromUserId: sender, ToUserId: 9, IsGroup: true, Content: "image-hash", MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}, nil)
 		if err != nil || resp.GetResult() != storage.StorageResult_OK || resp.GetStoreMsgRsp().GetCaption() != fixtureCaption {
 			t.Fatal("manager image publication failed")

@@ -85,6 +85,7 @@ message MessagePushRequest {
   string sent_at = 6;
   string preview = 7;
   int64 message_id = 8;
+  int64 discussion_root_message_id = 9;
 }
 
 // MessageRecallPushRequest asks clients to remove or replace the notification

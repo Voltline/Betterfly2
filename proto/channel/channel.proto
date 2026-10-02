@@ -53,6 +53,21 @@ message SetChannelPin {
   int64 channel_id = 1;
   int64 message_id = 2; // 0 clears the single pinned announcement.
 }
+message SetDiscussionGroup {
+  int64 channel_id = 1;
+  int64 group_id = 2; // 0 unlinks; existing threads become read-only.
+}
+message GetDiscussion {
+  string request_id = 1;
+  int64 channel_id = 2;
+  int64 post_message_id = 3;
+}
+message QueryDiscussionReplies {
+  string request_id = 1;
+  int64 root_message_id = 2;
+  int32 page_size = 3;
+  int64 before_message_id = 4;
+}
 message ListSubscribedChannels {
   int32 page_size = 1;
   int64 cursor_channel_id = 2;
@@ -76,6 +91,7 @@ message ChannelRequest {
     ListChannelMembers list_members = 9;
     DeleteChannel delete = 10;
     SetChannelPin set_pin = 11;
+    SetDiscussionGroup set_discussion_group = 12;
   }
 }
 
@@ -100,6 +116,7 @@ message ChannelInfo {
   string update_time = 11;
   int64 pinned_message_id = 12;
   bool notifications_muted = 13; // Current subscriber's preference only.
+  int64 discussion_group_id = 14;
 }
 
 message ChannelMember {
@@ -122,6 +139,20 @@ message ChannelPost {
   int64 recalled_by = 9;
   string caption = 10;
   int64 reply_to_message_id = 11;
+  int64 discussion_root_message_id = 12;
+  int64 source_channel_message_id = 13; // Server-generated announcement card only.
+}
+
+message DiscussionInfo {
+  int64 channel_id = 1;
+  int64 post_message_id = 2;
+  int64 group_id = 3;
+  int64 root_message_id = 4;
+  bool joined = 5;
+  bool can_comment = 6;
+  bool closed = 7;
+  int64 reply_count = 8; // Non-recalled comments, excludes announcement card.
+  ChannelPost post = 9;
 }
 
 message ChannelResponse {
@@ -135,4 +166,5 @@ message ChannelResponse {
   int64 next_cursor_id = 8; // Channel ID for lists; user ID for member lists.
   int64 next_before_message_id = 9;
   repeated ChannelPost posts = 10;
+  DiscussionInfo discussion = 11;
 }

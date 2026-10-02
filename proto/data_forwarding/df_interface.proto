@@ -53,6 +53,8 @@ message RequestMessage {
     channel_interface.ChannelRequest channel_request = 39;
     channel_interface.QueryChannelHistory query_channel_history = 40;
     UpdateGroupNotify update_group_notify = 41;
+    channel_interface.GetDiscussion get_discussion = 42;
+    channel_interface.QueryDiscussionReplies query_discussion_replies = 43;
   }
 }
 

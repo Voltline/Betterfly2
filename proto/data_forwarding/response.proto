@@ -178,6 +178,8 @@ message MessageRsp {
   int64 recalled_by = 11;
   string caption = 12;
   int64 reply_to_message_id = 13;
+  int64 discussion_root_message_id = 14;
+  int64 source_channel_message_id = 15;
 }
 
 // 同步消息响应

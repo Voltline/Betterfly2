@@ -203,7 +203,28 @@ func (s *GormStore) persistMessageJob(tx *gorm.DB, operationKey string, request 
 	if messageState.IsRecalled {
 		return nil, nil, nil
 	}
+	if messageState.SourceChannelMessageID > 0 {
+		return nil, nil, nil
+	}
+	message.DiscussionRootMessageId = messageState.DiscussionRootMessageID
 	targets := uniquePushTargets(message.GetTargetUserIds(), message.GetSenderUserId())
+	if messageState.DiscussionRootMessageID > 0 {
+		allowed, err := db.MessageRecipientIDsWithDB(tx, messageState.MessageID)
+		if err != nil {
+			return nil, nil, err
+		}
+		eligible := make(map[int64]struct{}, len(allowed))
+		for _, id := range allowed {
+			eligible[id] = struct{}{}
+		}
+		filtered := targets[:0]
+		for _, id := range targets {
+			if _, ok := eligible[id]; ok {
+				filtered = append(filtered, id)
+			}
+		}
+		targets = filtered
+	}
 	targetJSON, err := json.Marshal(targets)
 	if err != nil {
 		return nil, nil, err

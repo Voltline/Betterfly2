@@ -392,6 +392,9 @@ func marshalMessagePayload(notification pushservice.Notification) ([]byte, error
 	if len(notification.CustomData) > 0 {
 		payload["debug_data"] = notification.CustomData
 	}
+	if notification.DiscussionRootMessageID > 0 && !notification.IsChannel {
+		payload["discussion_root_message_id"] = notification.DiscussionRootMessageID
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

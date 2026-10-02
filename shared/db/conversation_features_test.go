@@ -197,10 +197,10 @@ func TestChannelPinDatabaseFailureRollsBackWithoutSuccess(t *testing.T) {
 func TestConversationMigrationV8RepeatAndFailure(t *testing.T) {
 	plan := migrationPlan()
 	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7})
-	if err != nil || len(pending) != 1 || pending[0].Version != 8 {
+	if err != nil || len(pending) != 2 || pending[0].Version != 8 {
 		t.Fatalf("v8 upgrade %v %v", pending, err)
 	}
-	if pending, err = pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7, 8}); err != nil || len(pending) != 0 {
+	if pending, err = pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7, 8}); err != nil || len(pending) != 1 || pending[0].Version != 9 {
 		t.Fatalf("v8 repeat %v %v", pending, err)
 	}
 	database, mock := newInboxDatabase(t)

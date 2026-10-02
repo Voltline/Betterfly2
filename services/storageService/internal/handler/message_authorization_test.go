@@ -9,7 +9,7 @@ import (
 )
 
 func expectCachedMessageState(mock sqlmock.Sqlmock, messageID int64) {
-	mock.ExpectQuery(`SELECT "is_recalled","recalled_at","recalled_by","reply_to_message_id" FROM "messages"`).WithArgs(messageID, 1).
+	mock.ExpectQuery(`SELECT "is_recalled","recalled_at","recalled_by","reply_to_message_id","discussion_root_message_id","source_channel_message_id" FROM "messages"`).WithArgs(messageID, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}).AddRow(false, "", 0, 0))
 }
 

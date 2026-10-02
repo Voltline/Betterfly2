@@ -25,11 +25,16 @@ const (
 )
 
 type MessageRecallOutcome struct {
-	Message *Message
-	Status  MessageRecallStatus
+	Message        *Message
+	Status         MessageRecallStatus
+	DiscussionRoot *Message
 }
 
-func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID, caption string, replyID int64) (*Message, bool, error) {
+func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID, caption string, replyID int64, threadIDs ...int64) (*Message, bool, error) {
+	var threadID int64
+	if len(threadIDs) > 0 {
+		threadID = threadIDs[0]
+	}
 	if err := utils.ValidateImageCaption(messageType, caption); err != nil {
 		return nil, false, err
 	}
@@ -38,10 +43,10 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 	if clientMessageID != "" {
 		clientMessageIDPtr = &clientMessageID
 	}
-	if replyID < 0 {
+	if replyID < 0 || threadID < 0 || (threadID > 0 && !isGroup) {
 		return nil, false, ErrInvalidReply
 	}
-	if replyID > 0 {
+	if replyID > 0 || threadID > 0 {
 		// A replay returns the original canonical message, even if its reference
 		// is no longer readable after leaving a group. Never rewrite its target.
 		if clientMessageIDPtr != nil {
@@ -54,21 +59,26 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 				return nil, false, err
 			}
 		}
-		if err := validateReplyWithDB(database, fromUserID, toUserID, isGroup, replyID); err != nil {
+		if threadID > 0 {
+			if err := ValidateDiscussionCommentWithDB(database, fromUserID, toUserID, threadID, replyID); err != nil {
+				return nil, false, err
+			}
+		} else if err := validateReplyWithDB(database, fromUserID, toUserID, isGroup, replyID); err != nil {
 			return nil, false, err
 		}
 	}
 	message := &Message{
-		ClientMessageID:  clientMessageIDPtr,
-		FromUserID:       fromUserID,
-		ToUserID:         toUserID,
-		Content:          content,
-		Caption:          caption,
-		ReplyToMessageID: replyID,
-		Timestamp:        utils.NowTime(),
-		MessageType:      messageType,
-		RealFileName:     realFileName,
-		IsGroup:          isGroup,
+		ClientMessageID:         clientMessageIDPtr,
+		FromUserID:              fromUserID,
+		ToUserID:                toUserID,
+		Content:                 content,
+		Caption:                 caption,
+		ReplyToMessageID:        replyID,
+		DiscussionRootMessageID: threadID,
+		Timestamp:               utils.NowTime(),
+		MessageType:             messageType,
+		RealFileName:            realFileName,
+		IsGroup:                 isGroup,
 	}
 
 	if clientMessageIDPtr == nil {
@@ -107,6 +117,17 @@ func validateReplyWithDB(database *gorm.DB, senderID, targetID int64, isGroup bo
 	if isGroup {
 		if message.ToUserID != targetID {
 			return ErrInvalidReply
+		}
+		if message.DiscussionRootMessageID > 0 {
+			settings, err := GetChannelSettingsWithDB(database, targetID)
+			if err != nil {
+				return err
+			}
+			// Linked channel posts remain ordinary quotable announcements.
+			// Only comments/cards in the discussion group require a thread ID.
+			if settings == nil {
+				return ErrInvalidReply
+			}
 		}
 	} else if !((message.FromUserID == senderID && message.ToUserID == targetID) ||
 		(message.FromUserID == targetID && message.ToUserID == senderID)) {
@@ -152,6 +173,7 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 	}
 
 	channelManager := false
+	discussionManager := false
 	if message.IsGroup {
 		settings, settingsErr := GetChannelSettingsWithDB(database, message.ToUserID)
 		if settingsErr != nil {
@@ -170,8 +192,25 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 				return &MessageRecallOutcome{Status: MessageRecallForbidden}, nil
 			}
 		}
+		if settings == nil && message.DiscussionRootMessageID > 0 {
+			allowed, err := CanReadDiscussionMessageWithDB(database, operatorUserID, &message)
+			if err != nil {
+				return nil, err
+			}
+			if !allowed {
+				return &MessageRecallOutcome{Status: MessageRecallNotFound}, nil
+			}
+			role, err := groupRoleTx(database, message.ToUserID, operatorUserID)
+			if err != nil {
+				return nil, err
+			}
+			discussionManager = canManageGroup(role)
+			if message.SourceChannelMessageID > 0 && !discussionManager {
+				return &MessageRecallOutcome{Status: MessageRecallForbidden}, nil
+			}
+		}
 	}
-	if !channelManager && message.FromUserID != operatorUserID {
+	if !channelManager && !discussionManager && message.FromUserID != operatorUserID {
 		canRead, authErr := CanUserReadMessageWithDB(database, operatorUserID, &message)
 		if authErr != nil {
 			return nil, authErr
@@ -190,7 +229,7 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 	if err != nil {
 		return nil, err
 	}
-	if !channelManager && now.UTC().Sub(sentAt.UTC()) > MessageRecallWindow {
+	if !channelManager && !discussionManager && now.UTC().Sub(sentAt.UTC()) > MessageRecallWindow {
 		return &MessageRecallOutcome{Message: &message, Status: MessageRecallExpired}, nil
 	}
 
@@ -218,7 +257,22 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 	message.IsRecalled = true
 	message.RecalledAt = recalledAt
 	message.RecalledBy = operatorUserID
-	return &MessageRecallOutcome{Message: &message, Status: MessageRecallOK}, nil
+	outcome := &MessageRecallOutcome{Message: &message, Status: MessageRecallOK}
+	if channelManager && message.DiscussionRootMessageID > 0 {
+		var root Message
+		err := database.Clauses(clause.Locking{Strength: "UPDATE"}).First(&root, "message_id = ? AND source_channel_message_id = ?", message.DiscussionRootMessageID, message.MessageID).Error
+		if err != nil {
+			return nil, err
+		}
+		if !root.IsRecalled {
+			if err := database.Model(&Message{}).Where("message_id = ?", root.MessageID).Updates(map[string]any{"is_recalled": true, "recalled_at": recalledAt, "recalled_by": operatorUserID}).Error; err != nil {
+				return nil, err
+			}
+			root.IsRecalled, root.RecalledAt, root.RecalledBy = true, recalledAt, operatorUserID
+		}
+		outcome.DiscussionRoot = &root
+	}
+	return outcome, nil
 }
 
 const (
@@ -257,6 +311,8 @@ FROM (
     m.content,
     m.caption,
     m.reply_to_message_id,
+    m.discussion_root_message_id,
+    m.source_channel_message_id,
     m.timestamp,
     m.message_type,
     m.real_file_name,
@@ -278,6 +334,8 @@ FROM (
     m.content,
     m.caption,
     m.reply_to_message_id,
+    m.discussion_root_message_id,
+    m.source_channel_message_id,
     m.timestamp,
     m.message_type,
     m.real_file_name,
@@ -292,12 +350,14 @@ FROM (
    AND (m.timestamp > ? OR (m.timestamp = ? AND m.message_id > ?))
   LEFT JOIN channel_settings AS channel ON channel.group_id = gm.group_id
   WHERE gm.user_id = ?
-    AND (channel.group_id IS NOT NULL OR m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
+    AND (channel.group_id IS NOT NULL
+      OR (m.discussion_root_message_id = 0 AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
+      OR (m.discussion_root_message_id > 0 AND `+DiscussionReadPredicate+`))
 ) AS sync_messages
 ORDER BY timestamp ASC, message_id ASC
 LIMIT ?
 `, toUserID, toUserID, cursorTimestamp, cursorTimestamp, cursorMessageID,
-		cursorTimestamp, cursorTimestamp, cursorMessageID, toUserID, pageSize+1).Scan(&messages).Error
+		cursorTimestamp, cursorTimestamp, cursorMessageID, toUserID, toUserID, pageSize+1).Scan(&messages).Error
 	if err != nil {
 		return nil, err
 	}
@@ -325,17 +385,18 @@ WHERE m.is_recalled = TRUE
   AND (m.recalled_at > ? OR (m.recalled_at = ? AND m.message_id > ?))
   AND (
     (m.is_group = FALSE AND (m.from_user_id = ? OR m.to_user_id = ?))
-    OR (m.is_group = TRUE AND ((m.from_user_id = ? AND NOT EXISTS (
+    OR (m.is_group = TRUE AND ((m.from_user_id = ? AND m.discussion_root_message_id = 0 AND NOT EXISTS (
       SELECT 1 FROM channel_settings WHERE group_id = m.to_user_id
     )) OR EXISTS (
       SELECT 1 FROM group_members AS gm
       WHERE gm.group_id = m.to_user_id AND gm.user_id = ?
         AND (EXISTS (SELECT 1 FROM channel_settings WHERE group_id = gm.group_id)
-          OR m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
+          OR (m.discussion_root_message_id = 0 AND m.timestamp >= COALESCE(NULLIF(gm.joined_at, ''), gm.update_time))
+          OR (m.discussion_root_message_id > 0 AND `+DiscussionReadPredicate+`))
     )))
   )
 ORDER BY m.recalled_at ASC, m.message_id ASC LIMIT ?
-`, cursorTimestamp, cursorTimestamp, cursorMessageID, userID, userID, userID, userID, pageSize+1).Scan(&messages).Error
+`, cursorTimestamp, cursorTimestamp, cursorMessageID, userID, userID, userID, userID, userID, pageSize+1).Scan(&messages).Error
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +442,9 @@ func CanUserReadMessageWithDB(database *gorm.DB, requesterID int64, message *Mes
 			return false, nil
 		}
 		return err == nil, err
+	}
+	if message.DiscussionRootMessageID > 0 {
+		return CanReadDiscussionMessageWithDB(database, requesterID, message)
 	}
 	if requesterID == message.FromUserID {
 		return true, nil

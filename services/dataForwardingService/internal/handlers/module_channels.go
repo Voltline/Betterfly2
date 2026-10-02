@@ -27,5 +27,23 @@ func init() {
 			req.Payload = &storage.RequestMessage_QueryChannelHistory{QueryChannelHistory: request}
 			return dfRequestResult{}, publishStorageRequest(req)
 		})
+		dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_GetDiscussion) (dfRequestResult, error) {
+			request, err := authenticatedPayload(ctx.fromID, ctx.message, "查询公告讨论", "get_discussion", (*pb.RequestMessage).GetGetDiscussion)
+			if err != nil {
+				return dfRequestResult{}, err
+			}
+			req := newStorageRequest(currentContainerTopic(), ctx.fromID)
+			req.Payload = &storage.RequestMessage_GetDiscussion{GetDiscussion: request}
+			return dfRequestResult{}, publishStorageRequest(req)
+		})
+		dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_QueryDiscussionReplies) (dfRequestResult, error) {
+			request, err := authenticatedPayload(ctx.fromID, ctx.message, "查询公告评论", "query_discussion_replies", (*pb.RequestMessage).GetQueryDiscussionReplies)
+			if err != nil {
+				return dfRequestResult{}, err
+			}
+			req := newStorageRequest(currentContainerTopic(), ctx.fromID)
+			req.Payload = &storage.RequestMessage_QueryDiscussionReplies{QueryDiscussionReplies: request}
+			return dfRequestResult{}, publishStorageRequest(req)
+		})
 	})
 }

@@ -16,7 +16,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const claimMessageDeliverySQL = `WITH candidates AS (
+var claimMessageDeliverySQL = `WITH candidates AS (
   SELECT delivery.message_id, delivery.token_id
   FROM push_message_deliveries AS delivery
   JOIN push_jobs AS job ON job.job_id = delivery.job_id
@@ -42,7 +42,8 @@ SELECT updated.message_id, updated.token_id, updated.job_id, updated.attempt, up
   token.is_active, token.created_at AS token_created_at, token.updated_at AS token_updated_at,
   job.request_payload, (channel.group_id IS NOT NULL) AS is_channel,
   (COALESCE(message.is_group, FALSE) = TRUE AND (active_group.group_id IS NULL OR member.user_id IS NULL
-    OR (updated.message_id > 0 AND member.notifications_muted = TRUE))) AS recipient_excluded
+    OR (updated.message_id > 0 AND member.notifications_muted = TRUE)
+    OR (message.discussion_root_message_id > 0 AND channel.group_id IS NULL AND NOT (` + strings.ReplaceAll(strings.ReplaceAll(db.DiscussionReadPredicate, "m.", "message."), "?", "token.user_id") + `)))) AS recipient_excluded
 FROM updated
 LEFT JOIN push_device_tokens AS token ON token.id = updated.token_id
 JOIN push_jobs AS job ON job.job_id = updated.job_id

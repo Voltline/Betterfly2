@@ -107,20 +107,23 @@ type RelationshipRequest struct {
 }
 
 type Message struct {
-	MessageID        int64   `gorm:"primaryKey;autoIncrement:true;index:idx_messages_sync_target_time_id,priority:4;comment:消息唯一ID"`
-	ClientMessageID  *string `gorm:"type:varchar(128);uniqueIndex:uidx_messages_sender_client_id,priority:2;comment:客户端幂等消息ID，旧消息为空"`
-	FromUserID       int64   `gorm:"type:int8;uniqueIndex:uidx_messages_sender_client_id,priority:1;comment:消息来源用户ID"`
-	ToUserID         int64   `gorm:"type:int8;index:idx_messages_sync_target_time_id,priority:2;comment:消息去向用户ID"`
-	Content          string  `gorm:"type:varchar(700);comment:消息内容"`
-	Caption          string  `gorm:"type:text;not null;default:'';comment:图片配文，保留原文"`
-	ReplyToMessageID int64   `gorm:"not null;default:0;comment:同一会话内的引用消息ID，不存正文快照"`
-	Timestamp        string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time_id,priority:3;comment:消息产生时间"`
-	MessageType      string  `gorm:"type:varchar(10);comment:消息类型"`
-	RealFileName     string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
-	IsGroup          bool    `gorm:"type:bool;index:idx_messages_sync_target_time_id,priority:1;comment:消息是否来自于群聊"`
-	IsRecalled       bool    `gorm:"type:bool;default:false;comment:消息是否已撤回"`
-	RecalledAt       string  `gorm:"type:varchar(35);comment:消息撤回时间RFC3339"`
-	RecalledBy       int64   `gorm:"comment:执行撤回的用户ID"`
+	MessageID               int64   `gorm:"primaryKey;autoIncrement:true;index:idx_messages_sync_target_time_id,priority:4;comment:消息唯一ID"`
+	ClientMessageID         *string `gorm:"type:varchar(128);uniqueIndex:uidx_messages_sender_client_id,priority:2;comment:客户端幂等消息ID，旧消息为空"`
+	FromUserID              int64   `gorm:"type:int8;uniqueIndex:uidx_messages_sender_client_id,priority:1;comment:消息来源用户ID"`
+	ToUserID                int64   `gorm:"type:int8;index:idx_messages_sync_target_time_id,priority:2;comment:消息去向用户ID"`
+	Content                 string  `gorm:"type:varchar(700);comment:消息内容"`
+	Caption                 string  `gorm:"type:text;not null;default:'';comment:图片配文，保留原文"`
+	ReplyToMessageID        int64   `gorm:"not null;default:0;comment:同一会话内的引用消息ID，不存正文快照"`
+	DiscussionRootMessageID int64   `gorm:"not null;default:0"`
+	SourceChannelMessageID  int64   `gorm:"not null;default:0"`
+	Timestamp               string  `gorm:"type:varchar(25);index:idx_messages_sync_target_time_id,priority:3;comment:消息产生时间"`
+	MessageType             string  `gorm:"type:varchar(10);comment:消息类型"`
+	RealFileName            string  `gorm:"type:varchar(255);comment:文件消息的原始文件名，非文件消息为空"`
+	IsGroup                 bool    `gorm:"type:bool;index:idx_messages_sync_target_time_id,priority:1;comment:消息是否来自于群聊"`
+	IsRecalled              bool    `gorm:"type:bool;default:false;comment:消息是否已撤回"`
+	RecalledAt              string  `gorm:"type:varchar(35);comment:消息撤回时间RFC3339"`
+	RecalledBy              int64   `gorm:"comment:执行撤回的用户ID"`
+	DiscussionClosed        bool    `gorm:"not null;default:false;comment:讨论根永久关闭，解绑后不重开"`
 }
 
 type FileMetadata struct {

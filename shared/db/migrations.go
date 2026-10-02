@@ -24,7 +24,7 @@ var nonPostgresMigrationLock sync.Mutex
 const legacySnapshotMigrationVersion = 3
 
 func migrationPlan() []Migration {
-	// Versions 1-7 are published history. Do not add newly introduced models to
+	// Versions 1-8 are published history. Do not add newly introduced models to
 	// these functions; the next schema change must be an explicit new version.
 	return []Migration{
 		{Version: 1, Name: "core schema", Apply: migrateCoreSchema},
@@ -35,6 +35,7 @@ func migrationPlan() []Migration {
 		{Version: 6, Name: "broadcast channels", Apply: migrateChannelSchema},
 		{Version: 7, Name: "image message caption", Apply: migrateImageCaptionSchema},
 		{Version: 8, Name: "channel pin notification preference and message replies", Apply: migrateConversationFeaturesSchema},
+		{Version: 9, Name: "channel discussion threads", Apply: migrateDiscussionSchema},
 	}
 }
 

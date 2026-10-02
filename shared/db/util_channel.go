@@ -35,6 +35,7 @@ type ChannelView struct {
 	MyRole             string
 	PinnedMessageID    int64
 	NotificationsMuted bool
+	DiscussionGroupID  int64
 }
 
 func NormalizeChannelUsername(value string) (string, error) {
@@ -77,7 +78,8 @@ groups.owner_user_id, groups.update_time, channel_settings.description,
 COALESCE(channel_settings.username, '') AS username, channel_settings.is_public,
 (SELECT COUNT(*) FROM group_members WHERE group_id = groups.group_id) AS subscriber_count,
 (viewer.user_id IS NOT NULL) AS subscribed, COALESCE(viewer.role, '') AS my_role,
-channel_settings.pinned_message_id, COALESCE(viewer.notifications_muted, FALSE) AS notifications_muted`).
+channel_settings.pinned_message_id, COALESCE(viewer.notifications_muted, FALSE) AS notifications_muted,
+COALESCE(channel_settings.discussion_group_id, 0) AS discussion_group_id`).
 		Joins("JOIN groups ON groups.group_id = channel_settings.group_id").
 		Joins("LEFT JOIN group_members AS viewer ON viewer.group_id = groups.group_id AND viewer.user_id = ?", actorID).
 		Where("groups.is_delete = FALSE AND (channel_settings.is_public = TRUE OR viewer.user_id IS NOT NULL)")
@@ -364,7 +366,7 @@ func DeleteChannelWithDB(database *gorm.DB, actorID, channelID int64) error {
 		if err := tx.Where("group_id = ?", channelID).Delete(&GroupMember{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&ChannelSettings{}).Where("group_id = ?", channelID).Update("username", nil).Error; err != nil {
+		if err := tx.Model(&ChannelSettings{}).Where("group_id = ?", channelID).Updates(map[string]any{"username": nil, "discussion_group_id": nil}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&RelationshipRequest{}).Where("group_id = ? AND status = ?", channelID, RequestStatusPending).

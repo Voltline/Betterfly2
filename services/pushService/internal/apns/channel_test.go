@@ -59,3 +59,23 @@ func TestImageCaptionAPNsPayloadContainsOnlySummary(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscussionNotificationRoutingIsAdditive(t *testing.T) {
+	for _, root := range []int64{0, 101} {
+		data, err := marshalMessagePayload(pushservice.Notification{IsGroup: true, ConversationID: 9002, MessageID: 102, DiscussionRootMessageID: root, Title: "讨论群", Body: "评论", Avatar: "group-avatar", SentAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var p map[string]any
+		if err := json.Unmarshal(data, &p); err != nil {
+			t.Fatal(err)
+		}
+		if root == 0 {
+			if _, ok := p["discussion_root_message_id"]; ok {
+				t.Fatal("ordinary payload changed")
+			}
+		} else if p["discussion_root_message_id"] != float64(root) || p["conversation_id"] != float64(9002) || p["avatar"] != "group-avatar" {
+			t.Fatal(p)
+		}
+	}
+}

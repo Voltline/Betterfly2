@@ -156,10 +156,31 @@ func (h *StorageHandler) HandleMessage(ctx context.Context, message []byte) erro
 		if marshalErr != nil {
 			return nil, nil, marshalErr
 		}
-		return encoded, []db.PendingOutboxEvent{{
+		events := []db.PendingOutboxEvent{{
 			EventID: db.StableEventID("storage", operationKey, "response"),
 			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
-		}}, nil
+		}}
+		stored := resp.GetStoreMsgRsp()
+		if stored.GetCreated() && stored.GetDiscussionRootMessageId() > 0 && stored.GetSourceChannelMessageId() == 0 && req.GetStoreNewMessage().GetDiscussionRootMessageId() == 0 {
+			root, err := db.GetMessageByIDWithDB(tx, stored.GetDiscussionRootMessageId())
+			if err != nil {
+				return nil, nil, err
+			}
+			// Comments also carry a root, but only a newly published channel
+			// announcement owns creation of that root's logical event.
+			if root != nil && root.SourceChannelMessageID == stored.GetMessageId() {
+				rootRsp := &storage.ResponseMessage{TargetUserId: req.GetTargetUserId(), Payload: &storage.ResponseMessage_StoreMsgRsp{StoreMsgRsp: &storage.StoreMsgRsp{
+					MessageId: root.MessageID, Created: true, FromUserId: root.FromUserID, ToUserId: root.ToUserID, IsGroup: true, MessageType: root.MessageType, ServerTimestamp: root.Timestamp,
+					DiscussionRootMessageId: root.MessageID, SourceChannelMessageId: root.SourceChannelMessageID,
+				}}}
+				payload, err := mq.MarshalEnvelope(envelope.MessageType_STORAGE_RESPONSE, rootRsp)
+				if err != nil {
+					return nil, nil, err
+				}
+				events = append(events, db.PendingOutboxEvent{EventID: db.StableEventID("storage", operationKey, "discussion-root"), Topic: req.GetFromKafkaTopic(), Payload: payload})
+			}
+		}
+		return encoded, events, nil
 	})
 	if err != nil && req.GetStoreNewMessage().GetCaption() != "" {
 		err = captionStorageError{cause: err}
@@ -200,10 +221,10 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil {
 		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
 	}
-	if msg.GetReplyToMessageId() < 0 {
+	if msg.GetReplyToMessageId() < 0 || msg.GetDiscussionRootMessageId() < 0 || (msg.GetDiscussionRootMessageId() > 0 && !msg.GetIsGroup()) {
 		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
 	}
-	if msg.GetReplyToMessageId() > 0 && (req.GetTargetUserId() <= 0 || req.GetTargetUserId() != msg.GetFromUserId()) {
+	if (msg.GetReplyToMessageId() > 0 || msg.GetDiscussionRootMessageId() > 0) && (req.GetTargetUserId() <= 0 || req.GetTargetUserId() != msg.GetFromUserId()) {
 		return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
 	}
 	if msg.GetIsGroup() {
@@ -233,6 +254,7 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		msg.GetClientMessageId(),
 		msg.GetCaption(),
 		msg.GetReplyToMessageId(),
+		msg.GetDiscussionRootMessageId(),
 	)
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
@@ -248,6 +270,11 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	}
 
 	sugar.Debugf("消息保存成功: message_id=%d client_message_id=%s created=%t", storedMessage.MessageID, msg.GetClientMessageId(), created)
+	if created && msg.GetIsGroup() && msg.GetDiscussionRootMessageId() == 0 {
+		if _, err := db.CreateDiscussionRootWithDB(database, storedMessage); err != nil {
+			return nil, err
+		}
+	}
 
 	cacheKey := fmt.Sprintf("user_messages:%d", msg.ToUserId)
 	if cacheKeys != nil {
@@ -262,19 +289,21 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_StoreMsgRsp{
 			StoreMsgRsp: &storage.StoreMsgRsp{
-				MessageId:        storedMessage.MessageID,
-				ClientMessageId:  msg.GetClientMessageId(),
-				Created:          created,
-				FromUserId:       storedMessage.FromUserID,
-				ToUserId:         storedMessage.ToUserID,
-				Content:          storedMessage.Content,
-				Caption:          storedMessage.Caption,
-				ReplyToMessageId: storedMessage.ReplyToMessageID,
-				MessageType:      storedMessage.MessageType,
-				IsGroup:          storedMessage.IsGroup,
-				RealFileName:     storedMessage.RealFileName,
-				ClientTimestamp:  msg.GetClientTimestamp(),
-				ServerTimestamp:  storedMessage.Timestamp,
+				MessageId:               storedMessage.MessageID,
+				ClientMessageId:         msg.GetClientMessageId(),
+				Created:                 created,
+				FromUserId:              storedMessage.FromUserID,
+				ToUserId:                storedMessage.ToUserID,
+				Content:                 storedMessage.Content,
+				Caption:                 storedMessage.Caption,
+				ReplyToMessageId:        storedMessage.ReplyToMessageID,
+				DiscussionRootMessageId: storedMessage.DiscussionRootMessageID,
+				SourceChannelMessageId:  storedMessage.SourceChannelMessageID,
+				MessageType:             storedMessage.MessageType,
+				IsGroup:                 storedMessage.IsGroup,
+				RealFileName:            storedMessage.RealFileName,
+				ClientTimestamp:         msg.GetClientTimestamp(),
+				ServerTimestamp:         storedMessage.Timestamp,
 			},
 		},
 	}
@@ -306,6 +335,13 @@ func (h *StorageHandler) handleRecallMessageWithDB(database *gorm.DB, req *stora
 		return nil, err
 	}
 	response.Result = storageResultForRecallStatus(outcome.Status)
+	if outcome.DiscussionRoot != nil {
+		root := outcome.DiscussionRoot
+		response.GetRecallMessageRsp().DiscussionRoot = &storage.RecallMessageRsp{MessageId: root.MessageID, FromUserId: root.FromUserID, ToUserId: root.ToUserID, IsGroup: true, OperatorUserId: root.RecalledBy, RecalledAt: root.RecalledAt}
+		if cacheKeys != nil {
+			*cacheKeys = append(*cacheKeys, fmt.Sprintf("message:%d", root.MessageID))
+		}
+	}
 	if outcome.Message != nil && outcome.Status != db.MessageRecallNotFound {
 		response.GetRecallMessageRsp().FromUserId = outcome.Message.FromUserID
 		response.GetRecallMessageRsp().ToUserId = outcome.Message.ToUserID
@@ -359,7 +395,7 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 					database = h.requestDatabase()
 				}
 				var state db.Message
-				err := database.Select("is_recalled", "recalled_at", "recalled_by", "reply_to_message_id").First(&state, "message_id = ?", query.MessageId).Error
+				err := database.Select("is_recalled", "recalled_at", "recalled_by", "reply_to_message_id", "discussion_root_message_id", "source_channel_message_id").First(&state, "message_id = ?", query.MessageId).Error
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					return &storage.ResponseMessage{Result: storage.StorageResult_RECORD_NOT_EXIST, TargetUserId: req.GetTargetUserId()}, nil
 				}
@@ -368,6 +404,7 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 				}
 				current := *msg
 				current.IsRecalled, current.RecalledAt, current.RecalledBy, current.ReplyToMessageID = state.IsRecalled, state.RecalledAt, state.RecalledBy, state.ReplyToMessageID
+				current.DiscussionRootMessageID, current.SourceChannelMessageID = state.DiscussionRootMessageID, state.SourceChannelMessageID
 				return h.authorizedMessageResponseWithDB(database, req, &current)
 			}
 		}
@@ -493,19 +530,21 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 	var msgResponses []*storage.MessageRsp
 	for _, msg := range page.Messages {
 		msgResponses = append(msgResponses, &storage.MessageRsp{
-			MessageId:        msg.MessageID,
-			FromUserId:       msg.FromUserID,
-			ToUserId:         msg.ToUserID,
-			Content:          msg.Content,
-			Caption:          msg.Caption,
-			ReplyToMessageId: msg.ReplyToMessageID,
-			Timestamp:        msg.Timestamp,
-			MsgType:          msg.MessageType,
-			IsGroup:          msg.IsGroup,
-			RealFileName:     msg.RealFileName,
-			IsRecalled:       msg.IsRecalled,
-			RecalledAt:       msg.RecalledAt,
-			RecalledBy:       msg.RecalledBy,
+			MessageId:               msg.MessageID,
+			FromUserId:              msg.FromUserID,
+			ToUserId:                msg.ToUserID,
+			Content:                 msg.Content,
+			Caption:                 msg.Caption,
+			ReplyToMessageId:        msg.ReplyToMessageID,
+			DiscussionRootMessageId: msg.DiscussionRootMessageID,
+			SourceChannelMessageId:  msg.SourceChannelMessageID,
+			Timestamp:               msg.Timestamp,
+			MsgType:                 msg.MessageType,
+			IsGroup:                 msg.IsGroup,
+			RealFileName:            msg.RealFileName,
+			IsRecalled:              msg.IsRecalled,
+			RecalledAt:              msg.RecalledAt,
+			RecalledBy:              msg.RecalledBy,
 		})
 		maskRecalledStorageMessage(msgResponses[len(msgResponses)-1])
 	}
@@ -659,19 +698,21 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_MsgRsp{
 			MsgRsp: &storage.MessageRsp{
-				MessageId:        msg.MessageID,
-				FromUserId:       msg.FromUserID,
-				ToUserId:         msg.ToUserID,
-				Content:          msg.Content,
-				Caption:          msg.Caption,
-				ReplyToMessageId: msg.ReplyToMessageID,
-				Timestamp:        msg.Timestamp,
-				MsgType:          msg.MessageType,
-				IsGroup:          msg.IsGroup,
-				RealFileName:     msg.RealFileName,
-				IsRecalled:       msg.IsRecalled,
-				RecalledAt:       msg.RecalledAt,
-				RecalledBy:       msg.RecalledBy,
+				MessageId:               msg.MessageID,
+				FromUserId:              msg.FromUserID,
+				ToUserId:                msg.ToUserID,
+				Content:                 msg.Content,
+				Caption:                 msg.Caption,
+				ReplyToMessageId:        msg.ReplyToMessageID,
+				DiscussionRootMessageId: msg.DiscussionRootMessageID,
+				SourceChannelMessageId:  msg.SourceChannelMessageID,
+				Timestamp:               msg.Timestamp,
+				MsgType:                 msg.MessageType,
+				IsGroup:                 msg.IsGroup,
+				RealFileName:            msg.RealFileName,
+				IsRecalled:              msg.IsRecalled,
+				RecalledAt:              msg.RecalledAt,
+				RecalledBy:              msg.RecalledBy,
 			},
 		},
 	}

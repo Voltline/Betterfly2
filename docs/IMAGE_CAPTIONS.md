@@ -96,51 +96,14 @@ docker compose run --rm --no-deps db_migrate
 ```
 
 如果同时重新构建其他业务服务，新 shared 也要求 schema >=7，必须先迁移。
-Kubernetes 使用现有 migrations kustomization 内的 schema-v7 Job，
-镜像 betterfly2/db-migrate:schema-v7 应替换为已发布固定 tag/digest。
+配文最初使用 schema-v7 Job；当前 migrations kustomization 使用 schema-v9 Job，
+镜像 betterfly2/db-migrate:schema-v9 应替换为已发布固定 tag/digest。
 先等待 Job 成功，再部署 Storage，最后全部 DF；Push wire 不变，可滚动升级。
 完成所有 Storage/DF 副本升级后再启用客户端配文入口。
 混合版本仍能解析旧/新 PB，但旧 Storage/DF 的字段转换可能丢弃 caption，
 所以混合阶段不承诺新配文展示完整，不能提前启用。
 旧客户端忽略新增 caption，仍可展示图片；无法显示配文是旧版本能力限制。
 
-## iOS 适配 Prompt
-
-```text
-请适配 Betterfly2 单张图片+配文消息，不修改发送 API，不实现多图、编辑或图文块。
-以最新服务端 /Users/voltline/Documents/Sources/Betterfly2/proto 为准重新生成 Swift PB。
-直接变更源文件：
-  data_forwarding/common.proto
-  data_forwarding/response.proto
-  channel/channel.proto
-  storage/request.proto、storage/response.proto、storage/storage_interface.proto
-若客户端没有生成 Storage 内部协议，则不必新增其生成目标。
-继续按已有脚本生成包含这些文件的依赖图，不手改 pb.swift。
-新字段：Post.caption=10，DF MessageRsp.caption=12，ChannelPost.caption=10。
-生成产物通常为 common.pb.swift、response.pb.swift、channel.pb.swift，
-以客户端生成脚本的实际目录/命名为准，不创建同名重复模型。
-
-1. 图片先走原上传/verify，Post.msg_type=image，msg=已校验图片hash，
-   caption=完整原文，client_message_id=稳定ID；不要复用real_file_name或JSON包装msg。
-2. 单条本地消息追加caption并做兼容性迁移/默认空字符串；
-   所有实时Post、QueryMessage、普通/撤回同步、频道历史转换都保存caption。
-3. 渲染为同一气泡/频道帖子：图片下显示配文，支持换行及现有Markdown安全渲染。
-   caption为空时保持旧图片UI，不为配文创建第二个本地message_id。
-4. 校验4096 Unicode code points +16KiB UTF-8。
-   Swift String.count是grapheme数量，不是code points，应使用unicodeScalars.count；
-   bytes使用utf8.count；超限禁止发送，不静默截断。
-5. ACK仍用client_message_id关联，仅更新canonical message_id/timestamp。
-   重试复用同一个ID；已有ID不能作为修改caption的编辑API。
-   同一ID不同合法内容服务端保留原记录，必要时重新QueryMessage收敛。
-6. 撤回整条图文：本地清空hash/caption/filename；
-   晚到Post/重复同步不能让已撤回消息复活，按message_id保持tombstone优先。
-7. 频道owner/admin才能发布；普通订阅者无发布入口。历史bootstrap/双游标不变。
-8. APNs只包含摘要，不需要新增图片附件下载；现有Notification Service Extension
-   继续解析频道头像、is_channel和message_recalled。
-9. 补PB往返、旧消息默认空caption、Unicode边界、重试去重、
-   实时/同步/频道历史一致及撤回竞态测试，并跑iOS构建。
-服务端迁移/所有Storage和DF副本部署完成前，不启用新发送能力。
-```
 
 ## 完整消息示例
 
@@ -207,7 +170,7 @@ JWT 为占位符。频道 ID=9001，操作者=1001，message_id=7001。
 
 各受影响模块执行 go test ./...、go test -race ./...、go vet ./... 和 go build ./...。
 协议使用 make -C proto，生成物不手改。
-真实链路验收需要专用 Compose 已重建并完成 v7：
+真实链路验收需要专用 Compose 已重建并完成当前 schema v9：
 
 ```bash
 cd services/dataForwardingService

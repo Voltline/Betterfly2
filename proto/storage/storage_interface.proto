@@ -30,6 +30,8 @@ message RequestMessage {
     QueryFileExists query_file_exists = 9;
     RecallMessage recall_message = 10;
     channel_interface.QueryChannelHistory query_channel_history = 11;
+    channel_interface.GetDiscussion get_discussion = 12;
+    channel_interface.QueryDiscussionReplies query_discussion_replies = 13;
   }
 }
 

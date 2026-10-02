@@ -21,6 +21,8 @@ message Post {
   int64 message_id = 9; // 服务端入库后填入；客户端发送时忽略
   string caption = 10; // image配文，保留换行及Markdown原文
   int64 reply_to_message_id = 11; // Resolve current, authorized content via QueryMessage.
+  int64 discussion_root_message_id = 12;
+  int64 source_channel_message_id = 13; // Output only; clients cannot create cards.
 }
 
 enum MessageRecallResult {

@@ -84,11 +84,11 @@ Run the versioned database migration before applying or rolling business Pods:
 kubectl apply -f deploy/k8s/base/namespace.yaml
 kubectl apply -f deploy/k8s/base/configmap.yaml -f /tmp/betterfly2-secret.yaml
 kubectl apply -k deploy/k8s/migrations
-kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v8 --timeout=5m
+kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v9 --timeout=5m
 kubectl apply -k deploy/k8s/base
 ```
 
-The migration image tag is tied to schema v8 (pins, notification preferences and replies) and the Job is an Argo CD `PreSync`
+The migration image tag is tied to schema v9 (linked channel discussions) and the Job is an Argo CD `PreSync`
 hook. Replace the tag with your registry digest in production. Do not add a
 completed migration Job back to the ordinary base apply path.
 

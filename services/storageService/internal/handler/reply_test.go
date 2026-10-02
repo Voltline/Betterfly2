@@ -44,7 +44,7 @@ func TestReplyQueryCacheRechecksRecallWithoutMutatingSharedEntity(t *testing.T) 
 				h.l1Cache = newMockCache()
 				h.l2Cache = cache
 			}
-			mock.ExpectQuery(`SELECT "is_recalled","recalled_at","recalled_by","reply_to_message_id" FROM "messages"`).WithArgs(int64(44), 1).WillReturnRows(sqlmock.NewRows([]string{"is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}).AddRow(true, "2026-10-02T00:00:00Z", 1, 40))
+			mock.ExpectQuery(`SELECT "is_recalled","recalled_at","recalled_by","reply_to_message_id","discussion_root_message_id","source_channel_message_id" FROM "messages"`).WithArgs(int64(44), 1).WillReturnRows(sqlmock.NewRows([]string{"is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}).AddRow(true, "2026-10-02T00:00:00Z", 1, 40))
 			response, err := h.handleQueryMessageWithDB(database, &storage.RequestMessage{TargetUserId: 2}, &storage.QueryMessage{MessageId: 44})
 			msg := response.GetMsgRsp()
 			if err != nil || !msg.GetIsRecalled() || msg.GetContent() != "" || msg.GetRealFileName() != "" || msg.GetReplyToMessageId() != 40 {

@@ -48,6 +48,7 @@ DataForwarding 跨 Pod 投递和 Push 的每设备账本。不新增服务、Top
 | list_subscribed | page_size、cursor_channel_id | list_subscribed_channels |
 | list_members | channel_id、page_size、cursor_user_id | list_channel_members |
 | delete | channel_id | delete_channel |
+| set_discussion_group | channel_id、group_id（0解绑） | set_discussion_group |
 
 名称 Trim 后 1–100 Unicode code points，描述最多 1000，avatar_hash 最多 255。
 username 可空；非空会去除首个 `@`、转小写，必须是 5–32 个 ASCII 字符，
@@ -120,14 +121,15 @@ docker compose run --rm --no-deps db_migrate
 旧客户端和旧序列化字段仍可解析；旧客户端忽略 is_channel，可能将频道当普通群显示，
 但旧 DF 的群发言路径仍受到新版 Storage 的只读检查。
 协议生成文件按仓库现有方式生成，不手工编辑 pb.go。
-频道最初使用 schema-v6 Job；当前活动 migration manifest 为 schema-v8 Job
-（置顶、免打扰及引用回复），需构建相应固定镜像并等待成功后再 rollout。
-schema-v5/v6/v7 Job 留作历史文件但不在活动 kustomization 中。
+频道最初使用 schema-v6 Job；当前活动 migration manifest 为 schema-v9 Job
+（频道关联讨论区），需构建相应固定镜像并等待成功后再 rollout。
+schema-v5/v6/v7/v8 Job 留作历史文件但不在活动 kustomization 中。
 
 ## 本轮边界
 
 置顶公告、订阅者免打扰和消息引用见 [会话功能与客户端适配](CONVERSATION_FEATURES.md)。
-不包含评论/讨论群联动、反应、阅读计数、邀请链接或内容审核后台。
+[关联讨论群与公告评论](CHANNEL_DISCUSSIONS.md)要求入群，可读取线程的入群前评论。
+不包含反应、阅读计数、邀请链接或内容审核后台。
 不承诺百万订阅者扇出容量：实时投递仍复用现有按成员名单读取和分 Pod 扇出的路径，
 历史/成员/发现查询有界分页，但发布扇出应按实际订阅规模单独压测。
 Kafka/Outbox/APNs 保留至少一次边界；客户端必须依据 message_id 去重。

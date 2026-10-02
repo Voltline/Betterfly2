@@ -16,6 +16,8 @@ message StoreMsgRsp {
   string server_timestamp = 11;
   string caption = 12;
   int64 reply_to_message_id = 13;
+  int64 discussion_root_message_id = 14;
+  int64 source_channel_message_id = 15;
 }
 
 message MessageRsp {
@@ -32,6 +34,8 @@ message MessageRsp {
   int64 recalled_by = 11;
   string caption = 12;
   int64 reply_to_message_id = 13;
+  int64 discussion_root_message_id = 14;
+  int64 source_channel_message_id = 15;
 }
 
 message RecallMessageRsp {
@@ -41,6 +45,7 @@ message RecallMessageRsp {
   bool is_group = 4;
   int64 operator_user_id = 5;
   string recalled_at = 6;
+  RecallMessageRsp discussion_root = 7;
 }
 
 message SyncMessagesRsp {

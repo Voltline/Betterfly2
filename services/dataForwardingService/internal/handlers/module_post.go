@@ -59,16 +59,17 @@ func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID str
 	req := newStorageRequest(currentContainerID, payload.GetFromId())
 	req.Payload = &storage.RequestMessage_StoreNewMessage{
 		StoreNewMessage: &storage.StoreNewMessage{
-			FromUserId:       payload.GetFromId(),
-			ToUserId:         payload.GetToId(),
-			Content:          payload.GetMsg(),
-			Caption:          payload.GetCaption(),
-			ReplyToMessageId: payload.GetReplyToMessageId(),
-			MessageType:      payload.GetMsgType(),
-			IsGroup:          payload.GetIsGroup(),
-			RealFileName:     payload.GetRealFileName(),
-			ClientMessageId:  payload.GetClientMessageId(),
-			ClientTimestamp:  payload.GetTimestamp(),
+			FromUserId:              payload.GetFromId(),
+			ToUserId:                payload.GetToId(),
+			Content:                 payload.GetMsg(),
+			Caption:                 payload.GetCaption(),
+			ReplyToMessageId:        payload.GetReplyToMessageId(),
+			DiscussionRootMessageId: payload.GetDiscussionRootMessageId(),
+			MessageType:             payload.GetMsgType(),
+			IsGroup:                 payload.GetIsGroup(),
+			RealFileName:            payload.GetRealFileName(),
+			ClientMessageId:         payload.GetClientMessageId(),
+			ClientTimestamp:         payload.GetTimestamp(),
 		},
 	}
 	return req
@@ -81,6 +82,9 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	}
 	payload.FromId = fromID
 	payload.MessageId = 0
+	if payload.GetSourceChannelMessageId() != 0 {
+		return errPostForbidden
+	}
 	if err := validatePostPayload(payload); err != nil {
 		return err
 	}
@@ -209,7 +213,7 @@ func validatePostPayload(payload *pb.Post) error {
 	if payload == nil {
 		return errors.New("post消息为空")
 	}
-	if payload.GetReplyToMessageId() < 0 {
+	if payload.GetReplyToMessageId() < 0 || payload.GetDiscussionRootMessageId() < 0 || (payload.GetDiscussionRootMessageId() > 0 && !payload.GetIsGroup()) {
 		return errors.New("引用消息ID非法")
 	}
 	if err := utils.ValidateImageCaption(payload.GetMsgType(), payload.GetCaption()); err != nil {
@@ -248,6 +252,17 @@ func ValidatePostPayload(payload *pb.Post) error {
 // Persisted image envelopes may outlive a recall in Kafka. Check committed
 // state at each delivery Pod; never trust the old envelope or a cache here.
 func ImagePostDeliveryAllowed(post *pb.Post) (bool, error) {
+	if post.GetDiscussionRootMessageId() > 0 {
+		message, err := sharedDB.GetMessageByIDWithDB(sharedDB.DB(), post.GetMessageId())
+		if err != nil || message == nil {
+			return false, err
+		}
+		if message.IsRecalled {
+			return false, nil
+		}
+		// Trust committed thread identity, not a delayed or forged envelope.
+		return message.DiscussionRootMessageID == post.GetDiscussionRootMessageId() && message.SourceChannelMessageID == post.GetSourceChannelMessageId() && message.ToUserID == post.GetToId() && message.FromUserID == post.GetFromId(), nil
+	}
 	if post.GetMessageId() <= 0 || strings.TrimSpace(post.GetMsgType()) != "image" {
 		return true, nil
 	}
@@ -260,7 +275,11 @@ func ImagePostDeliveryAllowed(post *pb.Post) (bool, error) {
 }
 
 func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.RequestMessage, currentContainerID string) error {
-	isMember, err := sharedDB.CanPublishGroupMessageWithDB(sharedDB.DB(), payload.GetToId(), fromID)
+	isMember := true
+	var err error
+	if payload.GetSourceChannelMessageId() == 0 {
+		isMember, err = sharedDB.CanPublishGroupMessageWithDB(sharedDB.DB(), payload.GetToId(), fromID)
+	}
 	if err != nil {
 		return err
 	}
@@ -268,26 +287,36 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 		return errors.New("当前用户不在该群中，无法发送群消息")
 	}
 
-	memberIDs, err := sharedDB.GetActiveGroupMemberIDs(payload.GetToId())
+	var memberIDs []int64
+	if payload.GetDiscussionRootMessageId() > 0 {
+		// Channel originals also carry a root; filter only group thread rows.
+		memberIDs, err = sharedDB.MessageRecipientIDsWithDB(sharedDB.DB(), messageID)
+	} else {
+		memberIDs, err = sharedDB.GetActiveGroupMemberIDs(payload.GetToId())
+	}
 	if err != nil {
 		return err
 	}
 
 	targetUserIDs := make([]string, 0, len(memberIDs))
 	for _, memberID := range memberIDs {
-		if memberID == fromID {
+		if memberID == fromID && payload.GetSourceChannelMessageId() == 0 {
 			continue
 		}
 		targetUserID := strconv.FormatInt(memberID, 10)
 		targetUserIDs = append(targetUserIDs, targetUserID)
 	}
-	pushErr := publishMessagePush(membersWithoutSender(memberIDs, fromID), payload, messageID)
+	recipients := memberIDs
+	if payload.GetSourceChannelMessageId() == 0 {
+		recipients = membersWithoutSender(memberIDs, fromID)
+	}
+	pushErr := publishMessagePush(recipients, payload, messageID)
 	containerByUserID, err := redisClient.GetContainersByConnections(targetUserIDs)
 	if err != nil {
 		return errors.Join(err, pushErr)
 	}
 
-	deliveryErr := routeGroupTargets(messageID, membersWithoutSender(memberIDs, fromID), containerByUserID, currentContainerID,
+	deliveryErr := routeGroupTargets(messageID, recipients, containerByUserID, currentContainerID,
 		func(userID, topic string) error {
 			return routePostToTarget(userID, topic, currentContainerID, payload, message)
 		}, func(topic string, users []int64) error {
@@ -329,6 +358,9 @@ func routeGroupTargets(messageID int64, memberIDs []int64, containerByUserID map
 }
 
 func publishMessagePush(targetUserIDs []int64, payload *pb.Post, messageID int64) error {
+	if payload.GetSourceChannelMessageId() > 0 {
+		return nil
+	}
 	if len(targetUserIDs) == 0 || payload == nil {
 		return nil
 	}
@@ -345,14 +377,15 @@ func buildMessagePushRequest(targetUserIDs []int64, payload *pb.Post, messageID 
 		conversationID = payload.GetToId()
 	}
 	return &pushpb.RequestMessage{Payload: &pushpb.RequestMessage_MessagePush{MessagePush: &pushpb.MessagePushRequest{
-		TargetUserIds:  targetUserIDs,
-		SenderUserId:   payload.GetFromId(),
-		ConversationId: conversationID,
-		IsGroup:        payload.GetIsGroup(),
-		MessageType:    payload.GetMsgType(),
-		SentAt:         payload.GetTimestamp(),
-		Preview:        messagePushPreview(payload),
-		MessageId:      messageID,
+		TargetUserIds:           targetUserIDs,
+		SenderUserId:            payload.GetFromId(),
+		ConversationId:          conversationID,
+		IsGroup:                 payload.GetIsGroup(),
+		MessageType:             payload.GetMsgType(),
+		SentAt:                  payload.GetTimestamp(),
+		Preview:                 messagePushPreview(payload),
+		MessageId:               messageID,
+		DiscussionRootMessageId: payload.GetDiscussionRootMessageId(),
 	}}}
 }
 

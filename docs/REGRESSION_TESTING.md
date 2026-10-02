@@ -413,3 +413,42 @@ BETTERFLY_ACCEPTANCE=1 go test -run '^TestChannelPushEligibilityPostgres$' -coun
 真实WSS/Kafka/PostgreSQL验证跳过，未实际执行数据库v8迁移，也未执行设备APNs
 或iOS联调。默认测试中的skip不等于真实环境通过。
 协议和部署契约见 CONVERSATION_FEATURES.md
+
+## 频道关联讨论区（Schema v9）
+
+新增回归覆盖 shared/db、Friend、Storage、DF handlers/consumer、Push 和协议：
+
+- 绑定要求两边 owner，关联目标必须普通群；并发绑定只有一个频道成功。
+- 原公告、引用卡片、Inbox/Outbox 原子提交，失败回滚、并发重复操作只创建一次。
+- 只有当前群成员可评论/查评论；加入后读取旧评论，不放宽普通群 JoinedAt 规则。
+- 私有来源频道权限、退群、跨会话引用、L1/L2授权失败与排队Push领取复查。
+- 实时/跨Pod/查询/同步/频道历史元数据一致；自动卡片不产生ACK或APNs。
+- 评论canonical重试、分页、解绑/重绑旧线程只读、源帖级联根撤回与评论保留。
+- 从实际v8列结构升级v9、重复迁移及旧PB字段默认0。
+
+数据库测试仅接受显式测试 DSN，创建唯一 schema，结束后删除；不要指向生产实例。
+测试不发送真实APNs，也不操作已有Compose数据库。执行示例：
+
+```bash
+# 使用隔离 PostgreSQL；以下变量只用于测试 fixture，不是服务部署配置
+export BETTERFLY_TEST_POSTGRES_DSN='host=127.0.0.1 port=<test-port> user=postgres password=<test-password> dbname=postgres sslmode=disable'
+cd shared
+go test -race -run TestDiscussion -count=1 ./db
+cd ../services/storageService
+go test -race -run TestDiscussion -count=1 ./internal/handler
+cd ../pushService
+go test -race -run TestDiscussion -count=1 ./internal/push ./internal/apns
+```
+
+独立WSS/Kafka跨Pod验收用例 TestChannelDiscussionEndToEnd：
+
+```bash
+# 专用Compose迁移v9且所有副本重建后执行
+cd services/dataForwardingService
+BETTERFLY_ACCEPTANCE=1 go test -race -run '^TestChannelDiscussionEndToEnd$' -count=1 -v -timeout 3m ./integration
+```
+
+本轮实际执行范围：隔离PostgreSQL事务/并发/迁移/分页/Push SQL测试，模块单测、
+构建及race/vet；跨PodWSS/Kafka验收和iOS/真实设备APNs未执行。
+上述E2E默认skip不是链路通过，必须在更新后的专用部署另行执行。
+协议与完整请求例子见 [频道关联讨论区](CHANNEL_DISCUSSIONS.md)。

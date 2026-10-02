@@ -16,6 +16,7 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 - Kafka 解耦消息存储、好友与群组、通话信令及推送任务。
 - [广播频道](docs/CHANNELS.md)：公开发现/订阅、私有邀请、管理员发布与完整历史分页。
 - [会话功能](docs/CONVERSATION_FEATURES.md)：频道置顶、群聊／频道免打扰及引用回复。
+- [频道讨论区](docs/CHANNEL_DISCUSSIONS.md)：关联普通群、按公告评论、入群后完整线程历史。
 - PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
 - Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
 - RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。
@@ -130,9 +131,7 @@ Betterfly2/
 ├── services/                  # 七个业务服务、Compose 与部署脚本
 ├── shared/                    # 数据库、日志、指标、MQ 和通用分发器
 ├── tool/                      # Protobuf 编译工具
-├── API_DOCUMENTATION.md       # 当前 HTTP、Kafka 与 Protobuf 接口说明
-├── INTERFACE_DEVELOPMENT.md   # 新增接口与模块自注册指南
-└── REGRESSION_TESTING.md      # 跨服务回归测试说明
+└── docs/                     # 接口、功能契约、开发与回归测试文档
 ```
 
 ## 文档导航

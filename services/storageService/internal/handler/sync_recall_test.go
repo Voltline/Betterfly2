@@ -15,8 +15,8 @@ func TestSyncRecoversRecallBeforeMessageCursorAndPagesIndependently(t *testing.T
 	req := &storage.RequestMessage{TargetUserId: 1}
 	columns := []string{"message_id", "from_user_id", "to_user_id", "content", "caption", "timestamp", "message_type", "real_file_name", "is_group", "is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}
 	for page := 0; page < 2; page++ {
-		mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$10`).
-			WithArgs(int64(1), int64(1), query.CursorTimestamp, query.CursorTimestamp, int64(100), query.CursorTimestamp, query.CursorTimestamp, int64(100), int64(1), 2).
+		mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$11`).
+			WithArgs(int64(1), int64(1), query.CursorTimestamp, query.CursorTimestamp, int64(100), query.CursorTimestamp, query.CursorTimestamp, int64(100), int64(1), int64(1), 2).
 			WillReturnRows(sqlmock.NewRows(columns))
 		cursor, cursorID := "1970-01-01T00:00:00Z", int64(0)
 		if page == 1 {
@@ -27,8 +27,8 @@ func TestSyncRecoversRecallBeforeMessageCursorAndPagesIndependently(t *testing.T
 			rows.AddRow(42, 1, 2, "secret", "secret caption", "2026-09-30T09:00:00Z", "image", "secret.jpg", false, true, "2026-09-30T09:01:00Z", 1, 40)
 		}
 		rows.AddRow(43, 2, 99, "group secret", "secret group caption", "2026-09-30T09:00:01Z", "image", "", true, true, "2026-09-30T09:01:00Z", 2, 40)
-		mock.ExpectQuery(`(?s)SELECT m\.\*.*m\.is_recalled = TRUE.*m\.recalled_at = \$2 AND m\.message_id > \$3.*m\.from_user_id = \$4 OR m\.to_user_id = \$5.*EXISTS.*gm\.user_id = \$7.*m\.timestamp >= COALESCE.*ORDER BY m\.recalled_at ASC, m\.message_id ASC LIMIT \$8`).
-			WithArgs(cursor, cursor, cursorID, int64(1), int64(1), int64(1), int64(1), 2).WillReturnRows(rows)
+		mock.ExpectQuery(`(?s)SELECT m\.\*.*m\.is_recalled = TRUE.*m\.recalled_at = \$2 AND m\.message_id > \$3.*m\.from_user_id = \$4 OR m\.to_user_id = \$5.*EXISTS.*gm\.user_id = \$7.*m\.timestamp >= COALESCE.*ORDER BY m\.recalled_at ASC, m\.message_id ASC LIMIT \$9`).
+			WithArgs(cursor, cursor, cursorID, int64(1), int64(1), int64(1), int64(1), int64(1), 2).WillReturnRows(rows)
 		response, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), req, query)
 		if err != nil {
 			t.Fatal(err)
@@ -49,7 +49,7 @@ func TestRecallSyncQueryFailureDoesNotReturnPartialSuccess(t *testing.T) {
 	mock := useMockDB(t)
 	handler := &StorageHandler{l1Cache: newMockCache()}
 	injected := errors.New("recall query database unavailable")
-	mock.ExpectQuery(`(?s)SELECT \*.*LIMIT \$10`).WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
+	mock.ExpectQuery(`(?s)SELECT \*.*LIMIT \$11`).WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 	mock.ExpectQuery(`SELECT m\.\*`).WillReturnError(injected)
 	response, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), &storage.RequestMessage{TargetUserId: 1}, &storage.QuerySyncMessages{ToUserId: 1, Timestamp: "2026-09-30T10:00:00Z", IncludeRecalledChanges: true})
 	if !errors.Is(err, injected) || response != nil {

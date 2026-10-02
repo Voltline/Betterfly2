@@ -14,7 +14,7 @@
 - 副作用短期占位崩溃恢复、旧 owner 的完成/删除 fencing，以及旧 Redis ACK 格式兼容。
 - 旧 Post/同步请求字节兼容，以及数据库 v4 拒绝、v5/更高版本接受。
 
-各模块执行 `go test ./...`；关键模块执行 `go test -race ./...`。这些测试使用 sqlmock、miniredis 和 Kafka mock，不等同于真实 Docker/APNs 端到端验证。客户端配合测试和部署顺序见 [适配说明](CLIENT_MESSAGE_SYNC_ADAPTATION.md)。
+各模块执行 `go test ./...`；关键模块执行 `go test -race ./...`。这些测试使用 sqlmock、miniredis 和 Kafka mock，不等同于真实 Docker/APNs 端到端验证。
 
 2026-09-30 先前单元回归结果：全部 15 个 Go module 的 `go test ./...`、`go vet ./...` 通过；shared、DataForwarding、Storage、Push、`../proto/data_forwarding` 的 `go test -race ./...` 通过；`make -C proto` 与 `git diff --check` 通过。当时 `TestFriendServiceEndToEnd` 因未设置 `BETTERFLY_E2E=1` 跳过。随后真实 Docker 验收与容量结果见本文末尾；真实 APNs 和双设备客户端联调仍未执行。
 

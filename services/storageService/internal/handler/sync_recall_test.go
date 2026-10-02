@@ -13,7 +13,7 @@ func TestSyncRecoversRecallBeforeMessageCursorAndPagesIndependently(t *testing.T
 	handler := &StorageHandler{l1Cache: newMockCache()}
 	query := &storage.QuerySyncMessages{ToUserId: 1, CursorTimestamp: "2026-09-30T10:00:00Z", CursorMessageId: 100, PageSize: 1, IncludeRecalledChanges: true}
 	req := &storage.RequestMessage{TargetUserId: 1}
-	columns := []string{"message_id", "from_user_id", "to_user_id", "content", "caption", "timestamp", "message_type", "real_file_name", "is_group", "is_recalled", "recalled_at", "recalled_by"}
+	columns := []string{"message_id", "from_user_id", "to_user_id", "content", "caption", "timestamp", "message_type", "real_file_name", "is_group", "is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}
 	for page := 0; page < 2; page++ {
 		mock.ExpectQuery(`(?s)SELECT \*.*ORDER BY timestamp ASC, message_id ASC\s+LIMIT \$10`).
 			WithArgs(int64(1), int64(1), query.CursorTimestamp, query.CursorTimestamp, int64(100), query.CursorTimestamp, query.CursorTimestamp, int64(100), int64(1), 2).
@@ -24,9 +24,9 @@ func TestSyncRecoversRecallBeforeMessageCursorAndPagesIndependently(t *testing.T
 		}
 		rows := sqlmock.NewRows(columns)
 		if page == 0 {
-			rows.AddRow(42, 1, 2, "secret", "secret caption", "2026-09-30T09:00:00Z", "image", "secret.jpg", false, true, "2026-09-30T09:01:00Z", 1)
+			rows.AddRow(42, 1, 2, "secret", "secret caption", "2026-09-30T09:00:00Z", "image", "secret.jpg", false, true, "2026-09-30T09:01:00Z", 1, 40)
 		}
-		rows.AddRow(43, 2, 99, "group secret", "secret group caption", "2026-09-30T09:00:01Z", "image", "", true, true, "2026-09-30T09:01:00Z", 2)
+		rows.AddRow(43, 2, 99, "group secret", "secret group caption", "2026-09-30T09:00:01Z", "image", "", true, true, "2026-09-30T09:01:00Z", 2, 40)
 		mock.ExpectQuery(`(?s)SELECT m\.\*.*m\.is_recalled = TRUE.*m\.recalled_at = \$2 AND m\.message_id > \$3.*m\.from_user_id = \$4 OR m\.to_user_id = \$5.*EXISTS.*gm\.user_id = \$7.*m\.timestamp >= COALESCE.*ORDER BY m\.recalled_at ASC, m\.message_id ASC LIMIT \$8`).
 			WithArgs(cursor, cursor, cursorID, int64(1), int64(1), int64(1), int64(1), 2).WillReturnRows(rows)
 		response, err := handler.handleQuerySyncMessagesWithDB(handler.requestDatabase(), req, query)
@@ -38,7 +38,7 @@ func TestSyncRecoversRecallBeforeMessageCursorAndPagesIndependently(t *testing.T
 			t.Fatalf("cursors coupled: %+v", sync)
 		}
 		msg := sync.GetRecalledMsgs()[0]
-		if !msg.GetIsRecalled() || msg.GetContent() != "" || msg.GetCaption() != "" || msg.GetRealFileName() != "" || msg.GetMessageId() != int64(42+page) || sync.GetRecallsHasMore() != (page == 0) {
+		if !msg.GetIsRecalled() || msg.GetContent() != "" || msg.GetCaption() != "" || msg.GetRealFileName() != "" || msg.GetMessageId() != int64(42+page) || msg.GetReplyToMessageId() != 40 || sync.GetRecallsHasMore() != (page == 0) {
 			t.Fatalf("bad recall page: %+v", sync)
 		}
 		query.RecallCursorTimestamp, query.RecallCursorMessageId = sync.GetNextRecallCursorTimestamp(), sync.GetNextRecallCursorMessageId()

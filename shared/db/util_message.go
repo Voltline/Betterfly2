@@ -12,6 +12,8 @@ import (
 
 const MessageRecallWindow = 2 * time.Minute
 
+var ErrInvalidReply = errors.New("reply target is unavailable or outside the conversation")
+
 type MessageRecallStatus int
 
 const (
@@ -27,7 +29,7 @@ type MessageRecallOutcome struct {
 	Status  MessageRecallStatus
 }
 
-func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID, caption string) (*Message, bool, error) {
+func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, content, messageType, realFileName string, isGroup bool, clientMessageID, caption string, replyID int64) (*Message, bool, error) {
 	if err := utils.ValidateImageCaption(messageType, caption); err != nil {
 		return nil, false, err
 	}
@@ -36,16 +38,37 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 	if clientMessageID != "" {
 		clientMessageIDPtr = &clientMessageID
 	}
+	if replyID < 0 {
+		return nil, false, ErrInvalidReply
+	}
+	if replyID > 0 {
+		// A replay returns the original canonical message, even if its reference
+		// is no longer readable after leaving a group. Never rewrite its target.
+		if clientMessageIDPtr != nil {
+			var existing Message
+			err := database.Where("from_user_id = ? AND client_message_id = ?", fromUserID, clientMessageID).First(&existing).Error
+			if err == nil {
+				return &existing, false, nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, false, err
+			}
+		}
+		if err := validateReplyWithDB(database, fromUserID, toUserID, isGroup, replyID); err != nil {
+			return nil, false, err
+		}
+	}
 	message := &Message{
-		ClientMessageID: clientMessageIDPtr,
-		FromUserID:      fromUserID,
-		ToUserID:        toUserID,
-		Content:         content,
-		Caption:         caption,
-		Timestamp:       utils.NowTime(),
-		MessageType:     messageType,
-		RealFileName:    realFileName,
-		IsGroup:         isGroup,
+		ClientMessageID:  clientMessageIDPtr,
+		FromUserID:       fromUserID,
+		ToUserID:         toUserID,
+		Content:          content,
+		Caption:          caption,
+		ReplyToMessageID: replyID,
+		Timestamp:        utils.NowTime(),
+		MessageType:      messageType,
+		RealFileName:     realFileName,
+		IsGroup:          isGroup,
 	}
 
 	if clientMessageIDPtr == nil {
@@ -71,6 +94,32 @@ func StoreNewMessageWithDB(database *gorm.DB, fromUserID, toUserID int64, conten
 		return nil, false, err
 	}
 	return &existing, false, nil
+}
+
+func validateReplyWithDB(database *gorm.DB, senderID, targetID int64, isGroup bool, replyID int64) error {
+	message, err := GetMessageByIDWithDB(database, replyID)
+	if err != nil {
+		return err
+	}
+	if message == nil || message.IsGroup != isGroup {
+		return ErrInvalidReply
+	}
+	if isGroup {
+		if message.ToUserID != targetID {
+			return ErrInvalidReply
+		}
+	} else if !((message.FromUserID == senderID && message.ToUserID == targetID) ||
+		(message.FromUserID == targetID && message.ToUserID == senderID)) {
+		return ErrInvalidReply
+	}
+	allowed, err := CanUserReadMessageWithDB(database, senderID, message)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrInvalidReply
+	}
+	return nil
 }
 
 func GetMessageByIDWithDB(database *gorm.DB, messageID int64) (*Message, error) {
@@ -159,6 +208,13 @@ func RecallMessageWithDB(database *gorm.DB, operatorUserID, messageID int64, now
 	if result.RowsAffected != 1 {
 		return nil, errors.New("message recall update lost locked row")
 	}
+	if channelManager {
+		// The message row lock serializes pinning against recall. Clearing only
+		// this ID cannot erase a concurrently selected different announcement.
+		if err := database.Model(&ChannelSettings{}).Where("group_id = ? AND pinned_message_id = ?", message.ToUserID, message.MessageID).Update("pinned_message_id", 0).Error; err != nil {
+			return nil, err
+		}
+	}
 	message.IsRecalled = true
 	message.RecalledAt = recalledAt
 	message.RecalledBy = operatorUserID
@@ -200,6 +256,7 @@ FROM (
     m.to_user_id,
     m.content,
     m.caption,
+    m.reply_to_message_id,
     m.timestamp,
     m.message_type,
     m.real_file_name,
@@ -220,6 +277,7 @@ FROM (
     m.to_user_id,
     m.content,
     m.caption,
+    m.reply_to_message_id,
     m.timestamp,
     m.message_type,
     m.real_file_name,

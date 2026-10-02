@@ -142,6 +142,11 @@ message ChangePassword {
   string new_password = 2;
 }
 
+message UpdateGroupNotify {
+  int64 target_group_id = 1; // Also accepts a subscribed channel ID.
+  bool is_notify = 2;
+}
+
 message QueryGroupMembers {
   int64 from_user_id = 1;
   int64 target_group_id = 2;

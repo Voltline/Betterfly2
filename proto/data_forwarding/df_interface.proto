@@ -52,6 +52,7 @@ message RequestMessage {
     RecallMessage recall_message = 38;
     channel_interface.ChannelRequest channel_request = 39;
     channel_interface.QueryChannelHistory query_channel_history = 40;
+    UpdateGroupNotify update_group_notify = 41;
   }
 }
 

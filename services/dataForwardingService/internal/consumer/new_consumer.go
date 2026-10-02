@@ -288,13 +288,14 @@ func buildGroupMemberOperationResponse(operation *friend.GroupOperationRsp, resu
 			Operation: operation.GetOperation(), Result: result.String(), GroupId: operation.GetGroupId(),
 			UserId: operation.GetUserId(), Role: operation.GetRole(), UpdateTime: operation.GetUpdateTime(),
 			GroupName: operation.GetGroupName(), PreviousOwnerUserId: operation.GetPreviousOwnerUserId(),
+			NotificationsMuted: operation.GetNotificationsMuted(),
 		},
 	}}
 }
 
 func isStructuredGroupOperation(operation string) bool {
 	switch operation {
-	case "kick_group_member", "update_group_member_role", "update_group_name", "transfer_group_owner":
+	case "kick_group_member", "update_group_member_role", "update_group_name", "transfer_group_owner", "update_group_notify":
 		return true
 	default:
 		return false
@@ -342,12 +343,13 @@ func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.Respons
 	var groups []*pb.JoinedGroupInfo
 	for _, group := range groupList.GetGroups() {
 		groups = append(groups, &pb.JoinedGroupInfo{
-			GroupId:     group.GetGroupId(),
-			GroupName:   group.GetGroupName(),
-			Avatar:      group.GetAvatar(),
-			OwnerUserId: group.GetOwnerUserId(),
-			UpdateTime:  group.GetUpdateTime(),
-			IsChannel:   group.GetIsChannel(),
+			GroupId:            group.GetGroupId(),
+			GroupName:          group.GetGroupName(),
+			Avatar:             group.GetAvatar(),
+			OwnerUserId:        group.GetOwnerUserId(),
+			UpdateTime:         group.GetUpdateTime(),
+			IsChannel:          group.GetIsChannel(),
+			NotificationsMuted: group.GetNotificationsMuted(),
 		})
 	}
 
@@ -684,18 +686,19 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		dfResp = &pb.ResponseMessage{
 			Payload: &pb.ResponseMessage_MessageRsp{
 				MessageRsp: &pb.MessageRsp{
-					MessageId:    msg.GetMessageId(),
-					FromUserId:   msg.GetFromUserId(),
-					ToUserId:     msg.GetToUserId(),
-					Content:      msg.GetContent(),
-					Caption:      msg.GetCaption(),
-					Timestamp:    msg.GetTimestamp(),
-					MsgType:      msg.GetMsgType(),
-					IsGroup:      msg.GetIsGroup(),
-					RealFileName: msg.GetRealFileName(),
-					IsRecalled:   msg.GetIsRecalled(),
-					RecalledAt:   msg.GetRecalledAt(),
-					RecalledBy:   msg.GetRecalledBy(),
+					MessageId:        msg.GetMessageId(),
+					FromUserId:       msg.GetFromUserId(),
+					ToUserId:         msg.GetToUserId(),
+					Content:          msg.GetContent(),
+					Caption:          msg.GetCaption(),
+					ReplyToMessageId: msg.GetReplyToMessageId(),
+					Timestamp:        msg.GetTimestamp(),
+					MsgType:          msg.GetMsgType(),
+					IsGroup:          msg.GetIsGroup(),
+					RealFileName:     msg.GetRealFileName(),
+					IsRecalled:       msg.GetIsRecalled(),
+					RecalledAt:       msg.GetRecalledAt(),
+					RecalledBy:       msg.GetRecalledBy(),
 				},
 			},
 		}
@@ -810,8 +813,9 @@ func processStoredPostResponse(stored *storage.StoreMsgRsp, complete func() erro
 		deliveryErr = deliver(stored.GetMessageId(), &pb.Post{
 			FromId: stored.GetFromUserId(), ToId: stored.GetToUserId(),
 			Msg: stored.GetContent(), MsgType: stored.GetMessageType(),
-			Caption: stored.GetCaption(),
-			IsGroup: stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
+			Caption:          stored.GetCaption(),
+			ReplyToMessageId: stored.GetReplyToMessageId(),
+			IsGroup:          stored.GetIsGroup(), RealFileName: stored.GetRealFileName(),
 			Timestamp: timestamp, ClientMessageId: stored.GetClientMessageId(), MessageId: stored.GetMessageId(),
 		})
 	}
@@ -824,8 +828,9 @@ func convertStorageMessages(messages []*storage.MessageRsp) []*pb.MessageRsp {
 		result = append(result, &pb.MessageRsp{
 			MessageId: msg.GetMessageId(), FromUserId: msg.GetFromUserId(), ToUserId: msg.GetToUserId(),
 			Content: msg.GetContent(), Timestamp: msg.GetTimestamp(), MsgType: msg.GetMsgType(), IsGroup: msg.GetIsGroup(),
-			Caption:      msg.GetCaption(),
-			RealFileName: msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
+			Caption:          msg.GetCaption(),
+			ReplyToMessageId: msg.GetReplyToMessageId(),
+			RealFileName:     msg.GetRealFileName(), IsRecalled: msg.GetIsRecalled(), RecalledAt: msg.GetRecalledAt(), RecalledBy: msg.GetRecalledBy(),
 		})
 	}
 	return result

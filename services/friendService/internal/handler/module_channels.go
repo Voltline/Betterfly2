@@ -113,6 +113,9 @@ func handleChannelRequest(ctx friendRequestContext, request *channel.ChannelRequ
 		case *channel.ChannelRequest_Delete:
 			response.Operation = "delete_channel"
 			err = db.DeleteChannelWithDB(ctx.database, actorID, payload.Delete.GetChannelId())
+		case *channel.ChannelRequest_SetPin:
+			response.Operation = "set_channel_pin"
+			view, err = db.SetChannelPinWithDB(ctx.database, actorID, payload.SetPin.GetChannelId(), payload.SetPin.GetMessageId())
 		case *channel.ChannelRequest_ListMembers:
 			response.Operation = "list_channel_members"
 			p := payload.ListMembers
@@ -177,7 +180,7 @@ func channelInfo(view *db.ChannelView) *channel.ChannelInfo {
 	if view.IsPublic {
 		visibility = channel.Visibility_PUBLIC
 	}
-	return &channel.ChannelInfo{ChannelId: view.GroupID, Name: view.Name, Description: view.Description, AvatarHash: view.Avatar, Username: view.Username, Visibility: visibility, OwnerUserId: view.OwnerUserID, SubscriberCount: view.SubscriberCount, Subscribed: view.Subscribed, MyRole: view.MyRole, UpdateTime: view.UpdateTime}
+	return &channel.ChannelInfo{ChannelId: view.GroupID, Name: view.Name, Description: view.Description, AvatarHash: view.Avatar, Username: view.Username, Visibility: visibility, OwnerUserId: view.OwnerUserID, SubscriberCount: view.SubscriberCount, Subscribed: view.Subscribed, MyRole: view.MyRole, UpdateTime: view.UpdateTime, PinnedMessageId: view.PinnedMessageID, NotificationsMuted: view.NotificationsMuted}
 }
 
 func listChannelResponse(ctx friendRequestContext, response *channel.ChannelResponse, subscribedOnly bool, search string, cursor int64, requestedSize int32) error {

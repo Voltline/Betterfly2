@@ -184,14 +184,19 @@ func (s *GormStore) ListActiveTokens(ctx context.Context, userID int64, pushType
 	return tokens, err
 }
 
-func (s *GormStore) MessageNotificationsEnabled(ctx context.Context, targetUserID, senderUserID int64, isGroup bool) (bool, error) {
+// sourceID is the sender for direct messages, or conversation ID for groups/channels.
+func (s *GormStore) MessageNotificationsEnabled(ctx context.Context, targetUserID, sourceID int64, isGroup bool) (bool, error) {
 	if isGroup {
-		return true, nil
+		var count int64
+		err := s.db.WithContext(ctx).Model(&db.GroupMember{}).
+			Joins("JOIN groups ON groups.group_id = group_members.group_id AND groups.is_delete = FALSE").
+			Where("group_members.group_id = ? AND group_members.user_id = ? AND group_members.notifications_muted = FALSE", sourceID, targetUserID).Count(&count).Error
+		return count > 0, err
 	}
 	var friend db.Friend
 	err := s.db.WithContext(ctx).
 		Select("is_notify").
-		Where("user_id = ? AND friend_id = ? AND is_delete = ?", targetUserID, senderUserID, false).
+		Where("user_id = ? AND friend_id = ? AND is_delete = ?", targetUserID, sourceID, false).
 		First(&friend).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return true, nil

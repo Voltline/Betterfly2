@@ -28,8 +28,8 @@ func TestMessageFanoutUsesFixedPlaceholderCountForTwentyThousandTargets(t *testi
 	operationKey := "push-service/0/20000"
 	jobID := stablePushJobID(operationKey)
 
-	if placeholders := strings.Count(messageFanoutSQL, "?"); placeholders != 10 {
-		t.Fatalf("fanout SQL placeholders scale with audience: got=%d want=10", placeholders)
+	if placeholders := strings.Count(messageFanoutSQL, "?"); placeholders != 11 {
+		t.Fatalf("fanout SQL placeholders scale with audience: got=%d want=11", placeholders)
 	}
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT \* FROM "messages" WHERE message_id = \$1`).
@@ -37,7 +37,7 @@ func TestMessageFanoutUsesFixedPlaceholderCountForTwentyThousandTargets(t *testi
 		WillReturnRows(sqlmock.NewRows([]string{"message_id", "from_user_id", "to_user_id", "is_group", "is_recalled"}).AddRow(20000, 1, 2, false, false))
 	mock.ExpectExec(`INSERT INTO "push_jobs"`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`WITH targets AS`).WithArgs(
-		sqlmock.AnyArg(), int64(1), PushTypeAPNs, false, int64(20000), jobID,
+		sqlmock.AnyArg(), int64(1), int64(1), PushTypeAPNs, false, int64(20000), jobID,
 		DeliveryPending, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	).WillReturnResult(sqlmock.NewResult(0, 20000))
 	mock.ExpectCommit()

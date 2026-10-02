@@ -94,7 +94,7 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 	})
 	for _, claim := range claims {
 		if claim.RecipientExcluded {
-			prepared = append(prepared, preparedDelivery{claim: claim, prepareErr: errors.New("channel_subscription_ended")})
+			prepared = append(prepared, preparedDelivery{claim: claim, prepareErr: errors.New("conversation_notifications_disabled")})
 			continue
 		}
 		request, err := decodeClaimRequest(claim)

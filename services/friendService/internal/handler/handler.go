@@ -511,12 +511,13 @@ func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *fr
 	var joinedGroups []*friend.JoinedGroupContact
 	for _, group := range groups {
 		joinedGroups = append(joinedGroups, &friend.JoinedGroupContact{
-			GroupId:     group.GroupID,
-			GroupName:   group.GroupName,
-			Avatar:      group.Avatar,
-			OwnerUserId: group.OwnerUserID,
-			UpdateTime:  group.UpdateTime,
-			IsChannel:   group.IsChannel,
+			GroupId:            group.GroupID,
+			GroupName:          group.GroupName,
+			Avatar:             group.Avatar,
+			OwnerUserId:        group.OwnerUserID,
+			UpdateTime:         group.UpdateTime,
+			IsChannel:          group.IsChannel,
+			NotificationsMuted: group.NotificationsMuted,
 		})
 	}
 

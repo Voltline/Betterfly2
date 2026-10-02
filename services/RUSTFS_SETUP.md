@@ -68,7 +68,7 @@ RUSTFS_EXTERNAL_PORT=9000
 4. 调用 `POST /storage_service/upload/verify`。
 5. Storage Service 从 RustFS 读取对象并重新计算 SHA-512；匹配后才把元数据标记为已验证。
 
-对象 key 当前为 `{hash前2位}/{完整hash}`。未验证文件不会被下载接口或内部存在性查询视为可用文件。完整请求格式见根目录的 [API 文档](../API_DOCUMENTATION.md)。
+对象 key 当前为 `{hash前2位}/{完整hash}`。未验证文件不会被下载接口或内部存在性查询视为可用文件。完整请求格式见根目录的 [API 文档](../docs/API_DOCUMENTATION.md)。
 
 ## 验证与排障
 

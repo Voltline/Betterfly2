@@ -15,6 +15,7 @@ message StoreMsgRsp {
   string client_timestamp = 10;
   string server_timestamp = 11;
   string caption = 12;
+  int64 reply_to_message_id = 13;
 }
 
 message MessageRsp {
@@ -30,6 +31,7 @@ message MessageRsp {
   string recalled_at = 10;
   int64 recalled_by = 11;
   string caption = 12;
+  int64 reply_to_message_id = 13;
 }
 
 message RecallMessageRsp {

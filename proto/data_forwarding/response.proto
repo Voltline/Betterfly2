@@ -99,6 +99,7 @@ message JoinedGroupInfo {
   int64 owner_user_id = 4;
   string update_time = 5;
   bool is_channel = 6;
+  bool notifications_muted = 7;
 }
 
 message JoinedGroupsRsp {
@@ -144,6 +145,7 @@ message GroupMemberOperationRsp {
   string update_time = 6;
   string group_name = 7;
   int64 previous_owner_user_id = 8;
+  bool notifications_muted = 9; // Meaningful for update_group_notify.
 }
 
 enum AccountSecurityResult {
@@ -175,6 +177,7 @@ message MessageRsp {
   string recalled_at = 10;
   int64 recalled_by = 11;
   string caption = 12;
+  int64 reply_to_message_id = 13;
 }
 
 // 同步消息响应

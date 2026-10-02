@@ -27,6 +27,7 @@ func init() {
 					}
 					for _, message := range messages {
 						post := &channel.ChannelPost{MessageId: message.MessageID, AuthorUserId: message.FromUserID, Content: message.Content, Caption: message.Caption, MsgType: message.MessageType, RealFileName: message.RealFileName, Timestamp: message.Timestamp, IsRecalled: message.IsRecalled, RecalledAt: message.RecalledAt, RecalledBy: message.RecalledBy}
+						post.ReplyToMessageId = message.ReplyToMessageID
 						if message.IsRecalled {
 							post.Content, post.Caption, post.RealFileName = "", "", ""
 						}

@@ -27,7 +27,7 @@ DataForwarding 跨 Pod 投递和 Push 的每设备账本。不新增服务、Top
 
 ## 客户端接口
 
-定义位于 `proto/channel/channel.proto`。
+定义位于 `../proto/channel/channel.proto`。
 `RequestMessage.channel_request = 39` 和 `query_channel_history = 40`，
 `ResponseMessage.channel_response = 23`，均为增量字段。
 每次请求携带现有 JWT，操作者来自认证连接，不存在客户端填写的操作者字段。
@@ -62,6 +62,7 @@ avatar_hash、username 用于清空；显式空 name 不合法；空 PATCH 不�
 成员列表的 next_cursor_id 是 user ID，其余是 channel ID；负数页长/游标被拒绝。
 `ChannelInfo` 提供名字、描述、头像、username、visibility、owner_user_id、
 subscriber_count、subscribed、my_role 和 update_time，人数包含管理员与 owner。
+增量支持 pinned_message_id 和当前订阅者的 notifications_muted。
 `my_role=member` 表示只读订阅者；空串表示公开预览者。
 
 响应 result：OK=0、NOT_FOUND=1、INVALID_ARGUMENT=2、FORBIDDEN=3、
@@ -119,16 +120,17 @@ docker compose run --rm --no-deps db_migrate
 旧客户端和旧序列化字段仍可解析；旧客户端忽略 is_channel，可能将频道当普通群显示，
 但旧 DF 的群发言路径仍受到新版 Storage 的只读检查。
 协议生成文件按仓库现有方式生成，不手工编辑 pb.go。
-频道最初使用 schema-v6 Job；当前活动 migration manifest 为 schema-v7 Job
-（追加图片配文列），需构建相应固定镜像并等待成功后再 rollout。
-schema-v5/v6 Job 留作历史文件但不在活动 kustomization 中。
+频道最初使用 schema-v6 Job；当前活动 migration manifest 为 schema-v8 Job
+（置顶、免打扰及引用回复），需构建相应固定镜像并等待成功后再 rollout。
+schema-v5/v6/v7 Job 留作历史文件但不在活动 kustomization 中。
 
 ## 本轮边界
 
-不包含评论/讨论群联动、反应、阅读计数、订阅者静音设置、邀请链接或内容审核后台。
+置顶公告、订阅者免打扰和消息引用见 [会话功能与客户端适配](CONVERSATION_FEATURES.md)。
+不包含评论/讨论群联动、反应、阅读计数、邀请链接或内容审核后台。
 不承诺百万订阅者扇出容量：实时投递仍复用现有按成员名单读取和分 Pod 扇出的路径，
 历史/成员/发现查询有界分页，但发布扇出应按实际订阅规模单独压测。
 Kafka/Outbox/APNs 保留至少一次边界；客户端必须依据 message_id 去重。
 群/频道资料与成员变动不实时广播，刷新列表/详情时看到最新状态。
 
-客户端改造任务见 `CLIENT_CHANNEL_PROMPT.md`；测试入口见 `REGRESSION_TESTING.md`。
+测试入口见 `REGRESSION_TESTING.md`。

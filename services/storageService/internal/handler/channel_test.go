@@ -19,6 +19,7 @@ func TestChannelCacheHitRechecksPrivateVisibility(t *testing.T) {
 	for _, layer := range []string{"L1", "L2"} {
 		t.Run(layer, func(t *testing.T) {
 			mock := useMockDB(t)
+			expectCachedMessageState(mock, 44)
 			mock.ExpectQuery(`SELECT \* FROM "channel_settings"`).WithArgs(int64(9001), 1).WillReturnRows(sqlmock.NewRows([]string{"group_id", "is_public"}).AddRow(9001, false))
 			mock.ExpectQuery(`(?s)channel_settings.is_public = TRUE OR viewer.user_id IS NOT NULL`).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
 			cache := newMockCache()

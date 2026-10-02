@@ -12,6 +12,7 @@ message StoreNewMessage {
   string client_message_id = 7;
   string client_timestamp = 8;
   string caption = 9;
+  int64 reply_to_message_id = 10;
 }
 
 message QueryMessage {

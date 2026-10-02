@@ -4,7 +4,7 @@
 
 ## 消息 ID、撤回增量同步与投递重试
 
-本轮回归测试分布在 `shared/db`、Storage 的 `internal/handler`、DataForwarding 的 `internal/handlers` 和 `internal/consumer`，以及 `proto/data_forwarding`：
+本轮回归测试分布在 `../shared/db`、Storage 的 `internal/handler`、DataForwarding 的 `internal/handlers` 和 `internal/consumer`，以及 `proto/data_forwarding`：
 
 - 原消息早于普通同步游标，但其撤回仍能独立分页补收；空普通页不会吞掉撤回页。
 - 撤回墓碑遮蔽正文和文件名，沿用当前成员及入群时间权限；游标/身份错误在查询前拒绝，数据库错误不得返回部分成功。
@@ -16,13 +16,13 @@
 
 各模块执行 `go test ./...`；关键模块执行 `go test -race ./...`。这些测试使用 sqlmock、miniredis 和 Kafka mock，不等同于真实 Docker/APNs 端到端验证。客户端配合测试和部署顺序见 [适配说明](CLIENT_MESSAGE_SYNC_ADAPTATION.md)。
 
-2026-09-30 先前单元回归结果：全部 15 个 Go module 的 `go test ./...`、`go vet ./...` 通过；shared、DataForwarding、Storage、Push、`proto/data_forwarding` 的 `go test -race ./...` 通过；`make -C proto` 与 `git diff --check` 通过。当时 `TestFriendServiceEndToEnd` 因未设置 `BETTERFLY_E2E=1` 跳过。随后真实 Docker 验收与容量结果见本文末尾；真实 APNs 和双设备客户端联调仍未执行。
+2026-09-30 先前单元回归结果：全部 15 个 Go module 的 `go test ./...`、`go vet ./...` 通过；shared、DataForwarding、Storage、Push、`../proto/data_forwarding` 的 `go test -race ./...` 通过；`make -C proto` 与 `git diff --check` 通过。当时 `TestFriendServiceEndToEnd` 因未设置 `BETTERFLY_E2E=1` 跳过。随后真实 Docker 验收与容量结果见本文末尾；真实 APNs 和双设备客户端联调仍未执行。
 
 ## Friend/Group 端到端回归测试
 
 当前好友与群聊主链路的端到端测试位于：
 
-- [friend_service_e2e_test.go](services/dataForwardingService/integration/friend_service_e2e_test.go)
+- [friend_service_e2e_test.go](../services/dataForwardingService/integration/friend_service_e2e_test.go)
 
 ### 覆盖范围
 
@@ -45,7 +45,7 @@
 
 ### 前置条件
 
-1. 已正确配置本地 `services/.env`，尤其是 `PGSQL_DSN`。该文件包含私密配置且被 Git 忽略，不应提交。
+1. 已正确配置本地 `../services/.env`，尤其是 `PGSQL_DSN`。该文件包含私密配置且被 Git 忽略，不应提交。
 2. 已启动包含 Storage Service 和第二个 DataForwarding Pod 的本地环境：
 
 ```bash
@@ -61,7 +61,7 @@ cd services
 
 ### 运行命令
 
-在 [services/dataForwardingService](services/dataForwardingService) 目录执行：
+在 [services/dataForwardingService](../services/dataForwardingService) 目录执行：
 
 ```bash
 env BETTERFLY_E2E=1 \
@@ -162,7 +162,7 @@ DLQ 重放是 at-least-once；这些断言只证明该业务操作幂等，**不
 
 ### 复跑入口与检查
 
-以下命令均在 `services/dataForwardingService` 下执行，只能针对专用测试环境；WSS 使用本机自签名证书测试连接，不是 TLS 安全验收。
+以下命令均在 `../services/dataForwardingService` 下执行，只能针对专用测试环境；WSS 使用本机自签名证书测试连接，不是 TLS 安全验收。
 
 ```bash
 # 好友/群主链路
@@ -181,7 +181,7 @@ BETTERFLY_CAPACITY=1 BETTERFLY_CAPACITY_PAIRS=1,4 BETTERFLY_CAPACITY_DURATION=5s
 
 `BETTERFLY_CAPACITY_PAIRS` 默认 `1,4,8,16`，各值限定 1-64；`BETTERFLY_CAPACITY_DURATION` 默认 `20s`，限定 5 秒至 1 分钟。普通 `go test ./...` 不启用真实验收、加压或重启。
 
-本轮 15 个 Go module 的 `go test ./...` 和 `go vet ./...` 全通过；shared、DF、Storage、Friend、Call、Push、AB Test、`proto/data_forwarding` 八个模块的 `go test -race ./...` 全通过（未变包可能使用 Go 缓存）。新增真实恢复/DLQ 使用 `-count=1 -race` 单独执行并通过，总耗时 34.36 秒；8 连接、两档各 5 秒的容量 race 运行也通过，耗时 17.49 秒，这次结果未混入上面的非 race 容量表。修改的 Go 测试执行了 gofmt，`git diff --check` 通过。
+本轮 15 个 Go module 的 `go test ./...` 和 `go vet ./...` 全通过；shared、DF、Storage、Friend、Call、Push、AB Test、`../proto/data_forwarding` 八个模块的 `go test -race ./...` 全通过（未变包可能使用 Go 缓存）。新增真实恢复/DLQ 使用 `-count=1 -race` 单独执行并通过，总耗时 34.36 秒；8 连接、两档各 5 秒的容量 race 运行也通过，耗时 17.49 秒，这次结果未混入上面的非 race 容量表。修改的 Go 测试执行了 gofmt，`git diff --check` 通过。
 
 ### 明确未验收项
 
@@ -191,7 +191,7 @@ BETTERFLY_CAPACITY=1 BETTERFLY_CAPACITY_PAIRS=1,4 BETTERFLY_CAPACITY_DURATION=5s
 
 ### 修改与边界
 
-- `shared/outbox/relay.go` 用单条 `WITH ... SELECT ... FOR UPDATE SKIP LOCKED ... UPDATE ... RETURNING` 原子领取一条事件，替换客户端 BEGIN、查询、更新、COMMIT 四次往返。
+- `../shared/outbox/relay.go` 用单条 `WITH ... SELECT ... FOR UPDATE SKIP LOCKED ... UPDATE ... RETURNING` 原子领取一条事件，替换客户端 BEGIN、查询、更新、COMMIT 四次往返。
 - 完成/失败标记仍按 `event_id + claimed + claim_token` 条件更新，但不再对单条原子 UPDATE 额外包一层 GORM 默认事务。领取和标记合计约从七次网络往返降为两次；没有全局关闭业务事务。
 - 保留一次只领取一条、租约过期恢复、claim token fencing、稳定 Outbox event_id 和无限退避重试。没有新增 worker、批量领取、租约续期或 ACK 快速路径。
 - DF 的 `PublishMessage` 在发送前创建一个随机 128-bit Kafka header `event_id`，Sarama 对同一生产消息的重试沿用该 ID。新 DF 请求不再仅凭 source offset 命中 Inbox，避免 Kafka 日志重建后错认旧操作。
@@ -235,7 +235,7 @@ BETTERFLY_CAPACITY=1 BETTERFLY_CAPACITY_PAIRS=1,4 BETTERFLY_CAPACITY_DURATION=5s
 BETTERFLY_ACCEPTANCE=1 BETTERFLY_E2E=1 go test -race -run '^(TestFriendServiceEndToEnd|TestReliabilityEndToEnd|TestDLQAcceptance|TestOutboxPostgresAtomicClaim|TestRequestIdentityEndToEnd)$' -count=1 -v -timeout 8m ./integration
 ```
 
-上述五条真实测试全部通过（54.59 秒），包括本次更新后的好友/群管理、消息同步/撤回、DLQ 两轮重放、原子领取和身份冲突；本次没有开启额外单 DF restart 测试开关。15 个 Go module 的 `go test ./...`、`go vet ./...` 和前述八个关键模块的 `go test -race ./...` 全通过；修改的 Go 文件已 gofmt，`git diff --check` 通过。没有 commit/push。
+上述五条真实测试全部通过（54.59 秒），包括本次更新后的好友/群管理、消息同步/撤回、DLQ 两轮重放、原子领取和身份冲突；本次没有开启额外单 DF restart 测试开关。15 个 Go module 的 `go test ./...`、`go vet ./...` 和前述八个关键模块的 `go test -race ./...` 全通过；修改的 Go 文件已 gofmt，`git diff --check` 通过。
 
 ## 成都数据库条件下的 ACK 延迟优化（2026-09-30）
 
@@ -283,12 +283,11 @@ BETTERFLY_CAPACITY=1 go test -run '^TestCapacityEndToEnd$' -count=1 -v -timeout 
 
 15 个 Go module 的 `go test ./...`、`go vet ./...` 和上述八个关键模块的 `go test -race ./...` 全通过，真实 PostgreSQL 合并事务单独 `-race -count=1` 通过（2.95 秒）。最终上述六条真实环境 race 验收全部通过，总耗时 54.49 秒，包含好友/群管理、离线同步/撤回、跨 Pod ownership、两轮 DLQ 重放、原子领取 fencing、请求身份与合并事务；本次没有开启额外 DF restart 开关。回归中的宿主到数据库十次 `SELECT 1` 测得 RTT P50 为 40.74 ms、P95 为 41.78 ms，较上一轮略低，并非完全控制网络条件的 A/B。
 
-修改的 Go 文件已 gofmt，`git diff --check` 通过。普通模块测试中的真实环境测试仍为 opt-in，不把跳过算作真实验收。真实 APNs、文件、音视频和灾难恢复的未验收边界不变。无数据库迁移、客户端变更或 commit/push。
+修改的 Go 文件已 gofmt，`git diff --check` 通过。普通模块测试中的真实环境测试仍为 opt-in，不把跳过算作真实验收。真实 APNs、文件、音视频和灾难恢复的未验收边界不变。
 
 ## 广播频道验收（2026-09-30）
 
-本节对应频道功能，不覆盖上一节已记录的性能修改。协议与能力见
-`CHANNELS.md`，客户端适配完整任务见 `CLIENT_CHANNEL_PROMPT.md`。
+本节对应频道功能，不覆盖上一节已记录的性能修改。协议与能力见`CHANNELS.md`。
 
 ### 部署与迁移
 
@@ -311,7 +310,7 @@ BETTERFLY_CAPACITY=1 go test -run '^TestCapacityEndToEnd$' -count=1 -v -timeout 
 
 15 个 Go module 全部 `go test ./...` 和 `go vet ./...` 通过。
 shared、DataForwarding、Storage、Friend、Call、Push、AB Test、proto/data_forwarding 的
-`go test -race ./...` 全部通过，共 38 个模块检查；opt-in 实测另列，不把 skip 算作通过。
+`go test -race ./...` 全部通过，共 38 个模块检查；
 
 ### 真实频道 E2E
 
@@ -342,7 +341,7 @@ DB_MAX_OPEN_CONNS=2 DB_MAX_IDLE_CONNS=1 BETTERFLY_ACCEPTANCE=1 go test -race -ru
 
 真实 PostgreSQL 推送资格测试通过，测试耗时 1.43 秒；APNs payload 另用本地模拟端点验收。
 本轮未进行 iOS/Notification Service Extension 实机或真实 APNs 新频道通知验收，需客户端完成适配。
-百万订阅者容量、评论/反应、静音、邀请链接不在本轮范围。没有 commit/push。
+百万订阅者容量、评论/反应、静音、邀请链接不在本轮范围。
 
 ## 单张图片与配文（2026-10-01）
 
@@ -370,4 +369,47 @@ BETTERFLY_ACCEPTANCE=1 go test -race -run '^TestImageCaptionEndToEnd$' -count=1 
 本轮 docker compose ps 未发现运行容器，因此真实 WSS/Kafka/PostgreSQL 图文 E2E
 未运行（默认测试跳过不代表实测通过），未执行远端/本地数据库 v7 迁移。
 真实上传对象、APNs 设备通知和 iOS/NSE 仍需部署/客户端适配后验证。
-无 iOS 工作区变更，未 commit/push。
+
+## 置顶、免打扰与引用回复（Schema v8）
+
+新增/扩展测试分布于 shared/db、Friend handler、Storage handler、DF
+handlers/consumer/integration、Push 以及 proto/data_forwarding。
+
+- 置顶：owner/admin 权限，普通成员/非成员拒绝，同频道校验，缺失和撤回目标，
+  取消置顶，数据库失败事务回滚，频道消息撤回清除对应置顶。
+- 免打扰：只更新可信操作者的当前成员记录，不改变 JoinedAt；非成员/已删除
+  会话和数据库故障不假报成功；偏好与响应/已加入会话列表映射正确。
+- Push：入队及领取双检查，排队静音任务不发送且不误停用token；撤回替换和
+  VoIP不受静音影响；20,000目标的SQL参数数量仍固定，旧频道/群/私聊展示回归。
+- 引用：私聊双向和同群权限，跨会话/不可读/缺失目标拒绝；单条记录和canonical
+  重试，ACK/实时/查询/普通同步/撤回同步/频道历史透传；L1/L2缓存命中复查
+  撤回且不修改共享缓存实体，数据库异常不回退暴露旧引用正文。
+- PB：新增字段号、往返、旧Post字节的零引用与频道默认通知开启语义。
+
+本轮所有15个Go module的 go test ./...、go vet ./... 和构建通过；
+shared、DF、Storage、Friend、Call、Push、AB Test、proto/data_forwarding
+的 go test -race ./... 通过。服务二进制构建输出到临时目录。
+make -C proto 再次生成的15个pb.go摘要未变化，gofmt检查和git diff --check通过。
+
+已扩展真实频道E2E，包含新订阅者读置顶、管理员置顶/取消、静音期间实时消息
+仍送达、引用历史/同步和撤回自动清除置顶。显式执行入口：
+
+```bash
+# 专用Compose已迁移v8，所有业务副本已重建
+cd services/dataForwardingService
+BETTERFLY_ACCEPTANCE=1 go test -race -run '^TestChannelsEndToEnd$' -count=1 -v -timeout 3m ./integration
+```
+
+Push已有的 TestChannelPushEligibilityPostgres 扩展验证实际 INSERT SELECT 和
+worker SQL：静音/非成员不入队，领取时重新检查，静音成员仍接受撤回替换。
+其fixture全部在回滚事务内，运行worker不可见，不会产生真实APNs请求：
+
+```bash
+cd services/pushService
+BETTERFLY_ACCEPTANCE=1 go test -run '^TestChannelPushEligibilityPostgres$' -count=1 -v ./internal/push
+```
+
+两者都需现有验收环境与PGSQL_DSN。本轮本机Docker daemon未运行，因此以上
+真实WSS/Kafka/PostgreSQL验证跳过，未实际执行数据库v8迁移，也未执行设备APNs
+或iOS联调。默认测试中的skip不等于真实环境通过。
+协议和部署契约见 CONVERSATION_FEATURES.md

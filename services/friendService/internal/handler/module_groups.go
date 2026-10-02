@@ -2,6 +2,7 @@ package handler
 
 import (
 	friend "Betterfly2/proto/friend"
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/dispatch"
 )
 
@@ -36,5 +37,27 @@ func registerFriendGroupModule(router *dispatch.OneofRouter[friendRequestContext
 	})
 	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_TransferGroupOwner) (*friend.ResponseMessage, error) {
 		return ctx.handler.handleTransferGroupOwnerWithDB(ctx.database, ctx.request, payload.TransferGroupOwner)
+	})
+	dispatch.Register(router, func(ctx friendRequestContext, payload *friend.RequestMessage_UpdateGroupNotify) (*friend.ResponseMessage, error) {
+		p := payload.UpdateGroupNotify
+		actorID := ctx.request.GetTargetUserId()
+		result := friend.FriendResult_INVALID_ARGUMENT
+		var updatedAt string
+		if actorID > 0 && p.GetGroupId() > 0 {
+			var err error
+			updatedAt, err = db.UpdateGroupNotifyWithDB(ctx.database, actorID, p.GetGroupId(), p.GetIsNotify())
+			result = friend.FriendResult_FRIEND_OK
+			if err != nil {
+				result = relationshipResult(err)
+			}
+			if err != nil && result == friend.FriendResult_SERVICE_ERROR {
+				return nil, err
+			}
+		}
+		response := groupOperation(ctx.request, "update_group_notify", result, p.GetGroupId(), actorID, "", updatedAt)
+		if result == friend.FriendResult_FRIEND_OK {
+			response.GetGroupOperationRsp().NotificationsMuted = !p.GetIsNotify()
+		}
+		return response, nil
 	})
 }

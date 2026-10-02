@@ -18,7 +18,7 @@
 
 ## Push Service API
 
-PushService 通过现有 `/ws` Protobuf 连接管理普通 APNs 和 PushKit VoIP token，并在普通消息发送或来电时请求 APNs。协议定义位于 `proto/push/push_interface.proto`。
+PushService 通过现有 `/ws` Protobuf 连接管理普通 APNs 和 PushKit VoIP token，并在普通消息发送或来电时请求 APNs。协议定义位于 `../proto/push/push_interface.proto`。
 
 ### 注册与删除推送 token
 
@@ -59,7 +59,7 @@ PushService 健康检查为 `GET /health` 和 `GET /ready`，默认端口 `8086`
 
 普通消息请求通过校验后，DataForwarding Service 会以 best-effort 方式向 `push-service` topic 发布推送任务。PushService 根据数据库资料生成标题和正文：私聊使用发送者资料，群聊使用群资料；通知同时携带客户端 Notification Service Extension 所需的通信通知元数据。WebSocket 在线不会阻止 APNs 投递，因为同一账号可能还有其他离线设备；前台是否展示横幅由客户端决定。
 
-配置 `PUSH_ADMIN_TOKEN` 后可访问 `GET /push/admin`，并通过受保护的管理 API 调试普通通知、VoIP Push 和全量普通通知。未配置令牌时，页面和管理 API 均返回 `404`。完整说明见 [PushService 文档](services/pushService/README.md)。
+配置 `PUSH_ADMIN_TOKEN` 后可访问 `GET /push/admin`，并通过受保护的管理 API 调试普通通知、VoIP Push 和全量普通通知。未配置令牌时，页面和管理 API 均返回 `404`。完整说明见 [PushService 文档](../services/pushService/README.md)。
 
 ---
 
@@ -71,7 +71,7 @@ CallService 提供一对一 WebRTC 语音和视频通话的控制面。媒体流
 
 ### 通话协议
 
-协议定义位于 `proto/call/call_interface.proto`。客户端将 `call_interface.ClientRequest` 放入 `df_interface.RequestMessage.call_request`，并携带当前登录 JWT。服务端返回 `df_interface.ResponseMessage.call_event`。
+协议定义位于 `../proto/call/call_interface.proto`。客户端将 `call_interface.ClientRequest` 放入 `df_interface.RequestMessage.call_request`，并携带当前登录 JWT。服务端返回 `df_interface.ResponseMessage.call_event`。
 
 客户端命令:
 

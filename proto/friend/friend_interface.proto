@@ -120,6 +120,11 @@ message TransferGroupOwner {
   int64 user_id = 3;
 }
 
+message UpdateGroupNotify {
+  int64 group_id = 1;
+  bool is_notify = 2;
+}
+
 message QueryGroupMembers {
   int64 request_user_id = 1;
   int64 group_id = 2;
@@ -187,6 +192,7 @@ message GroupOperationRsp {
   string role = 5;
   string group_name = 6;
   int64 previous_owner_user_id = 7;
+  bool notifications_muted = 8;
 }
 
 message GroupMemberContact {
@@ -210,6 +216,7 @@ message JoinedGroupContact {
   int64 owner_user_id = 4;
   string update_time = 5;
   bool is_channel = 6;
+  bool notifications_muted = 7;
 }
 
 message JoinedGroupListRsp {
@@ -287,6 +294,7 @@ message RequestMessage {
     UpdateGroupName update_group_name = 24;
     TransferGroupOwner transfer_group_owner = 25;
     channel_interface.ChannelRequest channel_request = 26;
+    UpdateGroupNotify update_group_notify = 27;
   }
 }
 

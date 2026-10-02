@@ -16,11 +16,11 @@
    在对应 proto 文件中新增 request/response message，并把新的 payload 加入 `oneof`。
 
    常见位置：
-   - `proto/data_forwarding/df_interface.proto`、`request.proto`、`response.proto`
-   - `proto/storage/storage_interface.proto`、`request.proto`、`response.proto`
-   - `proto/friend/friend_interface.proto`
-   - `proto/call/call_interface.proto`
-   - `proto/push/push_interface.proto`
+   - `../proto/data_forwarding/df_interface.proto`、`request.proto`、`response.proto`
+   - `../proto/storage/storage_interface.proto`、`request.proto`、`response.proto`
+   - `../proto/friend/friend_interface.proto`
+   - `../proto/call/call_interface.proto`
+   - `../proto/push/push_interface.proto`
 
 2. 重新生成 Protobuf 代码。
 
@@ -45,7 +45,7 @@
 
 数据转发服务位于：
 
-- `services/dataForwardingService/internal/handlers`
+- `../services/dataForwardingService/internal/handlers`
 
 当前模块示例：
 
@@ -96,7 +96,7 @@ func handleExample(fromID int64, message *pb.RequestMessage) error {
 
 存储服务内部 MQ 接口位于：
 
-- `services/storageService/internal/handler`
+- `../services/storageService/internal/handler`
 
 当前模块示例：
 
@@ -127,7 +127,7 @@ func registerStorageExampleModule(router *dispatch.OneofRouter[storageRequestCon
 
 如果新增的是 HTTP 文件接口，入口通常在：
 
-- `services/storageService/internal/http_server`
+- `../services/storageService/internal/http_server`
 
 HTTP 接口不走 MQ router，但仍建议按 handler 文件拆分，并补充 `internal/http_server` 下的测试。
 
@@ -135,7 +135,7 @@ HTTP 接口不走 MQ router，但仍建议按 handler 文件拆分，并补充 `
 
 好友服务内部 MQ 接口位于：
 
-- `services/friendService/internal/handler`
+- `../services/friendService/internal/handler`
 
 当前模块示例：
 
@@ -182,7 +182,7 @@ cd services/friendService
 go test ./internal/handler
 ```
 
-如果改动了 `shared/dispatch` 或 `shared/mq`：
+如果改动了 `../shared/dispatch` 或 `shared/mq`：
 
 ```bash
 cd shared

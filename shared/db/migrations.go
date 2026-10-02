@@ -24,7 +24,7 @@ var nonPostgresMigrationLock sync.Mutex
 const legacySnapshotMigrationVersion = 3
 
 func migrationPlan() []Migration {
-	// Versions 1-6 are published history. Do not add newly introduced models to
+	// Versions 1-7 are published history. Do not add newly introduced models to
 	// these functions; the next schema change must be an explicit new version.
 	return []Migration{
 		{Version: 1, Name: "core schema", Apply: migrateCoreSchema},
@@ -34,6 +34,7 @@ func migrationPlan() []Migration {
 		{Version: 5, Name: "message recall state", Apply: migrateMessageRecallSchema},
 		{Version: 6, Name: "broadcast channels", Apply: migrateChannelSchema},
 		{Version: 7, Name: "image message caption", Apply: migrateImageCaptionSchema},
+		{Version: 8, Name: "channel pin notification preference and message replies", Apply: migrateConversationFeaturesSchema},
 	}
 }
 
@@ -254,6 +255,34 @@ func migrateImageCaptionSchema(tx *gorm.DB) error {
 	}
 	if !tx.Migrator().HasColumn(&Message{}, "Caption") {
 		return tx.Migrator().AddColumn(&Message{}, "Caption")
+	}
+	return nil
+}
+
+func migrateConversationFeaturesSchema(tx *gorm.DB) error {
+	if tx.Dialector.Name() == "postgres" {
+		for _, statement := range []string{
+			`ALTER TABLE channel_settings ADD COLUMN IF NOT EXISTS pinned_message_id bigint NOT NULL DEFAULT 0`,
+			`ALTER TABLE group_members ADD COLUMN IF NOT EXISTS notifications_muted boolean NOT NULL DEFAULT false`,
+			`ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_message_id bigint NOT NULL DEFAULT 0`,
+		} {
+			if err := tx.Exec(statement).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, column := range []struct {
+		model any
+		field string
+	}{
+		{&ChannelSettings{}, "PinnedMessageID"}, {&GroupMember{}, "NotificationsMuted"}, {&Message{}, "ReplyToMessageID"},
+	} {
+		if !tx.Migrator().HasColumn(column.model, column.field) {
+			if err := tx.Migrator().AddColumn(column.model, column.field); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

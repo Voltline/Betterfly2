@@ -200,6 +200,12 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil {
 		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
 	}
+	if msg.GetReplyToMessageId() < 0 {
+		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+	}
+	if msg.GetReplyToMessageId() > 0 && (req.GetTargetUserId() <= 0 || req.GetTargetUserId() != msg.GetFromUserId()) {
+		return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+	}
 	if msg.GetIsGroup() {
 		allowed := false
 		var err error
@@ -226,9 +232,13 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		msg.IsGroup,
 		msg.GetClientMessageId(),
 		msg.GetCaption(),
+		msg.GetReplyToMessageId(),
 	)
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
+		if errors.Is(err, db.ErrInvalidReply) {
+			return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+		}
 		if msg.GetCaption() != "" {
 			err = captionStorageError{cause: err}
 		}
@@ -252,18 +262,19 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_StoreMsgRsp{
 			StoreMsgRsp: &storage.StoreMsgRsp{
-				MessageId:       storedMessage.MessageID,
-				ClientMessageId: msg.GetClientMessageId(),
-				Created:         created,
-				FromUserId:      storedMessage.FromUserID,
-				ToUserId:        storedMessage.ToUserID,
-				Content:         storedMessage.Content,
-				Caption:         storedMessage.Caption,
-				MessageType:     storedMessage.MessageType,
-				IsGroup:         storedMessage.IsGroup,
-				RealFileName:    storedMessage.RealFileName,
-				ClientTimestamp: msg.GetClientTimestamp(),
-				ServerTimestamp: storedMessage.Timestamp,
+				MessageId:        storedMessage.MessageID,
+				ClientMessageId:  msg.GetClientMessageId(),
+				Created:          created,
+				FromUserId:       storedMessage.FromUserID,
+				ToUserId:         storedMessage.ToUserID,
+				Content:          storedMessage.Content,
+				Caption:          storedMessage.Caption,
+				ReplyToMessageId: storedMessage.ReplyToMessageID,
+				MessageType:      storedMessage.MessageType,
+				IsGroup:          storedMessage.IsGroup,
+				RealFileName:     storedMessage.RealFileName,
+				ClientTimestamp:  msg.GetClientTimestamp(),
+				ServerTimestamp:  storedMessage.Timestamp,
 			},
 		},
 	}
@@ -341,10 +352,23 @@ func (h *StorageHandler) handleQueryMessageWithDB(database *gorm.DB, req *storag
 	if cached, ok := h.getFromCache(cacheKey); ok {
 		if msg, ok := cached.(*db.Message); ok {
 			sugar.Debugf("从缓存获取消息: message_id=%d", query.MessageId)
-			// Older cache writers do not know caption; image state must also be
-			// refreshed after recall, even if cache invalidation failed.
+			// Resolve quote/pin references against committed recall state, even
+			// if eviction failed. Copy shared cache entities before overlaying it.
 			if msg.MessageType != "image" {
-				return h.authorizedMessageResponseWithDB(database, req, msg)
+				if database == nil {
+					database = h.requestDatabase()
+				}
+				var state db.Message
+				err := database.Select("is_recalled", "recalled_at", "recalled_by", "reply_to_message_id").First(&state, "message_id = ?", query.MessageId).Error
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return &storage.ResponseMessage{Result: storage.StorageResult_RECORD_NOT_EXIST, TargetUserId: req.GetTargetUserId()}, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				current := *msg
+				current.IsRecalled, current.RecalledAt, current.RecalledBy, current.ReplyToMessageID = state.IsRecalled, state.RecalledAt, state.RecalledBy, state.ReplyToMessageID
+				return h.authorizedMessageResponseWithDB(database, req, &current)
 			}
 		}
 	}
@@ -469,18 +493,19 @@ func (h *StorageHandler) handleQuerySyncMessagesWithDB(database *gorm.DB, req *s
 	var msgResponses []*storage.MessageRsp
 	for _, msg := range page.Messages {
 		msgResponses = append(msgResponses, &storage.MessageRsp{
-			MessageId:    msg.MessageID,
-			FromUserId:   msg.FromUserID,
-			ToUserId:     msg.ToUserID,
-			Content:      msg.Content,
-			Caption:      msg.Caption,
-			Timestamp:    msg.Timestamp,
-			MsgType:      msg.MessageType,
-			IsGroup:      msg.IsGroup,
-			RealFileName: msg.RealFileName,
-			IsRecalled:   msg.IsRecalled,
-			RecalledAt:   msg.RecalledAt,
-			RecalledBy:   msg.RecalledBy,
+			MessageId:        msg.MessageID,
+			FromUserId:       msg.FromUserID,
+			ToUserId:         msg.ToUserID,
+			Content:          msg.Content,
+			Caption:          msg.Caption,
+			ReplyToMessageId: msg.ReplyToMessageID,
+			Timestamp:        msg.Timestamp,
+			MsgType:          msg.MessageType,
+			IsGroup:          msg.IsGroup,
+			RealFileName:     msg.RealFileName,
+			IsRecalled:       msg.IsRecalled,
+			RecalledAt:       msg.RecalledAt,
+			RecalledBy:       msg.RecalledBy,
 		})
 		maskRecalledStorageMessage(msgResponses[len(msgResponses)-1])
 	}
@@ -634,18 +659,19 @@ func (h *StorageHandler) buildMessageResponse(req *storage.RequestMessage, msg *
 		TargetUserId: req.TargetUserId,
 		Payload: &storage.ResponseMessage_MsgRsp{
 			MsgRsp: &storage.MessageRsp{
-				MessageId:    msg.MessageID,
-				FromUserId:   msg.FromUserID,
-				ToUserId:     msg.ToUserID,
-				Content:      msg.Content,
-				Caption:      msg.Caption,
-				Timestamp:    msg.Timestamp,
-				MsgType:      msg.MessageType,
-				IsGroup:      msg.IsGroup,
-				RealFileName: msg.RealFileName,
-				IsRecalled:   msg.IsRecalled,
-				RecalledAt:   msg.RecalledAt,
-				RecalledBy:   msg.RecalledBy,
+				MessageId:        msg.MessageID,
+				FromUserId:       msg.FromUserID,
+				ToUserId:         msg.ToUserID,
+				Content:          msg.Content,
+				Caption:          msg.Caption,
+				ReplyToMessageId: msg.ReplyToMessageID,
+				Timestamp:        msg.Timestamp,
+				MsgType:          msg.MessageType,
+				IsGroup:          msg.IsGroup,
+				RealFileName:     msg.RealFileName,
+				IsRecalled:       msg.IsRecalled,
+				RecalledAt:       msg.RecalledAt,
+				RecalledBy:       msg.RecalledBy,
 			},
 		},
 	}

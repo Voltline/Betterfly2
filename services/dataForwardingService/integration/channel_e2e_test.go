@@ -30,10 +30,14 @@ func probeChannelHistory(t *testing.T, p *networkProbe, id, before int64, size i
 	}).GetChannelResponse()
 }
 
-func probeChannelPost(t *testing.T, p *networkProbe, id int64, text string) int64 {
+func probeChannelPost(t *testing.T, p *networkProbe, id int64, text string, replyTo ...int64) int64 {
 	t.Helper()
 	clientID := fmt.Sprintf("channel-post-%d", time.Now().UnixNano())
-	response := probeRequest(t, p, &pb.RequestMessage{Payload: &pb.RequestMessage_Post{Post: &pb.Post{ToId: id, IsGroup: true, MsgType: "text", Msg: text, ClientMessageId: clientID}}}, func(r *pb.ResponseMessage) bool {
+	var replyID int64
+	if len(replyTo) > 0 {
+		replyID = replyTo[0]
+	}
+	response := probeRequest(t, p, &pb.RequestMessage{Payload: &pb.RequestMessage_Post{Post: &pb.Post{ToId: id, IsGroup: true, MsgType: "text", Msg: text, ClientMessageId: clientID, ReplyToMessageId: replyID}}}, func(r *pb.ResponseMessage) bool {
 		return r.GetPostAckRsp() != nil && r.GetPostAckRsp().ClientMessageId == clientID
 	})
 	if response.GetPostAckRsp().GetMessageId() <= 0 {
@@ -91,6 +95,12 @@ func TestChannelsEndToEnd(t *testing.T) {
 		}
 	}()
 	first := probeChannelPost(t, owner, id, "before subscription")
+	if pin := probeChannel(t, owner, &channel.ChannelRequest{Payload: &channel.ChannelRequest_SetPin{SetPin: &channel.SetChannelPin{ChannelId: id, MessageId: first}}}); pin.Result != channel.ChannelResult_CHANNEL_OK || pin.Channel.GetPinnedMessageId() != first {
+		t.Fatal(pin)
+	}
+	if denied := probeChannel(t, subscriber, &channel.ChannelRequest{Payload: &channel.ChannelRequest_SetPin{SetPin: &channel.SetChannelPin{ChannelId: id, MessageId: first}}}); denied.Result != channel.ChannelResult_CHANNEL_FORBIDDEN {
+		t.Fatal(denied)
+	}
 	preview := probeChannelHistory(t, outsider, id, 0, 1)
 	if preview.Result != channel.ChannelResult_CHANNEL_OK || len(preview.Posts) != 1 || preview.Posts[0].MessageId != first {
 		t.Fatalf("public preview %v", preview)
@@ -101,9 +111,17 @@ func TestChannelsEndToEnd(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		joined := probeChannel(t, subscriber, &channel.ChannelRequest{Payload: &channel.ChannelRequest_Subscribe{Subscribe: &channel.SubscribeChannel{ChannelId: id}}})
-		if joined.Result != channel.ChannelResult_CHANNEL_OK || joined.Channel.SubscriberCount != 2 || joined.Channel.MyRole != "member" {
+		if joined.Result != channel.ChannelResult_CHANNEL_OK || joined.Channel.SubscriberCount != 2 || joined.Channel.MyRole != "member" || joined.Channel.PinnedMessageId != first {
 			t.Fatalf("subscribe/replay %v", joined)
 		}
+	}
+	mute := probeRequest(t, subscriber, &pb.RequestMessage{Payload: &pb.RequestMessage_UpdateGroupNotify{UpdateGroupNotify: &pb.UpdateGroupNotify{TargetGroupId: id, IsNotify: false}}}, func(r *pb.ResponseMessage) bool { return r.GetGroupMemberOperationRsp() != nil }).GetGroupMemberOperationRsp()
+	if mute.GetResult() != "FRIEND_OK" || !mute.GetNotificationsMuted() {
+		t.Fatal(mute)
+	}
+	info := probeChannel(t, subscriber, &channel.ChannelRequest{Payload: &channel.ChannelRequest_Get{Get: &channel.GetChannel{ChannelId: id}}})
+	if !info.GetChannel().GetNotificationsMuted() {
+		t.Fatal("channel preference did not persist")
 	}
 	list := probeChannel(t, subscriber, &channel.ChannelRequest{Payload: &channel.ChannelRequest_ListSubscribed{ListSubscribed: &channel.ListSubscribedChannels{}}})
 	if len(list.Channels) != 1 || list.Channels[0].ChannelId != id {
@@ -123,13 +141,13 @@ func TestChannelsEndToEnd(t *testing.T) {
 	if err := database.Model(&db.Message{}).Where("to_user_id = ? AND from_user_id = ?", id, subscriber.userID).Count(&unauthorized).Error; err != nil || unauthorized != 0 {
 		t.Fatalf("subscriber publication persisted=%d err=%v", unauthorized, err)
 	}
-	second := probeChannelPost(t, owner, id, "realtime")
+	second := probeChannelPost(t, owner, id, "realtime", first)
 	received, err := subscriber.wait(15*time.Second, func(r *pb.ResponseMessage) bool { return r.GetPost() != nil && r.GetPost().MessageId == second })
-	if err != nil || received.message.GetPost().ToId != id {
+	if err != nil || received.message.GetPost().ToId != id || received.message.GetPost().ReplyToMessageId != first {
 		t.Fatalf("cross-pod delivery %v", err)
 	}
 	page := probeChannelHistory(t, subscriber, id, 0, 1)
-	if !page.HasMore || page.Posts[0].MessageId != second {
+	if !page.HasMore || page.Posts[0].MessageId != second || page.Posts[0].GetReplyToMessageId() != first {
 		t.Fatalf("history first page %v", page)
 	}
 	page = probeChannelHistory(t, subscriber, id, page.NextBeforeMessageId, 1)
@@ -181,11 +199,26 @@ func TestChannelsEndToEnd(t *testing.T) {
 		t.Fatal(role)
 	}
 	third := probeChannelPost(t, subscriber, id, "admin publication")
+	if pin := probeChannel(t, subscriber, &channel.ChannelRequest{Payload: &channel.ChannelRequest_SetPin{SetPin: &channel.SetChannelPin{ChannelId: id, MessageId: third}}}); pin.GetResult() != channel.ChannelResult_CHANNEL_OK {
+		t.Fatal(pin)
+	}
 	probeRequest(t, owner, &pb.RequestMessage{Payload: &pb.RequestMessage_RecallMessage{RecallMessage: &pb.RecallMessage{MessageId: third}}}, func(r *pb.ResponseMessage) bool {
 		return r.GetMessageRecallEvent() != nil && r.GetMessageRecallEvent().MessageId == third
 	})
 	if page := probeChannelHistory(t, owner, id, 0, 1); !page.Posts[0].IsRecalled || page.Posts[0].Content != "" {
 		t.Fatalf("channel deletion tombstone %v", page)
+	}
+	if info := probeChannel(t, owner, &channel.ChannelRequest{Payload: &channel.ChannelRequest_Get{Get: &channel.GetChannel{ChannelId: id}}}); info.GetChannel().GetPinnedMessageId() != 0 {
+		t.Fatal("recall retained pin")
+	}
+	if r := probeChannel(t, owner, &channel.ChannelRequest{Payload: &channel.ChannelRequest_SetPin{SetPin: &channel.SetChannelPin{ChannelId: id, MessageId: first}}}); r.GetResult() != channel.ChannelResult_CHANNEL_OK {
+		t.Fatal(r)
+	}
+	if r := probeChannel(t, owner, &channel.ChannelRequest{Payload: &channel.ChannelRequest_SetPin{SetPin: &channel.SetChannelPin{ChannelId: id, MessageId: 0}}}); r.GetResult() != channel.ChannelResult_CHANNEL_OK || r.GetChannel().GetPinnedMessageId() != 0 {
+		t.Fatal("explicit unpin failed")
+	}
+	if r := probeRequest(t, subscriber, &pb.RequestMessage{Payload: &pb.RequestMessage_UpdateGroupNotify{UpdateGroupNotify: &pb.UpdateGroupNotify{TargetGroupId: id, IsNotify: true}}}, func(r *pb.ResponseMessage) bool { return r.GetGroupMemberOperationRsp() != nil }).GetGroupMemberOperationRsp(); r.GetResult() != "FRIEND_OK" || r.GetNotificationsMuted() {
+		t.Fatal("unmute failed")
 	}
 	if r := probeChannel(t, owner, &channel.ChannelRequest{Payload: &channel.ChannelRequest_Unsubscribe{Unsubscribe: &channel.UnsubscribeChannel{ChannelId: id}}}); r.Result != channel.ChannelResult_CHANNEL_INVALID_STATE {
 		t.Fatalf("owner leave %v", r)
@@ -201,6 +234,9 @@ func TestChannelsEndToEnd(t *testing.T) {
 	for _, m := range syncPage.Msgs {
 		if m.MessageId == first {
 			found = true
+		}
+		if m.MessageId == second && m.ReplyToMessageId != first {
+			t.Fatal("sync lost reply")
 		}
 	}
 	if !found {

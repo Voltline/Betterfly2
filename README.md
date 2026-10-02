@@ -14,7 +14,8 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 
 - WebSocket + Protobuf 客户端长连接，Redis 保存跨 DataForwarding Pod 的路由状态。
 - Kafka 解耦消息存储、好友与群组、通话信令及推送任务。
-- [广播频道](CHANNELS.md)：公开发现/订阅、私有邀请、管理员发布与完整历史分页。
+- [广播频道](docs/CHANNELS.md)：公开发现/订阅、私有邀请、管理员发布与完整历史分页。
+- [会话功能](docs/CONVERSATION_FEATURES.md)：频道置顶、群聊／频道免打扰及引用回复。
 - PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
 - Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
 - RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。
@@ -117,7 +118,7 @@ cd services/dataForwardingService
 go test ./...
 ```
 
-仓库由多个 Go module 组成，没有可在根目录覆盖所有服务的单一 `go test ./...`。请在改动涉及的服务、`shared` 或具体 `proto` module 内分别运行测试；跨服务回归入口见[回归测试文档](REGRESSION_TESTING.md)。
+仓库由多个 Go module 组成，没有可在根目录覆盖所有服务的单一 `go test ./...`。请在改动涉及的服务、`shared` 或具体 `proto` module 内分别运行测试；跨服务回归入口见[回归测试文档](docs/REGRESSION_TESTING.md)。
 
 ## 项目结构
 
@@ -138,9 +139,9 @@ Betterfly2/
 
 | 文档 | 内容 |
 | --- | --- |
-| [API 文档](API_DOCUMENTATION.md) | Storage、ABTest、Call、Push 的对外与内部协议 |
-| [接口新增指南](INTERFACE_DEVELOPMENT.md) | DataForwarding、Storage、Friend 模块自注册流程 |
-| [回归测试](REGRESSION_TESTING.md) | Docker Compose 跨 Pod 端到端测试 |
+| [API 文档](docs/API_DOCUMENTATION.md) | Storage、ABTest、Call、Push 的对外与内部协议 |
+| [接口新增指南](docs/INTERFACE_DEVELOPMENT.md) | DataForwarding、Storage、Friend 模块自注册流程 |
+| [回归测试](docs/REGRESSION_TESTING.md) | Docker Compose 跨 Pod 端到端测试 |
 | [可裁剪部署](services/DEPLOYMENT_PROFILES.md) | `minimal`、`standard`、`full` 与 profile 组合 |
 | [RustFS 配置](services/RUSTFS_SETUP.md) | 对象存储、外部预签名地址与故障排查 |
 | [Call Service](services/callService/README.md) | WebRTC、Coturn 和 PushKit 唤醒 |

@@ -1,6 +1,6 @@
 # Repository Guidance
 
-Betterfly2 is a Go 1.24 microservice backend for an instant-messaging client. Treat the root [README](README.md) as the current architecture and documentation index; do not infer the active service list from the historical architecture image in `others/`.
+Betterfly2 is a Go 1.24 microservice backend for an instant-messaging client. Treat the root [README](../README.md) as the current architecture and documentation index; do not infer the active service list from the historical architecture image in `../others`.
 
 ## Active services
 

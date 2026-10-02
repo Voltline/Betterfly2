@@ -28,8 +28,12 @@ const messageFanoutSQL = `WITH targets AS (
   JOIN push_device_tokens AS token ON token.user_id = targets.user_id
   LEFT JOIN friends ON friends.user_id = token.user_id
     AND friends.friend_id = ? AND friends.is_delete = FALSE
+  LEFT JOIN group_members AS member ON member.user_id = token.user_id AND member.group_id = ?
+  LEFT JOIN groups AS active_group ON active_group.group_id = member.group_id AND active_group.is_delete = FALSE
   WHERE token.push_type = ? AND token.is_active = TRUE
-    AND (? = TRUE OR friends.user_id IS NULL OR friends.is_notify = TRUE)
+    AND CASE WHEN ? = TRUE THEN
+      active_group.group_id IS NOT NULL AND member.notifications_muted = FALSE
+    ELSE friends.user_id IS NULL OR friends.is_notify = TRUE END
 )
 INSERT INTO push_message_deliveries
   (message_id, token_id, job_id, status, attempt, claim_token, lease_until, next_retry_at, created_at, updated_at)
@@ -213,7 +217,7 @@ func (s *GormStore) persistMessageJob(tx *gorm.DB, operationKey string, request 
 	if err := tx.Create(&job).Error; err != nil {
 		return nil, nil, err
 	}
-	result := tx.Exec(messageFanoutSQL, string(targetJSON), message.GetSenderUserId(), PushTypeAPNs, message.GetIsGroup(), message.GetMessageId(), job.JobID, DeliveryPending, now, now, now)
+	result := tx.Exec(messageFanoutSQL, string(targetJSON), message.GetSenderUserId(), message.GetConversationId(), PushTypeAPNs, message.GetIsGroup(), message.GetMessageId(), job.JobID, DeliveryPending, now, now, now)
 	if result.Error != nil {
 		return nil, nil, result.Error
 	}

@@ -15,6 +15,17 @@ func init() {
 }
 
 func registerFriendRequestModules(router *dispatch.OneofRouter[dfRequestContext, dfRequestResult]) {
+	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateGroupNotify) (dfRequestResult, error) {
+		payload, err := authenticatedPayload(ctx.fromID, ctx.message, "修改群或频道通知", "update_group_notify", (*pb.RequestMessage).GetUpdateGroupNotify)
+		if err != nil {
+			return dfRequestResult{}, err
+		}
+		if payload.GetTargetGroupId() <= 0 {
+			return dfRequestResult{}, errors.New("群或频道ID非法")
+		}
+		req := buildUpdateGroupNotifyFriendRequest(ctx.fromID, payload, currentContainerTopic())
+		return dfRequestResult{}, publishFriendRequest(req)
+	})
 	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_InsertContact) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 InsertContact 消息")
 		return dfRequestResult{}, handleInsertContact(ctx.fromID, ctx.message)
@@ -63,6 +74,12 @@ func registerFriendRequestModules(router *dispatch.OneofRouter[dfRequestContext,
 		logger.Sugar().Debugf("收到 UpdateAvatar 消息")
 		return dfRequestResult{}, handleUpdateAvatar(ctx.fromID, ctx.message)
 	})
+}
+
+func buildUpdateGroupNotifyFriendRequest(fromID int64, payload *pb.UpdateGroupNotify, topic string) *friend.RequestMessage {
+	req := newFriendRequest(topic, fromID)
+	req.Payload = &friend.RequestMessage_UpdateGroupNotify{UpdateGroupNotify: &friend.UpdateGroupNotify{GroupId: payload.GetTargetGroupId(), IsNotify: payload.GetIsNotify()}}
+	return req
 }
 
 func handleInsertContact(fromID int64, message *pb.RequestMessage) error {

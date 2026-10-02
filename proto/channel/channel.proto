@@ -49,6 +49,10 @@ message SearchChannels {
 message SubscribeChannel { int64 channel_id = 1; }
 message UnsubscribeChannel { int64 channel_id = 1; }
 message DeleteChannel { int64 channel_id = 1; }
+message SetChannelPin {
+  int64 channel_id = 1;
+  int64 message_id = 2; // 0 clears the single pinned announcement.
+}
 message ListSubscribedChannels {
   int32 page_size = 1;
   int64 cursor_channel_id = 2;
@@ -71,6 +75,7 @@ message ChannelRequest {
     ListSubscribedChannels list_subscribed = 8;
     ListChannelMembers list_members = 9;
     DeleteChannel delete = 10;
+    SetChannelPin set_pin = 11;
   }
 }
 
@@ -93,6 +98,8 @@ message ChannelInfo {
   bool subscribed = 9;
   string my_role = 10; // owner/admin/member; member means read-only subscriber.
   string update_time = 11;
+  int64 pinned_message_id = 12;
+  bool notifications_muted = 13; // Current subscriber's preference only.
 }
 
 message ChannelMember {
@@ -114,6 +121,7 @@ message ChannelPost {
   string recalled_at = 8;
   int64 recalled_by = 9;
   string caption = 10;
+  int64 reply_to_message_id = 11;
 }
 
 message ChannelResponse {

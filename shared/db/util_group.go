@@ -19,12 +19,13 @@ type GroupMemberContact struct {
 }
 
 type JoinedGroupContact struct {
-	GroupID     int64  `gorm:"column:group_id"`
-	GroupName   string `gorm:"column:group_name"`
-	Avatar      string `gorm:"column:avatar"`
-	OwnerUserID int64  `gorm:"column:owner_user_id"`
-	UpdateTime  string `gorm:"column:update_time"`
-	IsChannel   bool   `gorm:"column:is_channel"`
+	GroupID            int64  `gorm:"column:group_id"`
+	GroupName          string `gorm:"column:group_name"`
+	Avatar             string `gorm:"column:avatar"`
+	OwnerUserID        int64  `gorm:"column:owner_user_id"`
+	UpdateTime         string `gorm:"column:update_time"`
+	IsChannel          bool   `gorm:"column:is_channel"`
+	NotificationsMuted bool   `gorm:"column:notifications_muted"`
 }
 
 func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
@@ -178,7 +179,7 @@ func GetJoinedGroupsWithDB(database *gorm.DB, userID int64) ([]JoinedGroupContac
 	var groups []JoinedGroupContact
 	err := database.
 		Table("group_members").
-		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time, (channel_settings.group_id IS NOT NULL) AS is_channel").
+		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time, (channel_settings.group_id IS NOT NULL) AS is_channel, group_members.notifications_muted").
 		Joins("JOIN groups ON groups.group_id = group_members.group_id").
 		Joins("LEFT JOIN channel_settings ON channel_settings.group_id = groups.group_id").
 		Where("group_members.user_id = ? AND groups.is_delete = ?", userID, false).

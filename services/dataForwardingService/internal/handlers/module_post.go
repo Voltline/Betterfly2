@@ -59,15 +59,16 @@ func buildStoreNewMessageStorageRequest(payload *pb.Post, currentContainerID str
 	req := newStorageRequest(currentContainerID, payload.GetFromId())
 	req.Payload = &storage.RequestMessage_StoreNewMessage{
 		StoreNewMessage: &storage.StoreNewMessage{
-			FromUserId:      payload.GetFromId(),
-			ToUserId:        payload.GetToId(),
-			Content:         payload.GetMsg(),
-			Caption:         payload.GetCaption(),
-			MessageType:     payload.GetMsgType(),
-			IsGroup:         payload.GetIsGroup(),
-			RealFileName:    payload.GetRealFileName(),
-			ClientMessageId: payload.GetClientMessageId(),
-			ClientTimestamp: payload.GetTimestamp(),
+			FromUserId:       payload.GetFromId(),
+			ToUserId:         payload.GetToId(),
+			Content:          payload.GetMsg(),
+			Caption:          payload.GetCaption(),
+			ReplyToMessageId: payload.GetReplyToMessageId(),
+			MessageType:      payload.GetMsgType(),
+			IsGroup:          payload.GetIsGroup(),
+			RealFileName:     payload.GetRealFileName(),
+			ClientMessageId:  payload.GetClientMessageId(),
+			ClientTimestamp:  payload.GetTimestamp(),
 		},
 	}
 	return req
@@ -207,6 +208,9 @@ func InplaceHandlePostMessage(message *pb.RequestMessage) error {
 func validatePostPayload(payload *pb.Post) error {
 	if payload == nil {
 		return errors.New("post消息为空")
+	}
+	if payload.GetReplyToMessageId() < 0 {
+		return errors.New("引用消息ID非法")
 	}
 	if err := utils.ValidateImageCaption(payload.GetMsgType(), payload.GetCaption()); err != nil {
 		return err

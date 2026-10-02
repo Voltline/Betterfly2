@@ -22,17 +22,19 @@ var (
 )
 
 type ChannelView struct {
-	GroupID         int64
-	Name            string
-	Avatar          string
-	OwnerUserID     int64
-	UpdateTime      string
-	Description     string
-	Username        string
-	IsPublic        bool
-	SubscriberCount int64
-	Subscribed      bool
-	MyRole          string
+	GroupID            int64
+	Name               string
+	Avatar             string
+	OwnerUserID        int64
+	UpdateTime         string
+	Description        string
+	Username           string
+	IsPublic           bool
+	SubscriberCount    int64
+	Subscribed         bool
+	MyRole             string
+	PinnedMessageID    int64
+	NotificationsMuted bool
 }
 
 func NormalizeChannelUsername(value string) (string, error) {
@@ -74,7 +76,8 @@ func channelViewQuery(database *gorm.DB, actorID int64) *gorm.DB {
 groups.owner_user_id, groups.update_time, channel_settings.description,
 COALESCE(channel_settings.username, '') AS username, channel_settings.is_public,
 (SELECT COUNT(*) FROM group_members WHERE group_id = groups.group_id) AS subscriber_count,
-(viewer.user_id IS NOT NULL) AS subscribed, COALESCE(viewer.role, '') AS my_role`).
+(viewer.user_id IS NOT NULL) AS subscribed, COALESCE(viewer.role, '') AS my_role,
+channel_settings.pinned_message_id, COALESCE(viewer.notifications_muted, FALSE) AS notifications_muted`).
 		Joins("JOIN groups ON groups.group_id = channel_settings.group_id").
 		Joins("LEFT JOIN group_members AS viewer ON viewer.group_id = groups.group_id AND viewer.user_id = ?", actorID).
 		Where("groups.is_delete = FALSE AND (channel_settings.is_public = TRUE OR viewer.user_id IS NOT NULL)")
@@ -222,6 +225,47 @@ func UpdateChannelWithDB(database *gorm.DB, actorID, channelID int64, groupUpdat
 		}
 		groupUpdates["update_time"] = utils.NowTime()
 		if err := tx.Model(&Group{}).Where("group_id = ?", channelID).Updates(groupUpdates).Error; err != nil {
+			return err
+		}
+		view, err = GetChannelWithDB(tx, actorID, channelID, "")
+		return err
+	})
+	return view, err
+}
+
+func SetChannelPinWithDB(database *gorm.DB, actorID, channelID, messageID int64) (*ChannelView, error) {
+	if actorID <= 0 || channelID <= 0 || messageID < 0 {
+		return nil, ErrChannelInvalidArgument
+	}
+	var view *ChannelView
+	err := database.Transaction(func(tx *gorm.DB) error {
+		group, settings, err := lockChannel(tx, channelID)
+		if err != nil {
+			return err
+		}
+		if err := requireChannelManager(tx, group, actorID, false, settings.IsPublic); err != nil {
+			return err
+		}
+		if messageID > 0 {
+			var message Message
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&message, "message_id = ?", messageID).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrChannelNotFound
+			}
+			if err != nil {
+				return err
+			}
+			if !message.IsGroup || message.ToUserID != channelID {
+				return ErrChannelNotFound
+			}
+			if message.IsRecalled {
+				return ErrChannelInvalidState
+			}
+		}
+		if err := tx.Model(&ChannelSettings{}).Where("group_id = ?", channelID).Update("pinned_message_id", messageID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Group{}).Where("group_id = ?", channelID).Update("update_time", utils.NowTime()).Error; err != nil {
 			return err
 		}
 		view, err = GetChannelWithDB(tx, actorID, channelID, "")

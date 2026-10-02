@@ -8,6 +8,11 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func expectCachedMessageState(mock sqlmock.Sqlmock, messageID int64) {
+	mock.ExpectQuery(`SELECT "is_recalled","recalled_at","recalled_by","reply_to_message_id" FROM "messages"`).WithArgs(messageID, 1).
+		WillReturnRows(sqlmock.NewRows([]string{"is_recalled", "recalled_at", "recalled_by", "reply_to_message_id"}).AddRow(false, "", 0, 0))
+}
+
 func TestSyncMessagesRejectsIdentityMismatchBeforeDatabaseQuery(t *testing.T) {
 	useMockDB(t)
 	handler := &StorageHandler{l1Cache: newMockCache()}
@@ -47,6 +52,8 @@ func TestDirectMessageAuthorizationFromCache(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			l1 := newMockCache()
+			mock := useMockDB(t)
+			expectCachedMessageState(mock, 41)
 			l1.Set("message:41", message, 0)
 			handler := &StorageHandler{l1Cache: l1}
 			resp, err := handler.handleQueryMessageWithDB(handler.database,
@@ -65,6 +72,7 @@ func TestDirectMessageAuthorizationFromCache(t *testing.T) {
 
 func TestGroupMessageSenderCanReadWithoutMembership(t *testing.T) {
 	mock := useMockDB(t)
+	expectCachedMessageState(mock, 42)
 	expectOrdinaryGroup(mock, 9001)
 	message := &db.Message{MessageID: 42, FromUserID: 1001, ToUserID: 9001, Timestamp: "2026-07-13T01:00:00Z", IsGroup: true}
 	l1 := newMockCache()
@@ -92,6 +100,7 @@ func TestGroupMessageAuthorizationUsesCurrentMembershipAndJoinedAt(t *testing.T)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			mock := useMockDB(t)
+			expectCachedMessageState(mock, 43)
 			expectOrdinaryGroup(mock, 9001)
 			mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 AND COALESCE\(NULLIF\(joined_at, ''\), update_time\) <= \$3`).
 				WithArgs(int64(9001), int64(1002), "2026-07-13T01:00:00Z").
@@ -116,6 +125,7 @@ func TestGroupMessageAuthorizationUsesCurrentMembershipAndJoinedAt(t *testing.T)
 
 func TestL2MessageCacheHitStillChecksAuthorization(t *testing.T) {
 	mock := useMockDB(t)
+	expectCachedMessageState(mock, 44)
 	expectOrdinaryGroup(mock, 9001)
 	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" WHERE group_id = \$1 AND user_id = \$2 AND COALESCE\(NULLIF\(joined_at, ''\), update_time\) <= \$3`).
 		WithArgs(int64(9001), int64(1002), "2026-07-13T01:00:00Z").
@@ -149,6 +159,7 @@ func TestMissingAndUnauthorizedMessageAreIndistinguishable(t *testing.T) {
 
 	l1 := newMockCache()
 	l1.Set("message:405", &db.Message{MessageID: 405, FromUserID: 1001, ToUserID: 1002}, 0)
+	expectCachedMessageState(mock, 405)
 	unauthorized, err := (&StorageHandler{l1Cache: l1}).handleQueryMessageWithDB(nil,
 		&storage.RequestMessage{TargetUserId: 1003},
 		&storage.QueryMessage{MessageId: 405},

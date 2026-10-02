@@ -322,7 +322,11 @@ func (s *Service) adminMessageTokens(ctx context.Context, request AdminMessageRe
 		}
 		seen[userID] = struct{}{}
 		if !request.IgnorePreferences {
-			enabled, err := s.store.MessageNotificationsEnabled(ctx, userID, request.SenderUserID, request.IsGroup)
+			sourceID := request.SenderUserID
+			if request.IsGroup {
+				sourceID = request.ConversationID
+			}
+			enabled, err := s.store.MessageNotificationsEnabled(ctx, userID, sourceID, request.IsGroup)
 			if err != nil {
 				return nil, 0, err
 			}

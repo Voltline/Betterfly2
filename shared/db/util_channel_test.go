@@ -79,6 +79,9 @@ func TestChannelManagerRecallOldPost(t *testing.T) {
 				mock.ExpectBegin()
 				mock.ExpectExec(`UPDATE "messages" SET`).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectCommit()
+				mock.ExpectBegin()
+				mock.ExpectExec(`UPDATE "channel_settings" SET "pinned_message_id"`).WithArgs(0, int64(9), int64(42)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
 			}
 			outcome, err := RecallMessageWithDB(database, 2, 42, now)
 			if err != nil {

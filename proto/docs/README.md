@@ -1,7 +1,7 @@
 # Protobuf 协议
 
 图片配文的实际字段号、兼容约束与 iOS 生成文件见
-[单张图片与配文](../../IMAGE_CAPTIONS.md)。
+[单张图片与配文](../../docs/IMAGE_CAPTIONS.md)。
 
 `proto/` 保存 Betterfly2 的客户端和服务间协议：
 
@@ -30,4 +30,4 @@ go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 make -C proto
 ```
 
-修改协议后必须同时提交 `.proto` 和生成结果，并运行受影响服务的测试。新增业务 payload 的服务端注册方式见 [接口新增指南](../../INTERFACE_DEVELOPMENT.md)。
+修改协议后必须同时提交 `.proto` 和生成结果，并运行受影响服务的测试。新增业务 payload 的服务端注册方式见 [接口新增指南](../../docs/INTERFACE_DEVELOPMENT.md)。

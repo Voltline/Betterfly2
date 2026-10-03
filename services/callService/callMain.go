@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
 	callservice "callService/internal/call"
 	"callService/internal/consumer"
@@ -58,6 +59,23 @@ func main() {
 	)
 	service := callservice.NewService(store, kafkaPublisher, ice, ringTTL)
 	eventRelay := callservice.NewEventRelay(redisClient, kafkaPublisher.PublishRaw)
+	livekitSettings := []string{os.Getenv("LIVEKIT_API_URL"), os.Getenv("LIVEKIT_PUBLIC_URL"), os.Getenv("LIVEKIT_API_KEY"), os.Getenv("LIVEKIT_API_SECRET")}
+	configured := false
+	for _, value := range livekitSettings {
+		configured = configured || value != ""
+	}
+	if configured {
+		media, err := callservice.NewLiveKit(livekitSettings[0], livekitSettings[1], livekitSettings[2], livekitSettings[3])
+		if err != nil {
+			sugar.Fatalf("多人通话配置无效: %v", err)
+		}
+		maxParticipants, err := strconv.Atoi(env("CALL_GROUP_MAX_PARTICIPANTS", "16"))
+		if err != nil || maxParticipants < 2 || maxParticipants > 64 {
+			sugar.Fatal("CALL_GROUP_MAX_PARTICIPANTS必须在2到64之间")
+		}
+		service.EnableGroupCalls(store, callservice.NewGormGroupAuthorizer(db.DB()), media, maxParticipants, activeTTL)
+		eventRelay.SetMediaServer(media)
+	}
 	go func() {
 		if err := eventRelay.Run(ctx); err != nil && ctx.Err() == nil {
 			sugar.Errorf("Call Redis事件relay退出: %v", err)
@@ -77,6 +95,8 @@ func main() {
 		Addr:              ":" + env("HTTP_PORT", "8085"),
 		Handler:           http_server.New(service).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
 		sugar.Infof("callService HTTP服务启动: %s", httpServer.Addr)

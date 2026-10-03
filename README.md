@@ -47,6 +47,9 @@ flowchart LR
     Push <--> PG
     Push --> APNs["Apple APNs"]
     Call <--> Redis
+    Call -->|"group membership"| PG
+    Call -->|"room control"| SFU["LiveKit SFU (optional)"]
+    Client <-->|"group WebRTC media"| SFU
     Call --> Push
     Client <-->|"WebRTC media"| Peer["Peer client"]
     Client <-->|"TURN relay"| Coturn["Coturn"]
@@ -65,7 +68,7 @@ flowchart LR
 | Storage Service | Kafka `storage-service`；HTTP `8081` | 消息与资料持久化、同步查询、文件控制面 |
 | Friend Service | Kafka `friend-service`；HTTP `54401` | 好友关系、群组和群成员维护；HTTP 仅提供内网探针 |
 | ABTest Service | HTTP `8082` | 实验配置获取、服务端求值和管理后台 |
-| Call Service | Kafka `call-service`；HTTP `8085` | 一对一通话信令与状态；HTTP 仅提供探针 |
+| Call Service | Kafka `call-service`；HTTP `8085` | 一对一及可选群会议控制面、探针与签名 SFU 回调 |
 | Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
 
 主要基础设施端口：Redis `6379`、Kafka `9092/9094`、RustFS S3 `9000`、RustFS Console `9001`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Kafka UI `8080`、Prometheus `9090` 和 Grafana `3000` 只在相应可选 profile 中启动。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
@@ -106,7 +109,7 @@ cd services
 ./rebuild_docker_compose.sh --list
 ```
 
-`build_docker_compose.sh` 保留历史上的全量部署范围，但会复用已有证书、Go 模块缓存和未变化的容器。只有证书地址变化时才追加 `--cert`，确实需要重建未变化容器时才追加 `--force-recreate`。日常开发优先使用 `rebuild_docker_compose.sh`，避免每次检查全部镜像。
+`build_docker_compose.sh` 默认全量测试部署并启用 LiveKit 群通话，需要先配置 `services/.env` 中的 LiveKit 地址和密钥（见[群通话部署](docs/GROUP_CALLS.md)）。它会复用已有证书、Go 模块缓存和未变化的容器。只有证书地址变化时才追加 `--cert`，确实需要重建未变化容器时才追加 `--force-recreate`。日常开发优先使用 `rebuild_docker_compose.sh`，避免每次检查全部镜像。
 
 应用镜像使用 BuildKit 共享 Go 模块与编译缓存。首次构建仍需下载和编译依赖；不要在日常开发中执行 `docker builder prune`，否则下一次会重新承担这部分冷启动成本。
 
@@ -144,6 +147,7 @@ Betterfly2/
 | [可裁剪部署](services/DEPLOYMENT_PROFILES.md) | `minimal`、`standard`、`full` 与 profile 组合 |
 | [RustFS 配置](services/RUSTFS_SETUP.md) | 对象存储、外部预签名地址与故障排查 |
 | [Call Service](services/callService/README.md) | WebRTC、Coturn 和 PushKit 唤醒 |
+| [群通话](docs/GROUP_CALLS.md) | LiveKit 多人语音/视频、协议和可选部署 |
 | [Push Service](services/pushService/README.md) | APNs 双环境、普通通知与内网调试后台 |
 | [Monitor 账号](services/dataForwardingService/MONITOR.md) | 仅用户 ID 1 可见的服务状态与管理指令 |
 | [Kubernetes](deploy/k8s/README.md) | 当前单集群验证清单的范围与限制 |

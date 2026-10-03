@@ -16,6 +16,7 @@ Included:
 - `storageService`
 - `friendService`
 - `callService` and a Coturn relay
+- Optional group calls: configure the `betterfly2-livekit` Secret and apply `deploy/k8s/livekit.yaml` separately. See [group calls](../../docs/GROUP_CALLS.md). CallService then uses a read-only connection to the existing schema, budgeted at 6 connections per replica.
 - `pushService` with APNs token authentication
 - Optional nginx Ingress routes for `/ws` and `/storage_service`
 

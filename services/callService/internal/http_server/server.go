@@ -3,6 +3,8 @@ package http_server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -24,8 +26,27 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /ready", s.ready)
+	mux.HandleFunc("POST /call/livekit/webhook", s.mediaWebhook)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	return mux
+}
+
+func (s *Server) mediaWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64*1024))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid webhook body"})
+		return
+	}
+	err = s.service.HandleMediaWebhook(r.Context(), body, r.Header.Get("Authorization"))
+	if errors.Is(err, callservice.ErrInvalidWebhook) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid webhook signature"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "webhook temporarily unavailable"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {

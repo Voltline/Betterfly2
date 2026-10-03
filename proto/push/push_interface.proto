@@ -72,6 +72,8 @@ message VoIPCallRequest {
   string result_kafka_topic = 5;
   string expires_at = 6;
   bool required = 7;
+  int64 group_id = 8; // Nonzero for a group meeting invitation.
+  string group_name = 9;
 }
 
 // MessagePushRequest is emitted once by the originating data forwarding pod.

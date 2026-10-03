@@ -284,6 +284,13 @@ func marshalPayload(notification pushservice.Notification) ([]byte, error) {
 		"has_video":      callType == "video",
 		"expires_at":     notification.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
+	if notification.IsGroup {
+		// Keep the existing PushKit discriminator so older clients still report
+		// CallKit before discovering that group calls require a newer client.
+		payload["is_group_call"] = true
+		payload["group_id"] = notification.ConversationID
+		payload["group_name"] = notification.GroupName
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

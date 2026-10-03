@@ -25,13 +25,13 @@ Usage:
 Presets:
   minimal   Core messaging only. Disables files, APNs, calls, experiments,
             observability, Kafka UI, the second forwarding pod and metrics endpoints.
-  standard  All product features. Omits observability, Kafka UI and the second
+  standard  Existing product features. Omits observability, Kafka UI and the second
             forwarding pod.
-  full      Enables every service, matching the historical full deployment.
+  full      Historical full deployment. LiveKit requires --enable group-calls.
 
 Options:
   --enable <profile>  Add a profile: storage, notifications, calls, experiments,
-                      observability, tools or redundancy. May be repeated.
+                      group-calls, observability, tools or redundancy. May be repeated.
   --cert              Regenerate the WebSocket self-signed certificate.
   --proto             Regenerate protobuf code.
   --no-build          Do not build application images.
@@ -47,7 +47,7 @@ add_profile() {
   local profile="$1"
   local existing
   case "$profile" in
-    storage|notifications|calls|experiments|observability|tools|redundancy) ;;
+    storage|notifications|calls|group-calls|experiments|observability|tools|redundancy) ;;
     *)
       echo "Unknown profile: $profile" >&2
       exit 1

@@ -25,6 +25,12 @@ enum CallEventType {
   CALL_ENDED = 6;
   ICE_CANDIDATE_RECEIVED = 7;
   CALL_ERROR = 8;
+  GROUP_CALL_CREATED = 9;
+  GROUP_CALL_UPDATED = 10;
+  GROUP_CALL_JOINED = 11;
+  GROUP_CALL_LEFT = 12;
+  GROUP_CALL_ENDED = 13;
+  GROUP_CALL_INVITATION = 14;
 }
 
 enum CallEndReason {
@@ -44,6 +50,8 @@ enum CallErrorCode {
   CALL_NOT_FOUND = 4;
   INVALID_STATE = 5;
   FORBIDDEN = 6;
+  ROOM_FULL = 7;
+  MEDIA_UNAVAILABLE = 8;
   INTERNAL_ERROR = 10;
 }
 
@@ -97,6 +105,42 @@ message ResumeCall {
   string call_id = 1;
 }
 
+message CreateGroupCall {
+  int64 group_id = 1;
+  CallType call_type = 2;
+  repeated int64 invite_user_ids = 3; // Optional, bounded by the room capacity.
+}
+message GetGroupCall {
+  int64 group_id = 1;
+  string call_id = 2; // Supply either group_id or call_id.
+}
+message JoinGroupCall { string call_id = 1; }
+message LeaveGroupCall { string call_id = 1; }
+message EndGroupCall { string call_id = 1; }
+message RemoveGroupCallParticipant {
+  string call_id = 1;
+  int64 target_user_id = 2;
+}
+
+message GroupCallParticipant {
+  int64 user_id = 1;
+  string identity = 2; // Opaque LiveKit identity, not a client-supplied user ID.
+  bool connected = 3; // False while waiting for the SFU connection.
+}
+message GroupCallInfo {
+  string call_id = 1;
+  int64 group_id = 2;
+  int64 creator_user_id = 3;
+  CallType call_type = 4;
+  CallState state = 5;
+  string room_name = 6;
+  int32 max_participants = 7;
+  repeated GroupCallParticipant participants = 8;
+  string created_at = 9;
+  string expires_at = 10;
+  int64 revision = 11;
+}
+
 message ClientRequest {
   oneof payload {
     GetCallConfig get_config = 1;
@@ -106,7 +150,14 @@ message ClientRequest {
     HangupCall hangup = 5;
     SendIceCandidate ice_candidate = 6;
     ResumeCall resume_call = 7;
+    CreateGroupCall create_group_call = 8;
+    GetGroupCall get_group_call = 9;
+    JoinGroupCall join_group_call = 10;
+    LeaveGroupCall leave_group_call = 11;
+    EndGroupCall end_group_call = 12;
+    RemoveGroupCallParticipant remove_group_call_participant = 13;
   }
+  string request_id = 20; // Required for group commands; stable across retries.
 }
 
 message CallEvent {
@@ -122,6 +173,13 @@ message CallEvent {
   string message = 10;
   CallErrorCode error_code = 11;
   string timestamp = 12;
+  GroupCallInfo group_call = 13;
+  string sfu_url = 14;
+  string join_token = 15; // Only in the requesting user's GROUP_CALL_JOINED.
+  string token_expires_at = 16;
+  string request_id = 17;
+  bool group_calls_available = 18;
+  int32 group_call_max_participants = 19;
 }
 
 // InternalRequest is produced only by an authenticated dataForwardingService.

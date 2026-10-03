@@ -121,6 +121,7 @@ func (s *Service) prepareDeliveries(ctx context.Context, kind deliveryKind, clai
 				Kind: NotificationVoIP, Token: claim.Token.Token, Environment: parseEnvironment(claim.Token.Environment),
 				CallID: call.GetCallId(), CallerUserID: call.GetCallerUserId(), CalleeUserID: call.GetCalleeUserId(),
 				CallType: call.GetCallType(), ExpiresAt: expiresAt,
+				ConversationID: call.GetGroupId(), IsGroup: call.GetGroupId() > 0, GroupName: call.GetGroupName(),
 			}})
 			continue
 		}

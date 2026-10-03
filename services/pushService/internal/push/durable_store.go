@@ -332,7 +332,7 @@ func lockMessageForPush(tx *gorm.DB, messageID int64) (*db.Message, error) {
 }
 
 func (s *GormStore) persistVoIPJob(tx *gorm.DB, operationKey string, request *pushpb.RequestMessage, call *pushpb.VoIPCallRequest) ([]byte, []db.PendingOutboxEvent, error) {
-	if call == nil || strings.TrimSpace(call.GetCallId()) == "" || call.GetCallerUserId() <= 0 || call.GetCalleeUserId() <= 0 || call.GetCallerUserId() == call.GetCalleeUserId() || strings.TrimSpace(call.GetResultKafkaTopic()) == "" {
+	if call == nil || strings.TrimSpace(call.GetCallId()) == "" || call.GetCallerUserId() <= 0 || call.GetCalleeUserId() <= 0 || call.GetCallerUserId() == call.GetCalleeUserId() || strings.TrimSpace(call.GetResultKafkaTopic()) == "" || call.GetGroupId() < 0 {
 		return nil, nil, ErrInvalidRequest
 	}
 	payload, err := proto.Marshal(request)

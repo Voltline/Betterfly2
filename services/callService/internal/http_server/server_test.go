@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,20 @@ func (s readinessStore) Ping(context.Context) error                     { return
 func (readinessStore) UserTopic(context.Context, int64) (string, error) { return "", nil }
 func (readinessStore) GetSession(context.Context, string) (callservice.Session, error) {
 	return callservice.Session{}, nil
+}
+
+func TestMediaWebhookBodyLimitAndUnavailableService(t *testing.T) {
+	service := callservice.NewService(readinessStore{}, nil, noopICE{}, time.Minute)
+	for _, test := range []struct {
+		body   string
+		status int
+	}{{"{}", http.StatusServiceUnavailable}, {strings.Repeat("x", 64*1024+1), http.StatusBadRequest}} {
+		recorder := httptest.NewRecorder()
+		New(service).Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/call/livekit/webhook", strings.NewReader(test.body)))
+		if recorder.Code != test.status {
+			t.Fatalf("webhook status %d want %d", recorder.Code, test.status)
+		}
+	}
 }
 func (readinessStore) ExpiredRinging(context.Context, time.Time, int64) ([]callservice.Session, error) {
 	return nil, nil

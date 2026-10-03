@@ -9,7 +9,7 @@ Betterfly2 使用 Docker Compose Profiles 将基础聊天链路与可选能力�
 | --- | --- | --- |
 | `minimal` | Redis、双 Kafka、单 DataForwarding、Auth、Friend | 消息持久化与完整发送链路、文件、APNs、通话、AB 实验、监控、Kafka UI、第二个 DataForwarding |
 | `standard` | 核心链路及文件、APNs、通话、AB 实验 | Prometheus、Grafana、Kafka UI、第二个 DataForwarding |
-| `full` | 当前 Compose 中的全部服务 | 无 |
+| `full` | 原有全部服务 | LiveKit（需显式启用 group-calls） |
 
 `minimal` 适合验证认证、WebSocket 和好友/群组控制面。当前消息发送依赖 Storage Service，因而 `minimal` 不是完整聊天部署；需要收发和同步消息时应使用 `standard`，或在 `minimal` 上追加 `storage`。
 
@@ -25,12 +25,14 @@ cd services
 # 日常完整业务功能，不运行监控和开发工具
 ./deploy_docker_compose.sh standard
 
-# 与历史 build_docker_compose.sh 相同的全量部署
+# 全量测试部署，包含 LiveKit 群通话（先配置 .env，见 ../docs/GROUP_CALLS.md）
 ./build_docker_compose.sh
 ```
 
 全量脚本仅在证书缺失时生成证书，并默认复用未变化的容器。证书地址发生变化时可显式追加
 `--cert`；排查容器生命周期问题时才建议追加 `--force-recreate`。
+该脚本默认追加 `group-calls`；`deploy_docker_compose.sh standard/full` 仍保持可裁剪，
+不会自动追加群通话。只部署一对一通话时使用后者，且保持四个 `LIVEKIT_*` 业务配置为空。
 
 ## 按能力组合
 
@@ -52,6 +54,7 @@ cd services
 | `storage` | RustFS、StorageService |
 | `notifications` | PushService |
 | `calls` | CallService、PushService、Coturn |
+| `group-calls` | LiveKit SFU、CallService、PushService（需要配置 LIVEKIT_*，见 ../docs/GROUP_CALLS.md） |
 | `experiments` | ABTestService |
 | `observability` | Prometheus、Grafana |
 | `tools` | Kafka UI |

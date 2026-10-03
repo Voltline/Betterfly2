@@ -1,0 +1,77 @@
+# Optional single-node SFU. Apply only after configuring betterfly2-livekit.
+# Expose signaling with a trusted TLS reverse proxy; media uses the node IP.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livekit
+  namespace: betterfly2
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: livekit
+  template:
+    metadata:
+      labels:
+        app: livekit
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: livekit
+          image: livekit/livekit-server:v1.13.7
+          env:
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_API_KEY
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_API_SECRET
+            - name: LIVEKIT_CONFIG
+              value: |
+                port: 7880
+                rtc:
+                  tcp_port: 7881
+                  udp_port: 7882
+                  use_external_ip: true
+                redis:
+                  address: redis:6379
+                keys:
+                  "$(LIVEKIT_API_KEY)": "$(LIVEKIT_API_SECRET)"
+                webhook:
+                  api_key: "$(LIVEKIT_API_KEY)"
+                  urls:
+                    - http://call-service:8085/call/livekit/webhook
+          ports:
+            - name: signaling
+              containerPort: 7880
+            - name: rtc-tcp
+              containerPort: 7881
+            - name: rtc-udp
+              containerPort: 7882
+              protocol: UDP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 256Mi
+            limits:
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: livekit
+  namespace: betterfly2
+spec:
+  selector:
+    app: livekit
+  ports:
+    - name: signaling
+      port: 7880
+      targetPort: signaling

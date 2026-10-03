@@ -473,3 +473,36 @@ BETTERFLY_TEST_POSTGRES_DSN='<isolated-postgres-dsn>' go test -race -count=1 ./.
 
 未设置测试DSN时，PostgreSQL用例跳过，不等于事务与并发验证已执行。
 本功能不修改数据库模型、迁移版本或客户端获取配置协议。
+
+## 群音视频回归
+
+单元验证：`cd services/callService && go test ./... && go test -race ./...`。
+覆盖群权限、容量/CAS、busy 互斥、请求去重、仅请求者凭据、回调签名、SID fencing、
+pending 超时、最后退出释放、持久媒体命令恢复与旧协议 fixture。
+PushService 回归覆盖 durable worker 群邀请字段和 APNs payload，一对一 payload 不改变。
+
+实时状态回归还覆盖未参会在线成员收到创建/Join/Leave/Remove/End 快照，非成员与
+已退群成员排除；SFU joined/left/room_finished 与空房间、待接入席位、整场超时广播；
+最后 Leave 收到定向 LEFT 和全群 ENDED，Remove 操作者不被错误退出。
+验证凭据仅发给 Join 请求者、非邀请者不响铃/不产生 VoIP 请求、同操作及重复/无效
+回调不生成重复逻辑事件。路由离线/暂时失败及 relay 发布失败不得回滚已提交会议，
+Get 可恢复最新快照；成员查询数据库异常仍返回可重试错误。
+
+```bash
+cd services/callService
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+go build ./...
+```
+
+已在隔离 LiveKit v1.13.7 容器验证真实 RoomService、JWT 和 room_finished 签名回调。
+可选测试：设置 BETTERFLY_LIVEKIT_TEST_URL 后执行
+`go test ./internal/call -run TestLiveKitRealRoomAndSignedWebhook -count=1 -v`。
+该用例使用测试 key/secret，回调监听 27985；SFU 的 webhook URL 必须对应该地址。
+未设置 URL 时用例跳过，不代表真实媒体或 APNs 已验证。
+
+配置 LiveKit 后，双机/三机验收：创建 VIDEO、三人 Join、收发摄像头/语音、切换摄像头、
+静音、退后台、Wi-Fi/蜂窝重连、移除成员、最后退出、重复创建与 private/group busy 互斥。
+另测 AUDIO 无摄像头发布、未入群拒绝 Join、人数上限、离线 PushKit 邀请及结束后重拨。
+真实 APNs、iOS CallKit 和音视频设备验收需客户端适配后执行，不能以单元测试替代。

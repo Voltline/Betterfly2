@@ -35,10 +35,11 @@ Aliases:
   abtest                 -> abtest_service
   call                   -> call_service
   turn                   -> coturn
+  sfu                    -> livekit
   push                   -> push_service
 
 Options:
-  --all          Rebuild all services and enable every Compose profile.
+  --all          Rebuild existing services. Add sfu to also enable group-calls.
   --proto        Run make -C ../proto before rebuilding.
   --cert         Regenerate WebSocket self-signed cert before rebuilding.
   --with-deps    Let docker compose recreate dependencies too. Default is --no-deps.
@@ -55,10 +56,10 @@ EOF
 list_targets() {
   cat <<'EOF'
 Compose services:
-  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service call_service push_service coturn
+  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service call_service push_service coturn livekit
 
 Useful aliases:
-  dataforwarding df-all auth storage friend abtest call push turn
+  dataforwarding df-all auth storage friend abtest call push turn sfu
 EOF
 }
 
@@ -99,10 +100,13 @@ add_target() {
     turn)
       add_service "coturn"
       ;;
+    sfu)
+      add_service "livekit"
+      ;;
     push)
       add_service "push_service"
       ;;
-    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|call_service|push_service|coturn)
+    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|call_service|push_service|coturn|livekit)
       add_service "$1"
       ;;
     *)
@@ -204,7 +208,16 @@ fi
 COMPOSE_CMD=("${DOCKER_CMD[@]}" compose up -d --build)
 
 if [[ "$ALL_SERVICES" -eq 1 ]]; then
-  COMPOSE_CMD=("${DOCKER_CMD[@]}" compose --profile "*" up -d --build)
+  COMPOSE_CMD=("${DOCKER_CMD[@]}" compose)
+  for profile in storage notifications calls experiments observability tools redundancy; do
+    COMPOSE_CMD+=(--profile "$profile")
+  done
+  if [[ "${#SERVICES[@]}" -gt 0 ]]; then
+    for service in "${SERVICES[@]}"; do
+      [[ "$service" != "livekit" ]] || COMPOSE_CMD+=(--profile group-calls)
+    done
+  fi
+  COMPOSE_CMD+=(up -d --build)
 fi
 
 if [[ "$FORCE_RECREATE" -eq 1 ]]; then

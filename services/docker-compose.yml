@@ -438,12 +438,15 @@ services:
       - backend
 
   call_service:
-    profiles: ["calls"]
+    profiles: ["calls", "group-calls"]
     build:
       context: ..
       dockerfile: services/callService/Dockerfile
     container_name: callService
     environment:
+      <<: *database-env
+      DB_MAX_OPEN_CONNS: ${CALL_DB_MAX_OPEN_CONNS:-6}
+      DB_MAX_IDLE_CONNS: ${CALL_DB_MAX_IDLE_CONNS:-2}
       HTTP_PORT: ${CALL_HTTP_PORT:-8085}
       REDIS_ADDR: redis:6379
       KAFKA_BROKER: kafka1:9092,kafka2:9094
@@ -465,6 +468,11 @@ services:
       CALL_TURN_URLS: ${CALL_TURN_URLS:-}
       TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:-betterfly-dev-turn-secret}
       TURN_CREDENTIAL_TTL_SECONDS: ${TURN_CREDENTIAL_TTL_SECONDS:-3600}
+      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-}
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      CALL_GROUP_MAX_PARTICIPANTS: ${CALL_GROUP_MAX_PARTICIPANTS:-16}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
     ports:
       - "${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
@@ -476,7 +484,7 @@ services:
       - backend
 
   push_service:
-    profiles: ["notifications", "calls"]
+    profiles: ["notifications", "calls", "group-calls"]
     build:
       context: ..
       dockerfile: services/pushService/Dockerfile
@@ -522,6 +530,35 @@ services:
         condition: service_completed_successfully
     volumes:
       - "${APNS_PRIVATE_KEY_HOST_PATH:-/dev/null}:/run/secrets/apns_key.p8:ro"
+    networks:
+      - backend
+
+  livekit:
+    profiles: ["group-calls"]
+    image: livekit/livekit-server:v1.13.7
+    restart: unless-stopped
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          node_ip: "${LIVEKIT_NODE_IP:-}"
+          use_external_ip: ${LIVEKIT_USE_EXTERNAL_IP:-true}
+        redis:
+          address: redis:6379
+        keys:
+          "${LIVEKIT_API_KEY:-}": "${LIVEKIT_API_SECRET:-}"
+        webhook:
+          api_key: "${LIVEKIT_API_KEY:-}"
+          urls:
+            - http://call_service:${CALL_HTTP_PORT:-8085}/call/livekit/webhook
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    depends_on:
+      - redis
     networks:
       - backend
 

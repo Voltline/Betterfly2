@@ -123,7 +123,8 @@ call-service -> both sides: CALL_ENDED
 
 生产环境必须将 `TURN_EXTERNAL_IP` 设置为服务器公网 IP，并将 `TURN_PUBLIC_HOST` 设置为客户端可访问的域名或公网 IP；也可以通过 `CALL_STUN_URLS`、`CALL_TURN_URLS` 显式覆盖自动生成的地址。`TURN_SHARED_SECRET` 必须在 CallService 与 Coturn 中保持一致。
 
-当前范围是一对一通话，支持 PushKit 离线唤醒。群语音/群视频需要引入 SFU；未来可以复用现有 `call_id`、ICE 配置和状态事件，在媒体层接入 LiveKit、mediasoup 或 ion-sfu。
+一对一支持 PushKit 离线唤醒；群语音/群视频可选接入自托管 LiveKit SFU，复用 call_request/call_event，
+不使用一对一 SDP/ICE 信令。新增群 API、字段号、邀请与权限见[群通话](GROUP_CALLS.md)。
 
 ## ABTest Service API
 

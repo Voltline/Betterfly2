@@ -24,6 +24,7 @@ type EventRelay struct {
 	consumer  string
 	claimIdle time.Duration
 	ledgerTTL time.Duration
+	media     MediaServer
 }
 
 func NewEventRelay(client *redis.Client, publish RawEventPublisher) *EventRelay {
@@ -39,6 +40,8 @@ func NewEventRelay(client *redis.Client, publish RawEventPublisher) *EventRelay 
 		claimIdle: 30 * time.Second, ledgerTTL: ledgerTTL,
 	}
 }
+
+func (r *EventRelay) SetMediaServer(media MediaServer) { r.media = media }
 
 func (r *EventRelay) Run(ctx context.Context) error {
 	if r.client == nil || r.publish == nil {
@@ -113,13 +116,22 @@ func (r *EventRelay) process(ctx context.Context, messages []redis.XMessage) err
 			return err
 		}
 		if sent == 0 {
-			headers := []sarama.RecordHeader{
-				{Key: []byte("event_id"), Value: []byte(eventID)},
-				{Key: []byte("operation_key"), Value: []byte(operationKey)},
-				{Key: []byte("outbox_service"), Value: []byte("call")},
-			}
-			if err := r.publish(ctx, topic, payload, headers); err != nil {
-				return err
+			if strings.HasPrefix(topic, mediaTopicPrefix) {
+				if r.media == nil {
+					return ErrMediaUnavailable
+				}
+				if err := r.media.Execute(ctx, strings.TrimPrefix(topic, mediaTopicPrefix), payload); err != nil {
+					return err
+				}
+			} else {
+				headers := []sarama.RecordHeader{
+					{Key: []byte("event_id"), Value: []byte(eventID)},
+					{Key: []byte("operation_key"), Value: []byte(operationKey)},
+					{Key: []byte("outbox_service"), Value: []byte("call")},
+				}
+				if err := r.publish(ctx, topic, payload, headers); err != nil {
+					return err
+				}
 			}
 		}
 		_, err = r.client.TxPipelined(ctx, func(pipe redis.Pipeliner) error {

@@ -4,6 +4,7 @@ import (
 	callpb "Betterfly2/proto/call"
 	pb "Betterfly2/proto/data_forwarding"
 	pushpb "Betterfly2/proto/push"
+	"google.golang.org/protobuf/proto"
 	"strings"
 	"testing"
 )
@@ -33,6 +34,28 @@ func TestCallRequestRejectsMissingJWT(t *testing.T) {
 	_, err := authenticatedPayload(1001, request, "操作通话", "call_request", (*pb.RequestMessage).GetCallRequest)
 	if err == nil || !strings.Contains(err.Error(), "用户未携带有效JWT") {
 		t.Fatalf("expected unauthenticated call request to be rejected, got %v", err)
+	}
+}
+
+func TestGroupCallRequestUsesExistingAuthenticatedEnvelope(t *testing.T) {
+	request := &pb.RequestMessage{Payload: &pb.RequestMessage_CallRequest{CallRequest: &callpb.ClientRequest{RequestId: "join-id", Payload: &callpb.ClientRequest_JoinGroupCall{JoinGroupCall: &callpb.JoinGroupCall{CallId: strings.Repeat("a", 32)}}}}}
+	if _, err := authenticatedPayload(1001, request, "操作通话", "call_request", (*pb.RequestMessage).GetCallRequest); err == nil {
+		t.Fatal("group call bypassed JWT guard")
+	}
+	if request.GetCallRequest().GetJoinGroupCall().GetCallId() != strings.Repeat("a", 32) || request.GetCallRequest().GetRequestId() != "join-id" {
+		t.Fatal("group payload changed")
+	}
+}
+
+func TestGroupCallResponseSurvivesExistingDFWireEnvelope(t *testing.T) {
+	event := &callpb.CallEvent{EventType: callpb.CallEventType_GROUP_CALL_JOINED, CallId: strings.Repeat("a", 32), RequestId: "join-id", SfuUrl: "wss://media.test", JoinToken: "private-token", TokenExpiresAt: "2026-10-03T10:00:00Z", GroupCall: &callpb.GroupCallInfo{GroupId: 10, CreatorUserId: 1, CallType: callpb.CallType_VIDEO, State: callpb.CallState_ACTIVE, Revision: 3, Participants: []*callpb.GroupCallParticipant{{UserId: 1, Identity: "opaque", Connected: false}}}}
+	raw, err := proto.Marshal(&pb.ResponseMessage{Payload: &pb.ResponseMessage_CallEvent{CallEvent: event}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response pb.ResponseMessage
+	if err := proto.Unmarshal(raw, &response); err != nil || !proto.Equal(event, response.GetCallEvent()) {
+		t.Fatal("DF response dropped SFU fields")
 	}
 }
 

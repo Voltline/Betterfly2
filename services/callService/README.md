@@ -1,6 +1,6 @@
 # Call Service
 
-CallService 是 Betterfly2 的一对一 WebRTC 语音/视频通话控制面。它负责通话状态和信令，不接触音视频媒体内容。
+CallService 是 Betterfly2 的 WebRTC 通话控制面：一对一使用 P2P/Coturn，多人群会议可选自托管 LiveKit SFU。它负责通话状态和信令，不接触音视频媒体内容。
 
 ## 组件边界
 
@@ -52,6 +52,8 @@ TURN_SHARED_SECRET=<strong-random-secret>
 
 ## API 与限制
 
-客户端 API 使用 `proto/call/call_interface.proto`，经现有 `/ws` 连接发送。HTTP 仅提供 `GET /health` 和 `GET /ready`。
+客户端 API 使用 `proto/call/call_interface.proto`，经现有 `/ws` 连接发送。HTTP 提供探针、metrics 和签名 SFU 回调 `POST /call/livekit/webhook`。
 
-当前支持一对一语音、视频、trickle ICE、拒绝、取消、挂断、忙线、响铃超时和 PushKit 离线唤醒。暂不支持群通话、录制、服务端转码和屏幕共享策略；群通话需要在下一阶段引入 SFU。
+支持一对一语音、视频、trickle ICE、拒绝、取消、挂断、忙线、响铃超时和 PushKit 离线唤醒。
+可选多人能力包含普通群内创建、查询、加入/重连、退出、结束、管理员移除参与者和选定成员邀请。
+配置、协议、可靠性边界与部署见[群通话文档](../../docs/GROUP_CALLS.md)。不实现录制、转码或屏幕共享。

@@ -59,3 +59,12 @@ func TestMutedQueuedMessageIsNotSentButRecallAndVoIPAreUnaffected(t *testing.T) 
 		t.Fatal("enqueue or claim forgot preference gate")
 	}
 }
+
+func TestGroupVoIPDurableWorkerPreservesInvitationMetadata(t *testing.T) {
+	service := NewService(&memoryStore{}, &memorySender{}, "com.Voltline.Betterfly2")
+	payload, _ := proto.Marshal(&pushpb.RequestMessage{Payload: &pushpb.RequestMessage_VoipCall{VoipCall: &pushpb.VoIPCallRequest{CallId: "group-call", CallerUserId: 1, CalleeUserId: 2, CallType: "video", GroupId: 10, GroupName: "群会议", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339)}}})
+	prepared := service.prepareDeliveries(context.Background(), deliveryKindVoIP, []DurableDeliveryClaim{{Token: db.PushDeviceToken{ID: 1, UserID: 2, Token: "device-token", IsActive: true}, RequestPayload: payload}})
+	if len(prepared) != 1 || prepared[0].prepareErr != nil || !prepared[0].notification.IsGroup || prepared[0].notification.ConversationID != 10 || prepared[0].notification.GroupName != "群会议" {
+		t.Fatal("group invitation lost in durable worker")
+	}
+}

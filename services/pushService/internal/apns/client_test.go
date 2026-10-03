@@ -68,6 +68,23 @@ func TestClientSendsVoIPHeadersAndPayloadToSelectedEnvironment(t *testing.T) {
 	}
 }
 
+func TestGroupVoIPPayloadDoesNotExposeJoinCredentials(t *testing.T) {
+	data, err := marshalPayload(pushservice.Notification{Kind: pushservice.NotificationVoIP, CallID: "00112233445566778899aabbccddeeff", CallerUserID: 1, CalleeUserID: 2, CallType: "video", IsGroup: true, ConversationID: 10, GroupName: "群会议", ExpiresAt: time.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["event"] != "incoming_call" || payload["is_group_call"] != true || payload["group_id"] != float64(10) || payload["group_name"] != "群会议" || payload["has_video"] != true {
+		t.Fatalf("group invitation payload incorrect: %+v", payload)
+	}
+	if payload["join_token"] != nil || payload["sfu_url"] != nil {
+		t.Fatal("media credentials leaked through APNs")
+	}
+}
+
 func TestClientSendsAlertHeadersAndMessageMetadata(t *testing.T) {
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("apns-push-type") != "alert" || r.Header.Get("apns-topic") != "com.Voltline.Betterfly2" || r.Header.Get("apns-collapse-id") != "message-99" {

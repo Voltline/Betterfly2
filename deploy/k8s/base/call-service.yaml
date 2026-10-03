@@ -21,6 +21,39 @@ spec:
             - configMapRef:
                 name: betterfly2-config
           env:
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+            - name: DB_MAX_OPEN_CONNS
+              value: "6"
+            - name: DB_MAX_IDLE_CONNS
+              value: "2"
+            - name: LIVEKIT_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_API_URL
+                  optional: true
+            - name: LIVEKIT_PUBLIC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_PUBLIC_URL
+                  optional: true
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_API_KEY
+                  optional: true
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-livekit
+                  key: LIVEKIT_API_SECRET
+                  optional: true
             - name: HTTP_PORT
               value: "8085"
             - name: KAFKA_CALL_TOPIC

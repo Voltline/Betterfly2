@@ -25,6 +25,7 @@ type Service struct {
 	ice       ICEProvider
 	ringTTL   time.Duration
 	now       func() time.Time
+	groups    *GroupCalls
 }
 
 func NewService(store Store, publisher Publisher, ice ICEProvider, ringTTL time.Duration) *Service {
@@ -68,6 +69,9 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 		err = s.forwardICE(ctx, request, payload.IceCandidate)
 	case *callpb.ClientRequest_ResumeCall:
 		err = s.resumeCall(ctx, request, payload.ResumeCall)
+	case *callpb.ClientRequest_CreateGroupCall, *callpb.ClientRequest_GetGroupCall, *callpb.ClientRequest_JoinGroupCall,
+		*callpb.ClientRequest_LeaveGroupCall, *callpb.ClientRequest_EndGroupCall, *callpb.ClientRequest_RemoveGroupCallParticipant:
+		err = s.handleGroupCall(ctx, request)
 	default:
 		err = ErrInvalidInput
 	}
@@ -80,7 +84,9 @@ func (s *Service) Handle(ctx context.Context, request *callpb.InternalRequest) e
 	}
 
 	callID := requestCallID(request.GetRequest())
-	if publishErr := s.publishToTopic(ctx, request.GetFromKafkaTopic(), request.GetUserId(), s.errorEvent(callID, err)); publishErr != nil {
+	errorEvent := s.errorEvent(callID, err)
+	errorEvent.RequestId = request.GetRequest().GetRequestId()
+	if publishErr := s.publishToTopic(ctx, request.GetFromKafkaTopic(), request.GetUserId(), errorEvent); publishErr != nil {
 		return fmt.Errorf("handle call request: %v; publish error response: %w", err, publishErr)
 	}
 	return nil
@@ -118,7 +124,7 @@ func (s *Service) SweepExpired(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	return s.sweepGroupCalls(ctx, now)
 }
 
 func (s *Service) getConfig(ctx context.Context, request *callpb.InternalRequest) error {
@@ -126,6 +132,10 @@ func (s *Service) getConfig(ctx context.Context, request *callpb.InternalRequest
 		EventType:  callpb.CallEventType_CALL_CONFIG,
 		IceServers: s.ice.Servers(request.GetUserId(), s.now().UTC()),
 		Timestamp:  timestamp(s.now()),
+	}
+	if s.groups != nil {
+		event.GroupCallsAvailable = true
+		event.GroupCallMaxParticipants = int32(s.groups.maxParticipants)
 	}
 	return s.publishToTopic(ctx, request.GetFromKafkaTopic(), request.GetUserId(), event)
 }
@@ -562,6 +572,10 @@ func errorCode(err error) callpb.CallErrorCode {
 		return callpb.CallErrorCode_INVALID_STATE
 	case errors.Is(err, ErrForbidden):
 		return callpb.CallErrorCode_FORBIDDEN
+	case errors.Is(err, ErrRoomFull):
+		return callpb.CallErrorCode_ROOM_FULL
+	case errors.Is(err, ErrMediaUnavailable):
+		return callpb.CallErrorCode_MEDIA_UNAVAILABLE
 	default:
 		return callpb.CallErrorCode_INTERNAL_ERROR
 	}
@@ -569,7 +583,7 @@ func errorCode(err error) callpb.CallErrorCode {
 
 func isCallDomainError(err error) bool {
 	return errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrUserOffline) || errors.Is(err, ErrUserBusy) ||
-		errors.Is(err, ErrCallNotFound) || errors.Is(err, ErrInvalidState) || errors.Is(err, ErrForbidden)
+		errors.Is(err, ErrCallNotFound) || errors.Is(err, ErrInvalidState) || errors.Is(err, ErrForbidden) || errors.Is(err, ErrRoomFull) || errors.Is(err, ErrMediaUnavailable)
 }
 
 func validDescription(description *callpb.SessionDescription, expectedType string) bool {
@@ -616,6 +630,16 @@ func requestCallID(request *callpb.ClientRequest) string {
 		return payload.IceCandidate.GetCallId()
 	case *callpb.ClientRequest_ResumeCall:
 		return payload.ResumeCall.GetCallId()
+	case *callpb.ClientRequest_GetGroupCall:
+		return payload.GetGroupCall.GetCallId()
+	case *callpb.ClientRequest_JoinGroupCall:
+		return payload.JoinGroupCall.GetCallId()
+	case *callpb.ClientRequest_LeaveGroupCall:
+		return payload.LeaveGroupCall.GetCallId()
+	case *callpb.ClientRequest_EndGroupCall:
+		return payload.EndGroupCall.GetCallId()
+	case *callpb.ClientRequest_RemoveGroupCallParticipant:
+		return payload.RemoveGroupCallParticipant.GetCallId()
 	default:
 		return ""
 	}

@@ -213,8 +213,38 @@ GET /abtest/admin
 - `POST /abtest/admin/api/experiments/{id}/stop`
 - `POST /abtest/admin/api/experiments/{id}/withdraw`
 - `POST /abtest/admin/api/experiments/{id}/groups`
+- `PUT /abtest/admin/api/experiments/{id}/groups/{group_id}`
+- `DELETE /abtest/admin/api/experiments/{id}/groups/{group_id}`
 - `POST /abtest/admin/api/experiments/{id}/groups/{group_id}/push_full`
 - `POST /abtest/admin/api/experiments/{id}/overrides`
+- `DELETE /abtest/admin/api/experiments/{id}/overrides/{override_id}`
+
+运行中和暂停中的实验均可编辑分组 JSON、调整比例和删除分组，管理页分组面板
+提供保存/删除按钮，例外面板提供删除按钮。编辑不改变实验状态、时间或分组Key。
+
+分组 PUT 接收 optional `traffic_basis_points` 和 `config`（JSON对象），至少提供一项。
+未提供的字段保留；`config:{}` 清空配置；显式比例0可将分组设为只供例外使用。
+创建、添加或调整分组时总比例最多10000（100%）；JSON单独修改不重写原比例。
+删除不自动将剩余组推全，未覆盖的比例继续不参与实验。
+
+删除分组会在同一事务删除指向该组的 `force_group` 例外，其他例外保留；网页先确认。
+至少保留一个分组。当前 `rolled_out` 的推全组不能删除或修改其100%比例，
+但可以修改JSON；需先推全到其他组或撤回推全，再删除它。
+分组、例外ID必须属于路径中的实验；跨实验/不存在的ID返回404，状态冲突409，
+非法编辑400，数据库故障500，不泄漏数据库细节。
+
+成功修改会原子增加实验版本，并使当前副本的实验与例外缓存失效；其他副本
+沿用既有最多5秒TTL收敛，客户端下次获取时生效。没有客户端协议或数据库迁移变化。
+
+```http
+PUT /abtest/admin/api/experiments/12/groups/9
+Authorization: Bearer <ABTEST_ADMIN_TOKEN>
+Content-Type: application/json
+
+{"config":{"enable_new_chat_ui":true}}
+```
+
+分组PUT返回更新后的Group；删除分组或例外返回更新后的Experiment。
 
 ### 推全语义
 

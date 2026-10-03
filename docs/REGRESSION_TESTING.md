@@ -452,3 +452,24 @@ BETTERFLY_ACCEPTANCE=1 go test -race -run '^TestChannelDiscussionEndToEnd$' -cou
 构建及race/vet；跨PodWSS/Kafka验收和iOS/真实设备APNs未执行。
 上述E2E默认skip不是链路通过，必须在更新后的专用部署另行执行。
 协议与完整请求例子见 [频道关联讨论区](CHANNEL_DISCUSSIONS.md)。
+
+## ABTest 分组与例外管理
+
+回归覆盖运行中/暂停实验的JSON编辑、分组删除和例外删除，当前推全组与最后
+一个分组保护、关联强制分组例外的原子清理、跨实验ID隔离、总流量上限、并发
+编辑/删除以及数据库错误回滚。写入成功后验证Evaluate与subject override缓存
+立即失效；失败操作不得改变已有配置。HTTP测试验证管理鉴权、非法JSON、
+400/404/409/500错误和既有start/pause/push_full路由兼容。
+
+```bash
+cd services/abTestService
+go test ./...
+go test -race ./...
+go vet ./...
+go build ./...
+# 完整数据库验证：只使用隔离测试库，fixture建立独立schema并清理
+BETTERFLY_TEST_POSTGRES_DSN='<isolated-postgres-dsn>' go test -race -count=1 ./...
+```
+
+未设置测试DSN时，PostgreSQL用例跳过，不等于事务与并发验证已执行。
+本功能不修改数据库模型、迁移版本或客户端获取配置协议。

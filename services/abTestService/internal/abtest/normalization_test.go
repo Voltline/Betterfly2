@@ -43,6 +43,12 @@ func TestNormalizeCreateExperimentRejectsInvalidInputs(t *testing.T) {
 		{name: "non-positive duration", mutate: func(req *CreateExperimentRequest) { req.DurationSeconds = 0 }},
 		{name: "invalid start", mutate: func(req *CreateExperimentRequest) { req.StartTime = "tomorrow" }},
 		{name: "invalid end", mutate: func(req *CreateExperimentRequest) { req.EndTime = "later" }},
+		{name: "group traffic exceeds 100 percent", mutate: func(req *CreateExperimentRequest) {
+			req.Groups = []GroupInput{{GroupKey: "control", TrafficBasisPoints: 6000}, {GroupKey: "variant", TrafficBasisPoints: 6000}}
+		}},
+		{name: "duplicate normalized group key", mutate: func(req *CreateExperimentRequest) {
+			req.Groups = []GroupInput{{GroupKey: "control"}, {GroupKey: " control "}}
+		}},
 	}
 
 	for _, tt := range tests {

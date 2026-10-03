@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"gorm.io/gorm"
 )
 
 const maxJSONBodyBytes = 64 << 10
@@ -162,6 +163,10 @@ func (s *Server) experimentByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int64, action string, childID int64, childAction string) {
+	if childID > 0 && childAction == "" && (action == "groups" || action == "overrides") {
+		s.experimentChild(w, r, id, action, childID)
+		return
+	}
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -246,6 +251,51 @@ func (s *Server) experimentAction(w http.ResponseWriter, r *http.Request, id int
 	}
 }
 
+func (s *Server) experimentChild(w http.ResponseWriter, r *http.Request, id int64, action string, childID int64) {
+	switch {
+	case action == "groups" && r.Method == http.MethodPut:
+		var req abtest.UpdateGroupRequest
+		if err := decodeJSONBody(w, r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		group, err := s.service.UpdateGroup(id, childID, req)
+		if err != nil {
+			writeExperimentMutationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, group)
+	case r.Method == http.MethodDelete:
+		var experiment abtest.Experiment
+		var err error
+		if action == "groups" {
+			experiment, err = s.service.DeleteGroup(id, childID)
+		} else {
+			experiment, err = s.service.DeleteOverride(id, childID)
+		}
+		if err != nil {
+			writeExperimentMutationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, experiment)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func writeExperimentMutationError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		writeError(w, http.StatusNotFound, "not found")
+	case errors.Is(err, abtest.ErrGroupConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, abtest.ErrInvalidGroupUpdate):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "failed to update experiment")
+	}
+}
+
 func (s *Server) adminPanel(w http.ResponseWriter, r *http.Request) {
 	if s.adminToken == "" || r.URL.Path != "/abtest/admin" && r.URL.Path != "/abtest/admin/" {
 		http.NotFound(w, r)
@@ -288,7 +338,7 @@ func parseExperimentPath(path string) (int64, string, int64, string, bool) {
 		return 0, "", 0, "", false
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		return 0, "", 0, "", false
 	}
 	if len(parts) == 1 {
@@ -297,10 +347,13 @@ func parseExperimentPath(path string) (int64, string, int64, string, bool) {
 	if len(parts) == 2 {
 		return id, parts[1], 0, "", true
 	}
-	if len(parts) == 4 {
+	if len(parts) == 3 || len(parts) == 4 {
 		childID, err := strconv.ParseInt(parts[2], 10, 64)
-		if err != nil {
+		if err != nil || childID <= 0 {
 			return 0, "", 0, "", false
+		}
+		if len(parts) == 3 {
+			return id, parts[1], childID, "", true
 		}
 		return id, parts[1], childID, parts[3], true
 	}

@@ -106,6 +106,24 @@ func (s *Service) AddOverride(experimentID int64, req OverrideInput) (Override, 
 	return value, err
 }
 
+func (s *Service) UpdateGroup(experimentID, groupID int64, req UpdateGroupRequest) (Group, error) {
+	value, err := s.store.UpdateGroup(experimentID, groupID, req)
+	s.invalidateAfterWrite(err)
+	return value, err
+}
+
+func (s *Service) DeleteGroup(experimentID, groupID int64) (Experiment, error) {
+	value, err := s.store.DeleteGroup(experimentID, groupID)
+	s.invalidateAfterWrite(err)
+	return value, err
+}
+
+func (s *Service) DeleteOverride(experimentID, overrideID int64) (Experiment, error) {
+	value, err := s.store.DeleteOverride(experimentID, overrideID)
+	s.invalidateAfterWrite(err)
+	return value, err
+}
+
 func (s *Service) invalidateLocal() {
 	s.generation.Add(1)
 	s.snapshot.Store(nil)

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type GormStore struct{}
@@ -194,14 +197,14 @@ func (s *GormStore) SetExperimentStatus(id int64, status string) (Experiment, er
 }
 
 func (s *GormStore) PushFullGroup(experimentID, groupID int64) (Experiment, error) {
-	current, err := s.GetExperiment(experimentID)
-	if err != nil {
-		return Experiment{}, err
-	}
-
 	tx := db.DB().Begin()
 	if tx.Error != nil {
 		return Experiment{}, tx.Error
+	}
+	current, err := lockExperiment(tx, experimentID)
+	if err != nil {
+		tx.Rollback()
+		return Experiment{}, err
 	}
 
 	var target db.ABExperimentGroup
@@ -261,9 +264,6 @@ func (s *GormStore) WithdrawExperiment(id int64) (Experiment, error) {
 }
 
 func (s *GormStore) AddGroup(experimentID int64, req GroupInput) (Group, error) {
-	if _, err := s.GetExperiment(experimentID); err != nil {
-		return Group{}, err
-	}
 	if err := normalizeGroupInput(&req); err != nil {
 		return Group{}, err
 	}
@@ -280,17 +280,107 @@ func (s *GormStore) AddGroup(experimentID int64, req GroupInput) (Group, error) 
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	if err := db.DB().Create(&model).Error; err != nil {
+	err = db.DB().Transaction(func(tx *gorm.DB) error {
+		if _, err := lockExperiment(tx, experimentID); err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&db.ABExperimentGroup{}).Where("experiment_id = ? AND group_key = ?", experimentID, req.GroupKey).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return errors.New("group_key already exists")
+		}
+		if err := checkGroupTraffic(tx, experimentID, 0, req.TrafficBasisPoints); err != nil {
+			return err
+		}
+		if err := tx.Create(&model).Error; err != nil {
+			return err
+		}
+		return bumpExperimentVersionWithDB(tx, experimentID)
+	})
+	if err != nil {
 		return Group{}, err
 	}
-	_, _ = s.bumpExperimentVersion(experimentID)
 	return groupFromModel(model), nil
 }
 
-func (s *GormStore) AddOverride(experimentID int64, req OverrideInput) (Override, error) {
-	if _, err := s.GetExperiment(experimentID); err != nil {
-		return Override{}, err
+func (s *GormStore) UpdateGroup(experimentID, groupID int64, req UpdateGroupRequest) (Group, error) {
+	if req.Config == nil && req.TrafficBasisPoints == nil {
+		return Group{}, fmt.Errorf("%w: config or traffic_basis_points is required", ErrInvalidGroupUpdate)
 	}
+	if req.TrafficBasisPoints != nil && (*req.TrafficBasisPoints < 0 || *req.TrafficBasisPoints > 10000) {
+		return Group{}, fmt.Errorf("%w: traffic_basis_points must be between 0 and 10000", ErrInvalidGroupUpdate)
+	}
+	updates := map[string]interface{}{"updated_at": NowString()}
+	if req.Config != nil {
+		config, err := mapToJSON(req.Config)
+		if err != nil {
+			return Group{}, fmt.Errorf("%w: config must be a JSON object", ErrInvalidGroupUpdate)
+		}
+		updates["config_json"] = config
+	}
+	var model db.ABExperimentGroup
+	err := db.DB().Transaction(func(tx *gorm.DB) error {
+		experiment, err := lockExperiment(tx, experimentID)
+		if err != nil {
+			return err
+		}
+		if err := tx.First(&model, "id = ? AND experiment_id = ?", groupID, experimentID).Error; err != nil {
+			return err
+		}
+		if req.TrafficBasisPoints != nil {
+			if experiment.Status == StatusRolledOut && experiment.RolloutGroupKey == model.GroupKey && *req.TrafficBasisPoints != 10000 {
+				return fmt.Errorf("%w: withdraw rollout before changing its group traffic", ErrGroupConflict)
+			}
+			if err := checkGroupTraffic(tx, experimentID, groupID, *req.TrafficBasisPoints); err != nil {
+				return err
+			}
+			updates["traffic_basis_points"] = *req.TrafficBasisPoints
+		}
+		if err := tx.Model(&model).Updates(updates).Error; err != nil {
+			return err
+		}
+		return bumpExperimentVersionWithDB(tx, experimentID)
+	})
+	return groupFromModel(model), err
+}
+
+func (s *GormStore) DeleteGroup(experimentID, groupID int64) (Experiment, error) {
+	err := db.DB().Transaction(func(tx *gorm.DB) error {
+		experiment, err := lockExperiment(tx, experimentID)
+		if err != nil {
+			return err
+		}
+		var group db.ABExperimentGroup
+		if err := tx.First(&group, "id = ? AND experiment_id = ?", groupID, experimentID).Error; err != nil {
+			return err
+		}
+		if experiment.Status == StatusRolledOut && experiment.RolloutGroupKey == group.GroupKey {
+			return fmt.Errorf("%w: push full to another group or withdraw before deleting the rollout group", ErrGroupConflict)
+		}
+		var count int64
+		if err := tx.Model(&db.ABExperimentGroup{}).Where("experiment_id = ?", experimentID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count <= 1 {
+			return fmt.Errorf("%w: keep at least one group", ErrGroupConflict)
+		}
+		if err := tx.Where("experiment_id = ? AND action = ? AND group_key = ?", experimentID, OverrideForceGroup, group.GroupKey).Delete(&db.ABExperimentOverride{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&group).Error; err != nil {
+			return err
+		}
+		return bumpExperimentVersionWithDB(tx, experimentID)
+	})
+	if err != nil {
+		return Experiment{}, err
+	}
+	return s.GetExperiment(experimentID)
+}
+
+func (s *GormStore) AddOverride(experimentID int64, req OverrideInput) (Override, error) {
 	if err := normalizeOverrideInput(&req); err != nil {
 		return Override{}, err
 	}
@@ -309,25 +399,69 @@ func (s *GormStore) AddOverride(experimentID int64, req OverrideInput) (Override
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	if err := db.DB().Create(&model).Error; err != nil {
+	err = db.DB().Transaction(func(tx *gorm.DB) error {
+		if _, err := lockExperiment(tx, experimentID); err != nil {
+			return err
+		}
+		if req.Action == OverrideForceGroup {
+			var group db.ABExperimentGroup
+			if err := tx.First(&group, "experiment_id = ? AND group_key = ?", experimentID, req.GroupKey).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(&model).Error; err != nil {
+			return err
+		}
+		return bumpExperimentVersionWithDB(tx, experimentID)
+	})
+	if err != nil {
 		return Override{}, err
 	}
-	_, _ = s.bumpExperimentVersion(experimentID)
 	return overrideFromModel(model), nil
 }
 
-func (s *GormStore) bumpExperimentVersion(id int64) (Experiment, error) {
-	current, err := s.GetExperiment(id)
+func (s *GormStore) DeleteOverride(experimentID, overrideID int64) (Experiment, error) {
+	err := db.DB().Transaction(func(tx *gorm.DB) error {
+		if _, err := lockExperiment(tx, experimentID); err != nil {
+			return err
+		}
+		result := tx.Where("id = ? AND experiment_id = ?", overrideID, experimentID).Delete(&db.ABExperimentOverride{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return bumpExperimentVersionWithDB(tx, experimentID)
+	})
 	if err != nil {
 		return Experiment{}, err
 	}
-	if err := db.DB().Model(&db.ABExperiment{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"version":    current.Version + 1,
-		"updated_at": NowString(),
-	}).Error; err != nil {
-		return Experiment{}, err
+	return s.GetExperiment(experimentID)
+}
+
+func lockExperiment(tx *gorm.DB, id int64) (db.ABExperiment, error) {
+	var experiment db.ABExperiment
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&experiment, "id = ?", id).Error
+	return experiment, err
+}
+
+func checkGroupTraffic(tx *gorm.DB, experimentID, excludedID int64, traffic int) error {
+	var total int
+	if err := tx.Model(&db.ABExperimentGroup{}).Where("experiment_id = ? AND id <> ?", experimentID, excludedID).
+		Select("COALESCE(SUM(traffic_basis_points), 0)").Scan(&total).Error; err != nil {
+		return err
 	}
-	return s.GetExperiment(id)
+	if total+traffic > 10000 {
+		return fmt.Errorf("%w: total group traffic cannot exceed 10000 (100%%)", ErrInvalidGroupUpdate)
+	}
+	return nil
+}
+
+func bumpExperimentVersionWithDB(tx *gorm.DB, id int64) error {
+	return tx.Model(&db.ABExperiment{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"version": gorm.Expr("version + 1"), "updated_at": NowString(),
+	}).Error
 }
 
 func (s *GormStore) ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]Override, error) {
@@ -452,6 +586,21 @@ func normalizeCreateExperiment(req *CreateExperimentRequest) error {
 	if req.Status == StatusRolledOut {
 		return errors.New("rolled_out status requires push_full group")
 	}
+	total := 0
+	keys := make(map[string]struct{}, len(req.Groups))
+	for i := range req.Groups {
+		if err := normalizeGroupInput(&req.Groups[i]); err != nil {
+			return err
+		}
+		if _, exists := keys[req.Groups[i].GroupKey]; exists {
+			return errors.New("group_key already exists")
+		}
+		keys[req.Groups[i].GroupKey] = struct{}{}
+		total += req.Groups[i].TrafficBasisPoints
+		if total > 10000 {
+			return fmt.Errorf("%w: total group traffic cannot exceed 10000 (100%%)", ErrInvalidGroupUpdate)
+		}
+	}
 	if req.DurationSeconds <= 0 {
 		return errors.New("duration_seconds must be positive")
 	}
@@ -491,6 +640,7 @@ func normalizeOverrideInput(req *OverrideInput) error {
 	req.SubjectType = strings.TrimSpace(req.SubjectType)
 	req.SubjectID = strings.TrimSpace(req.SubjectID)
 	req.Action = strings.TrimSpace(req.Action)
+	req.GroupKey = strings.TrimSpace(req.GroupKey)
 	if req.SubjectType == "" || req.SubjectID == "" || req.Action == "" {
 		return errors.New("subject_type, subject_id and action are required")
 	}

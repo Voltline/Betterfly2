@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 type recordingStore struct {
@@ -17,6 +19,10 @@ type recordingStore struct {
 	lastGroupID int64
 	groups      []abtest.Group
 	overrides   []abtest.Override
+	mutationErr error
+	lastID      int64
+	lastChildID int64
+	lastUpdate  abtest.UpdateGroupRequest
 }
 
 func (s *recordingStore) ListExperiments() ([]abtest.Experiment, error) { return s.experiments, nil }
@@ -83,6 +89,27 @@ func (s *recordingStore) AddOverride(experimentID int64, req abtest.OverrideInpu
 	override := abtest.Override{ID: int64(len(s.overrides) + 1), ExperimentID: experimentID, SubjectType: req.SubjectType, SubjectID: req.SubjectID, Action: req.Action, GroupKey: req.GroupKey}
 	s.overrides = append(s.overrides, override)
 	return override, nil
+}
+
+func (s *recordingStore) UpdateGroup(experimentID, groupID int64, req abtest.UpdateGroupRequest) (abtest.Group, error) {
+	s.lastID, s.lastChildID, s.lastUpdate = experimentID, groupID, req
+	return abtest.Group{ID: groupID, ExperimentID: experimentID, Config: req.Config}, s.mutationErr
+}
+
+func (s *recordingStore) DeleteGroup(experimentID, groupID int64) (abtest.Experiment, error) {
+	s.lastID, s.lastChildID = experimentID, groupID
+	if s.mutationErr != nil {
+		return abtest.Experiment{}, s.mutationErr
+	}
+	return s.GetExperiment(experimentID)
+}
+
+func (s *recordingStore) DeleteOverride(experimentID, overrideID int64) (abtest.Experiment, error) {
+	s.lastID, s.lastChildID = experimentID, overrideID
+	if s.mutationErr != nil {
+		return abtest.Experiment{}, s.mutationErr
+	}
+	return s.GetExperiment(experimentID)
 }
 
 func TestPublicABTestEndpoints(t *testing.T) {
@@ -219,6 +246,11 @@ func TestParseExperimentPath(t *testing.T) {
 		{path: "12", want: []interface{}{int64(12), "", int64(0), "", true}},
 		{path: "12/start", want: []interface{}{int64(12), "start", int64(0), "", true}},
 		{path: "12/groups/9/push_full", want: []interface{}{int64(12), "groups", int64(9), "push_full", true}},
+		{path: "12/groups/9", want: []interface{}{int64(12), "groups", int64(9), "", true}},
+		{path: "12/overrides/8", want: []interface{}{int64(12), "overrides", int64(8), "", true}},
+		{path: "12/groups/0", want: []interface{}{int64(0), "", int64(0), "", false}},
+		{path: "0/groups/1", want: []interface{}{int64(0), "", int64(0), "", false}},
+		{path: "12/overrides/-8", want: []interface{}{int64(0), "", int64(0), "", false}},
 		{path: "bad", want: []interface{}{int64(0), "", int64(0), "", false}},
 		{path: "12/groups/bad/push_full", want: []interface{}{int64(0), "", int64(0), "", false}},
 	}
@@ -227,6 +259,57 @@ func TestParseExperimentPath(t *testing.T) {
 		got := []interface{}{id, action, childID, childAction, ok}
 		if !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("parseExperimentPath(%q)=%#v want %#v", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestAdminGroupEditingAndDeletionRoutes(t *testing.T) {
+	store := &recordingStore{experiments: []abtest.Experiment{{ID: 12, Status: abtest.StatusRunning}}}
+	server := NewServer(abtest.NewService(store))
+	server.adminToken = "secret"
+	handler := server.Routes()
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPut, "/abtest/admin/api/experiments/12/groups/9", `{"config":{"enabled":true},"traffic_basis_points":2500}`},
+		{http.MethodDelete, "/abtest/admin/api/experiments/12/groups/9", ""},
+		{http.MethodDelete, "/abtest/admin/api/experiments/12/overrides/9", ""},
+	} {
+		if r := performRequest(handler, tc.method, tc.path, tc.body, ""); r.Code != http.StatusUnauthorized {
+			t.Fatal("mutation bypassed admin authentication", r.Code)
+		}
+		if r := performRequest(handler, tc.method, tc.path, tc.body, "secret"); r.Code != http.StatusOK || store.lastID != 12 || store.lastChildID != 9 {
+			t.Fatal("mutation was not routed", r.Code, r.Body.String())
+		}
+	}
+	if store.lastUpdate.Config["enabled"] != true || store.lastUpdate.TrafficBasisPoints == nil || *store.lastUpdate.TrafficBasisPoints != 2500 {
+		t.Fatal("group update lost payload", store.lastUpdate)
+	}
+	for _, body := range []string{`{`, `{"config":[]}`, `{"config":{}} {}`, `{"config":{"value":"` + strings.Repeat("x", maxJSONBodyBytes) + `"}}`} {
+		if r := performRequest(handler, http.MethodPut, "/abtest/admin/api/experiments/12/groups/9", body, "secret"); r.Code != http.StatusBadRequest {
+			t.Fatal("invalid group JSON accepted", r.Code)
+		}
+	}
+	if r := performRequest(handler, http.MethodGet, "/abtest/admin/api/experiments/12/groups/9", "", "secret"); r.Code != http.StatusMethodNotAllowed {
+		t.Fatal(r.Code)
+	}
+	if r := performRequest(handler, http.MethodPut, "/abtest/admin/api/experiments/12/overrides/9", `{}`, "secret"); r.Code != http.StatusMethodNotAllowed {
+		t.Fatal(r.Code)
+	}
+}
+
+func TestAdminGroupMutationFailureResponses(t *testing.T) {
+	store := &recordingStore{}
+	server := NewServer(abtest.NewService(store))
+	server.adminToken = "secret"
+	for _, tc := range []struct {
+		err    error
+		status int
+	}{{gorm.ErrRecordNotFound, 404}, {abtest.ErrGroupConflict, 409}, {abtest.ErrInvalidGroupUpdate, 400}, {errors.New("private database details"), 500}} {
+		store.mutationErr = tc.err
+		for _, path := range []string{"groups/9", "overrides/9"} {
+			r := performRequest(server.Routes(), http.MethodDelete, "/abtest/admin/api/experiments/12/"+path, "", "secret")
+			if r.Code != tc.status || strings.Contains(r.Body.String(), "private database details") {
+				t.Fatal("incorrect failure response", r.Code, r.Body.String())
+			}
 		}
 	}
 }

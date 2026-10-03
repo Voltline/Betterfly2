@@ -1,6 +1,14 @@
 package abtest
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var (
+	ErrInvalidGroupUpdate = errors.New("invalid group update")
+	ErrGroupConflict      = errors.New("group operation conflicts with experiment state")
+)
 
 const (
 	ExperimentTypeAll    = "all"
@@ -95,6 +103,11 @@ type GroupInput struct {
 	Config             map[string]interface{} `json:"config,omitempty"`
 }
 
+type UpdateGroupRequest struct {
+	TrafficBasisPoints *int                   `json:"traffic_basis_points,omitempty"`
+	Config             map[string]interface{} `json:"config,omitempty"`
+}
+
 type OverrideInput struct {
 	SubjectType string                 `json:"subject_type"`
 	SubjectID   string                 `json:"subject_id"`
@@ -137,7 +150,10 @@ type Store interface {
 	PushFullGroup(experimentID, groupID int64) (Experiment, error)
 	WithdrawExperiment(id int64) (Experiment, error)
 	AddGroup(experimentID int64, req GroupInput) (Group, error)
+	UpdateGroup(experimentID, groupID int64, req UpdateGroupRequest) (Group, error)
+	DeleteGroup(experimentID, groupID int64) (Experiment, error)
 	AddOverride(experimentID int64, req OverrideInput) (Override, error)
+	DeleteOverride(experimentID, overrideID int64) (Experiment, error)
 	ListEvaluationExperiments() ([]Experiment, error)
 	ListOverridesForSubject(subjectType, subjectID string, experimentIDs []int64) ([]Override, error)
 }

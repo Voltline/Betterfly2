@@ -12,6 +12,7 @@ type memoryStore struct {
 	evalLoads     int
 	overrideLoads int
 	loadDelay     time.Duration
+	mutationErr   error
 }
 
 func (s *memoryStore) ListExperiments() ([]Experiment, error) {
@@ -53,6 +54,84 @@ func (s *memoryStore) AddGroup(experimentID int64, req GroupInput) (Group, error
 
 func (s *memoryStore) AddOverride(experimentID int64, req OverrideInput) (Override, error) {
 	return Override{}, nil
+}
+
+func (s *memoryStore) UpdateGroup(experimentID, groupID int64, req UpdateGroupRequest) (Group, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mutationErr != nil {
+		return Group{}, s.mutationErr
+	}
+	for i := range s.experiments {
+		if s.experiments[i].ID != experimentID {
+			continue
+		}
+		for j := range s.experiments[i].Groups {
+			group := &s.experiments[i].Groups[j]
+			if group.ID == groupID {
+				if req.Config != nil {
+					group.Config = cloneMap(req.Config)
+				}
+				if req.TrafficBasisPoints != nil {
+					group.TrafficBasisPoints = *req.TrafficBasisPoints
+				}
+				s.experiments[i].Version++
+				return *group, nil
+			}
+		}
+	}
+	return Group{}, ErrInvalidGroupUpdate
+}
+
+func (s *memoryStore) DeleteGroup(experimentID, groupID int64) (Experiment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mutationErr != nil {
+		return Experiment{}, s.mutationErr
+	}
+	for i := range s.experiments {
+		exp := &s.experiments[i]
+		if exp.ID != experimentID {
+			continue
+		}
+		for j, group := range exp.Groups {
+			if group.ID == groupID {
+				exp.Groups = append(exp.Groups[:j], exp.Groups[j+1:]...)
+				var kept []Override
+				for _, override := range exp.Overrides {
+					if override.Action != OverrideForceGroup || override.GroupKey != group.GroupKey {
+						kept = append(kept, override)
+					}
+				}
+				exp.Overrides = kept
+				exp.Version++
+				return *exp, nil
+			}
+		}
+	}
+	return Experiment{}, ErrInvalidGroupUpdate
+}
+
+func (s *memoryStore) DeleteOverride(experimentID, overrideID int64) (Experiment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mutationErr != nil {
+		return Experiment{}, s.mutationErr
+	}
+	for i := range s.experiments {
+		exp := &s.experiments[i]
+		if exp.ID != experimentID {
+			continue
+		}
+		for j, override := range exp.Overrides {
+			if override.ID == overrideID {
+				exp.Overrides = append(exp.Overrides[:j], exp.Overrides[j+1:]...)
+				exp.Version++
+				return *exp, nil
+			}
+		}
+	}
+	return Experiment{}, ErrInvalidGroupUpdate
 }
 
 func (s *memoryStore) ListEvaluationExperiments() ([]Experiment, error) {

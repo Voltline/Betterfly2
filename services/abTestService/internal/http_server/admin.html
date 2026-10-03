@@ -79,6 +79,9 @@
     button.secondary { border-color:#4b5563; background:#4b5563; }
     button.soft { border-color:var(--line-strong); background:#fff; color:#3f4349; }
     button.danger { border-color:var(--red); background:var(--red); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    .detail-feedback { margin-top:10px; padding:8px 10px; border:1px solid #b9e2d2; border-radius:5px; background:var(--green-2); color:var(--green); }
+    .detail-feedback.error { border-color:#efc7c4; background:var(--red-soft); color:var(--red); }
     pre,code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
     pre { padding:10px; border:1px solid #30343b; border-radius:5px; background:#202329; color:#e6e8eb; overflow:auto; font-size:11px; line-height:1.45; }
     .result { max-height:260px; white-space:pre-wrap; }
@@ -261,9 +264,11 @@
         renderExperiments();
         if (selectedExperimentID) selectExperiment(selectedExperimentID, false);
         showResult(experiments);
+        return true;
       } catch (err) {
         showResult(err);
         document.getElementById('experiments').innerHTML = '<div class="empty">加载失败，请检查 Token 或服务状态。</div>';
+        return false;
       }
     }
 
@@ -327,13 +332,18 @@
       const groups = (exp.groups || []).map(group => '<div class="group-row">' +
         '<header><span>' + escapeHTML(group.group_key) + '</span><span>' + formatRatio(group.traffic_basis_points) + '</span></header>' +
         (exp.rollout_group_key === group.group_key ? '<div class="meta">当前推全分组：客户端获取该 key 时会默认返回此组</div>' : '') +
-        '<pre class="config-preview">' + escapeHTML(JSON.stringify(group.config || {}, null, 2)) + '</pre>' +
-        '<div class="actions"><button class="secondary" onclick="pushFullGroup(' + exp.id + ', ' + group.id + ')">推全到该组</button></div>' +
+        '<label for="edit_group_traffic_' + group.id + '">分流万分比（10000 = 100%）</label><input id="edit_group_traffic_' + group.id + '" type="number" min="0" max="10000" step="1" value="' + group.traffic_basis_points + '">' +
+        '<label for="edit_group_config_' + group.id + '">分组 Config JSON</label><textarea id="edit_group_config_' + group.id + '">' + escapeHTML(JSON.stringify(group.config || {}, null, 2)) + '</textarea>' +
+        '<div class="actions"><button onclick="updateGroup(' + exp.id + ', ' + group.id + ')">保存分组</button>' +
+        '<button class="secondary" onclick="pushFullGroup(' + exp.id + ', ' + group.id + ')">推全到该组</button>' +
+        '<button class="danger" onclick="deleteGroup(' + exp.id + ', ' + group.id + ')"' +
+        ((exp.groups || []).length <= 1 ? ' disabled title="至少保留一个分组"' : exp.status === 'rolled_out' && exp.rollout_group_key === group.group_key ? ' disabled title="先推全到其他组或撤回，再删除当前推全组"' : '') + '>删除分组</button></div>' +
       '</div>').join('') || '<div class="empty">暂无分组</div>';
       const overrides = (exp.overrides || []).map(item => '<div class="group-row">' +
         '<header><span>' + escapeHTML(item.subject_type) + ':' + escapeHTML(item.subject_id) + '</span><span>' + escapeHTML(item.action) + '</span></header>' +
         '<div class="meta">group: ' + escapeHTML(item.group_key || '-') + '</div>' +
         '<pre class="config-preview">' + escapeHTML(JSON.stringify(item.config || {}, null, 2)) + '</pre>' +
+        '<div class="actions"><button class="danger" onclick="deleteOverride(' + exp.id + ', ' + item.id + ')">删除例外</button></div>' +
       '</div>').join('') || '<div class="empty">暂无例外</div>';
 
       return '<div class="detail-title">' +
@@ -358,9 +368,12 @@
           '<button class="danger" onclick="setStatus(' + exp.id + ', \'stop\')">停止</button>' +
           '<button class="danger" onclick="withdrawExperiment(' + exp.id + ')">撤回推全</button>' +
         '</div>' +
+        '<div id="detail-feedback" class="detail-feedback" role="status" hidden></div>' +
         '<div class="detail-section"><h3>修改基础参数</h3>' + editExperimentForm(exp) + '</div>' +
         '<div class="detail-section"><h3>Targeting</h3><pre class="config-preview">' + escapeHTML(JSON.stringify(exp.targeting || {}, null, 2)) + '</pre></div>' +
-        '<div class="detail-section"><h3>分组配置</h3><div class="group-list">' + groups + '</div>' + addGroupForm(exp) + '</div>' +
+        '<div class="detail-section"><h3>分组配置 · 总比例 ' + formatRatio((exp.groups || []).reduce((sum, group) => sum + group.traffic_basis_points, 0)) + '</h3>' +
+        '<p class="meta">运行中或暂停时均可编辑。总比例不得超过100%；删除分组不会自动重分配比例。配置在下次获取时生效，其他副本最多延迟5秒；比例变化可能改变分组结果。</p>' +
+        '<div class="group-list">' + groups + '</div>' + addGroupForm(exp) + '</div>' +
         '<div class="detail-section"><h3>例外规则</h3><div class="group-list">' + overrides + '</div>' + addOverrideForm(exp) + '</div>';
     }
 
@@ -381,7 +394,7 @@
     function addGroupForm(exp) {
       return '<div class="detail-section"><h3>添加分组</h3><div class="form-grid">' +
         '<div><label>分组 Key</label><input id="group_key_' + exp.id + '" placeholder="variant"></div>' +
-        '<div><label>分流万分比</label><input id="traffic_basis_points_' + exp.id + '" type="number" value="0"></div>' +
+        '<div><label>分流万分比</label><input id="traffic_basis_points_' + exp.id + '" type="number" min="0" max="10000" step="1" value="0"></div>' +
         '</div><label>分组 Config JSON</label><textarea id="group_config_' + exp.id + '">{"flag":true}</textarea>' +
         '<div class="actions"><button onclick="addGroup(' + exp.id + ')">添加分组</button></div></div>';
     }
@@ -487,6 +500,67 @@
         await loadExperiments();
       } catch (err) {
         showResult(err);
+      }
+    }
+
+    function detailFeedback(value, error = false) {
+      const el = document.getElementById('detail-feedback');
+      if (!el) return;
+      el.textContent = typeof value === 'string' ? value : (value.error || value.message || '操作失败，请重试');
+      el.classList.toggle('error', error);
+      el.hidden = false;
+    }
+
+    async function updateGroup(experimentID, groupID) {
+      try {
+        const config = parseJSON('edit_group_config_' + groupID, {});
+        if (!config || Array.isArray(config) || typeof config !== 'object') throw new Error('Config 必须是 JSON 对象');
+        const rawTraffic = document.getElementById('edit_group_traffic_' + groupID).value.trim();
+        const traffic = Number(rawTraffic);
+        if (!rawTraffic || !Number.isInteger(traffic) || traffic < 0 || traffic > 10000) throw new Error('分流万分比必须是0到10000的整数');
+        const exp = experiments.find(item => item.id === Number(experimentID));
+        const group = exp.groups.find(item => item.id === Number(groupID));
+        const body = {config};
+        if (traffic !== group.traffic_basis_points) body.traffic_basis_points = traffic;
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID, {method: 'PUT', body: JSON.stringify(body)});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        const refreshed = await loadExperiments();
+        detailFeedback(refreshed ? '分组已保存，下次获取配置时生效。' : '分组已保存，但页面刷新失败，请点击刷新确认最新配置。', !refreshed);
+      } catch (err) {
+        showResult(err);
+        detailFeedback(err, true);
+      }
+    }
+
+    async function deleteGroup(experimentID, groupID) {
+      const exp = experiments.find(item => item.id === Number(experimentID));
+      const group = exp.groups.find(item => item.id === Number(groupID));
+      const count = (exp.overrides || []).filter(item => item.action === 'force_group' && item.group_key === group.group_key).length;
+      if (!confirm('确认删除分组「' + group.group_key + '」吗？同时删除指向该组的 ' + count + ' 条强制分组例外；剩余分组比例保持不变。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/groups/' + groupID, {method: 'DELETE'});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        const refreshed = await loadExperiments();
+        detailFeedback(refreshed ? '分组及关联的强制分组例外已删除，剩余比例未自动调整。' : '分组已删除，但页面刷新失败，请点击刷新确认最新配置。', !refreshed);
+      } catch (err) {
+        showResult(err);
+        detailFeedback(err, true);
+      }
+    }
+
+    async function deleteOverride(experimentID, overrideID) {
+      if (!confirm('确认删除这条例外吗？该设备/主体之后恢复实验的正常分流。')) return;
+      try {
+        const result = await api('/abtest/admin/api/experiments/' + experimentID + '/overrides/' + overrideID, {method: 'DELETE'});
+        showResult(result);
+        selectedExperimentID = Number(experimentID);
+        const refreshed = await loadExperiments();
+        detailFeedback(refreshed ? '例外已删除，下次获取配置时恢复正常分流。' : '例外已删除，但页面刷新失败，请点击刷新确认最新配置。', !refreshed);
+      } catch (err) {
+        showResult(err);
+        detailFeedback(err, true);
       }
     }
 
@@ -621,7 +695,6 @@
     setInterval(function() {
       if (experiments.length) {
         renderExperiments();
-        if (selectedExperimentID) selectExperiment(selectedExperimentID, false);
       }
     }, 60000);
   </script>

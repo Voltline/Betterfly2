@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PRESET="standard"
+GROUP_CALLS=1
+KAFKA_CLUSTER=0
 RUN_CERT=0
 RUN_PROTO=0
 BUILD=1
@@ -15,25 +17,26 @@ REMOVE_ORPHANS=1
 USE_SUDO=1
 DRY_RUN=0
 EXTRA_PROFILES=()
-DEFAULT_METRICS_ENABLED=true
+source "$SCRIPT_DIR/compose_environment.sh"
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./deploy_docker_compose.sh [minimal|standard|full] [options]
+  ./deploy_docker_compose.sh [minimal|standard|distributed|full] [options]
 
 Presets:
-  minimal   Core messaging only. Disables files, APNs, calls, experiments,
-            observability, Kafka UI, the second forwarding pod and metrics endpoints.
-  standard  Existing product features. Omits observability, Kafka UI and the second
-            forwarding pod.
-  full      Historical full deployment. LiveKit requires --enable group-calls.
+  minimal      Auth, connections and friend/group control only; not full messaging.
+  standard     All product features, single Kafka and single forwarding pod (default).
+  distributed  Standard plus a second forwarding pod; still a single Kafka.
+  full         Distributed plus observability and Kafka UI.
 
 Options:
   --enable <profile>  Add a profile: storage, notifications, calls, experiments,
                       group-calls, moments, observability, tools or redundancy. May be repeated.
   --cert              Regenerate the WebSocket self-signed certificate.
   --proto             Regenerate protobuf code.
+  --without-group-calls  Omit LiveKit; keep one-to-one calls.
+  --kafka-cluster     Select the separate two-broker test topology. Not an in-place migration.
   --no-build          Do not build application images.
   --force-recreate    Recreate containers even when unchanged.
   --keep-orphans      Do not remove services excluded by the selected preset.
@@ -41,22 +44,6 @@ Options:
   --dry-run           Print commands without executing them.
   -h, --help          Show this help.
 EOF
-}
-
-add_profile() {
-  local profile="$1"
-  local existing
-  case "$profile" in
-    storage|notifications|calls|group-calls|moments|experiments|observability|tools|redundancy) ;;
-    *)
-      echo "Unknown profile: $profile" >&2
-      exit 1
-      ;;
-  esac
-  for existing in "${EXTRA_PROFILES[@]}"; do
-    [[ "$existing" == "$profile" ]] && return
-  done
-  EXTRA_PROFILES+=("$profile")
 }
 
 if [[ $# -gt 0 && "$1" != -* ]]; then
@@ -73,6 +60,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cert) RUN_CERT=1; shift ;;
     --proto) RUN_PROTO=1; shift ;;
+    --without-group-calls) GROUP_CALLS=0; shift ;;
+    --kafka-cluster) KAFKA_CLUSTER=1; shift ;;
     --no-build) BUILD=0; shift ;;
     --force-recreate) FORCE_RECREATE=1; shift ;;
     --keep-orphans) REMOVE_ORPHANS=0; shift ;;
@@ -83,42 +72,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$PRESET" in
-  minimal)
-    DEFAULT_METRICS_ENABLED=false
-    export LOG_LEVEL="${LOG_LEVEL:-info}"
-    ;;
-  standard)
-    add_profile storage
-    add_profile notifications
-    add_profile calls
-    add_profile experiments
-    add_profile moments
-    ;;
-  full)
-    add_profile storage
-    add_profile notifications
-    add_profile calls
-    add_profile experiments
-    add_profile moments
-    add_profile observability
-    add_profile tools
-    add_profile redundancy
-    ;;
-  *)
-    echo "Unknown preset: $PRESET" >&2
-    usage
-    exit 1
-    ;;
-esac
-
-for profile in "${EXTRA_PROFILES[@]}"; do
-  if [[ "$profile" == "observability" ]]; then
-    DEFAULT_METRICS_ENABLED=true
-    break
-  fi
-done
-export METRICS_ENABLED="${METRICS_ENABLED:-$DEFAULT_METRICS_ENABLED}"
+select_compose_environment
 
 run_step() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -128,15 +82,12 @@ run_step() {
   fi
 }
 
-[[ "$RUN_CERT" -eq 0 ]] || run_step ./../common/ws_ssl/generate_self_signed_cert.sh
-[[ "$RUN_PROTO" -eq 0 ]] || run_step make -C ../proto
-
 DOCKER_CMD=(docker)
 [[ "$USE_SUDO" -eq 0 ]] || DOCKER_CMD=(sudo docker)
-COMPOSE_CMD=("${DOCKER_CMD[@]}" compose)
-for profile in "${EXTRA_PROFILES[@]}"; do
-  COMPOSE_CMD+=(--profile "$profile")
-done
+[[ "$DRY_RUN" -eq 1 ]] || check_kafka_topology
+[[ "$RUN_CERT" -eq 0 ]] || run_step ./../common/ws_ssl/generate_self_signed_cert.sh
+[[ "$RUN_PROTO" -eq 0 ]] || run_step make -C ../proto
+COMPOSE_CMD=("${DOCKER_CMD[@]}" compose "${COMPOSE_ARGS[@]}")
 COMPOSE_CMD+=(up -d)
 [[ "$BUILD" -eq 0 ]] || COMPOSE_CMD+=(--build)
 [[ "$FORCE_RECREATE" -eq 0 ]] || COMPOSE_CMD+=(--force-recreate)
@@ -144,5 +95,6 @@ COMPOSE_CMD+=(up -d)
 
 echo "Preset: $PRESET"
 echo "Profiles: ${EXTRA_PROFILES[*]:-(core only)}"
-echo "METRICS_ENABLED=$METRICS_ENABLED LOG_LEVEL=${LOG_LEVEL:-debug}"
+echo "METRICS_ENABLED=$METRICS_ENABLED COMPOSE_PARALLEL_LIMIT=$COMPOSE_PARALLEL_LIMIT"
+echo "Kafka cluster test topology: $KAFKA_CLUSTER (existing topology checked before deployment)"
 run_step "${COMPOSE_CMD[@]}"

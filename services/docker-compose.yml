@@ -12,8 +12,16 @@ x-database-env: &database-env
   RELIABILITY_CLEANUP_BATCH_SIZE: ${RELIABILITY_CLEANUP_BATCH_SIZE:-1000}
   OUTBOX_ALERT_AFTER_ATTEMPTS: ${OUTBOX_ALERT_AFTER_ATTEMPTS:-20}
 
+x-container-defaults: &container-defaults
+  logging:
+    driver: local
+    options:
+      max-size: "10m"
+      max-file: "3"
+
 services:
   db_migrate:
+    <<: *container-defaults
     build:
       context: ..
       dockerfile: shared/Dockerfile.migrate
@@ -29,6 +37,7 @@ services:
       - backend
 
   redis:
+    <<: *container-defaults
     image: redis:7
     container_name: redis
     ports:
@@ -38,64 +47,52 @@ services:
       - backend
 
   kafka1:
-    image: apache/kafka:latest
+    <<: *container-defaults
+    image: apache/kafka:4.2.0
     container_name: kafka1
+    labels:
+      betterfly.kafka.topology: single
+    mem_limit: 1g
     environment:
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_HEAP_OPTS: "-Xms128m -Xmx512m"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data/betterfly
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://kafka1:9092,CONTROLLER://kafka1:9093
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka1:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9095
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
     ports:
       - "9092:9092"
+    volumes:
+      - kafka-single-data:/var/lib/kafka/data
     networks:
       - backend
-
-  kafka2:
-    image: apache/kafka:latest
-    container_name: kafka2
-    environment:
-      KAFKA_NODE_ID: 2
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://kafka2:9094,CONTROLLER://kafka2:9095
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka2:9094
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka1:9093,2@kafka2:9095
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 3
-    ports:
-      - "9094:9094"
-    networks:
-      - backend
-    depends_on:
-      - kafka1
 
   kafka-init:
-    image: apache/kafka:latest
+    <<: *container-defaults
+    image: apache/kafka:4.2.0
     container_name: kafka-init
     depends_on:
       - kafka1
-      - kafka2
     environment:
+      KAFKA_BROKER: kafka1:9092
+      KAFKA_HEAP_OPTS: "-Xms64m -Xmx256m"
       DF_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
       STORAGE_DLQ_TOPIC: ${STORAGE_KAFKA_DLQ_TOPIC:-storage-service-dlq}
       FRIEND_DLQ_TOPIC: ${FRIEND_KAFKA_DLQ_TOPIC:-friend-service-dlq}
       CALL_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
       PUSH_DLQ_TOPIC: ${PUSH_KAFKA_DLQ_TOPIC:-push-service-dlq}
       DLQ_PARTITIONS: ${DF_KAFKA_DLQ_PARTITIONS:-3}
-      DLQ_REPLICATION_FACTOR: ${DF_KAFKA_DLQ_REPLICATION_FACTOR:-2}
-      DLQ_MIN_ISR: ${DF_KAFKA_DLQ_MIN_ISR:-1}
+      DLQ_REPLICATION_FACTOR: 1
+      DLQ_MIN_ISR: 1
       DF_DLQ_RETENTION_MS: ${DF_KAFKA_DLQ_RETENTION_MS:-604800000}
       STORAGE_DLQ_RETENTION_MS: ${STORAGE_KAFKA_DLQ_RETENTION_MS:-604800000}
       FRIEND_DLQ_RETENTION_MS: ${FRIEND_KAFKA_DLQ_RETENTION_MS:-604800000}
@@ -107,7 +104,7 @@ services:
       - -ec
       - |
         until /opt/kafka/bin/kafka-topics.sh \
-          --bootstrap-server kafka1:9092,kafka2:9094 --list >/dev/null 2>&1; do
+          --bootstrap-server "$${KAFKA_BROKER}" --list >/dev/null 2>&1; do
           echo "waiting for Kafka quorum"
           sleep 2
         done
@@ -116,18 +113,18 @@ services:
           retention="$$2"
           principal="$$3"
           /opt/kafka/bin/kafka-topics.sh \
-            --bootstrap-server kafka1:9092,kafka2:9094 \
+            --bootstrap-server "$${KAFKA_BROKER}" \
             --create --if-not-exists \
             --topic "$${topic}" \
             --partitions "$${DLQ_PARTITIONS}" \
             --replication-factor "$${DLQ_REPLICATION_FACTOR}"
           /opt/kafka/bin/kafka-configs.sh \
-            --bootstrap-server kafka1:9092,kafka2:9094 \
+            --bootstrap-server "$${KAFKA_BROKER}" \
             --alter --entity-type topics --entity-name "$${topic}" \
             --add-config "cleanup.policy=delete,retention.ms=$${retention},min.insync.replicas=$${DLQ_MIN_ISR}"
           if [ "$${KAFKA_ACL_ENABLED}" = "true" ]; then
             /opt/kafka/bin/kafka-acls.sh \
-              --bootstrap-server kafka1:9092,kafka2:9094 \
+              --bootstrap-server "$${KAFKA_BROKER}" \
               --add --allow-principal "User:$${principal}" \
               --operation WRITE --operation DESCRIBE --topic "$${topic}"
           fi
@@ -142,6 +139,7 @@ services:
       - backend
 
   kafka-ui:
+    <<: *container-defaults
     profiles: ["tools"]
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -150,14 +148,14 @@ services:
     environment:
       DYNAMIC_CONFIG_ENABLED: "TRUE"
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092,kafka2:9094
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092
     depends_on:
       - kafka1
-      - kafka2
     networks:
       - backend
 
   df:
+    <<: *container-defaults
     build:
       context: ..
       dockerfile: services/dataForwardingService/Dockerfile
@@ -175,7 +173,7 @@ services:
       DB_MAX_IDLE_CONNS: ${DF_DB_MAX_IDLE_CONNS:-4}
       PORT: 54342
       REDIS_ADDR: redis:6379
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       AUTH_RPC_ADDR: auth_service:50051
       DF_KAFKA_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
       DF_KAFKA_PROCESS_MAX_RETRIES: ${DF_KAFKA_PROCESS_MAX_RETRIES:-3}
@@ -201,13 +199,14 @@ services:
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "54342:54342"
     networks:
       - backend
 
   df2:
+    <<: *container-defaults
     profiles: ["redundancy"]
     build:
       context: ..
@@ -226,7 +225,7 @@ services:
       DB_MAX_IDLE_CONNS: ${DF_DB_MAX_IDLE_CONNS:-4}
       PORT: 54343
       REDIS_ADDR: redis:6379
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       AUTH_RPC_ADDR: auth_service:50051
       DF_KAFKA_DLQ_TOPIC: ${DF_KAFKA_DLQ_TOPIC:-data-forwarding-dlq}
       DF_KAFKA_PROCESS_MAX_RETRIES: ${DF_KAFKA_PROCESS_MAX_RETRIES:-3}
@@ -252,13 +251,14 @@ services:
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "54343:54343"
     networks:
       - backend
 
   auth_service:
+    <<: *container-defaults
     build:
       context: ..
       dockerfile: services/authService/Dockerfile
@@ -268,6 +268,7 @@ services:
       DB_MAX_OPEN_CONNS: ${AUTH_DB_MAX_OPEN_CONNS:-8}
       DB_MAX_IDLE_CONNS: ${AUTH_DB_MAX_IDLE_CONNS:-2}
       PORT: 50051
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       db_migrate:
         condition: service_completed_successfully
@@ -277,6 +278,7 @@ services:
       - backend
 
   rustfs:
+    <<: *container-defaults
     profiles: ["storage", "moments"]
     image: rustfs/rustfs:latest
     container_name: rustfs
@@ -308,6 +310,7 @@ services:
       start_period: 60s
 
   storage_service:
+    <<: *container-defaults
     profiles: ["storage"]
     build:
       context: ..
@@ -327,7 +330,7 @@ services:
       DB_MAX_OPEN_CONNS: ${STORAGE_DB_MAX_OPEN_CONNS:-12}
       DB_MAX_IDLE_CONNS: ${STORAGE_DB_MAX_IDLE_CONNS:-4}
       REDIS_ADDR: redis:6379
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       KAFKA_STORAGE_TOPIC: storage-service
       KAFKA_CONSUMER_GROUP: storage-service-group
       STORAGE_KAFKA_DLQ_TOPIC: ${STORAGE_KAFKA_DLQ_TOPIC:-storage-service-dlq}
@@ -346,13 +349,14 @@ services:
       RUSTFS_EXTERNAL_PORT: ${RUSTFS_EXTERNAL_PORT:-9000}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${HTTP_PORT:-8081}:${HTTP_PORT:-8081}"
     networks:
       - backend
 
   prometheus:
+    <<: *container-defaults
     profiles: ["observability"]
     image: prom/prometheus:latest
     container_name: prometheus
@@ -371,6 +375,7 @@ services:
     networks:
       - backend
   grafana:
+    <<: *container-defaults
     profiles: ["observability"]
     image: grafana/grafana:latest
     container_name: grafana
@@ -387,6 +392,7 @@ services:
       - prometheus
 
   friend_service:
+    <<: *container-defaults
     build:
       context: ..
       dockerfile: services/friendService/Dockerfile
@@ -395,8 +401,9 @@ services:
       <<: *database-env
       DB_MAX_OPEN_CONNS: ${FRIEND_DB_MAX_OPEN_CONNS:-10}
       DB_MAX_IDLE_CONNS: ${FRIEND_DB_MAX_IDLE_CONNS:-3}
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       PORT: 54401
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       FRIEND_KAFKA_DLQ_TOPIC: ${FRIEND_KAFKA_DLQ_TOPIC:-friend-service-dlq}
       FRIEND_KAFKA_PROCESS_MAX_RETRIES: ${FRIEND_KAFKA_PROCESS_MAX_RETRIES:-3}
       FRIEND_KAFKA_RETRY_INITIAL_BACKOFF: ${FRIEND_KAFKA_RETRY_INITIAL_BACKOFF:-100ms}
@@ -413,6 +420,7 @@ services:
       - backend
 
   moments_service:
+    <<: *container-defaults
     profiles: ["moments"]
     build:
       context: ..
@@ -448,6 +456,7 @@ services:
       - backend
 
   abtest_service:
+    <<: *container-defaults
     profiles: ["experiments"]
     build:
       context: ..
@@ -461,7 +470,7 @@ services:
       REDIS_ADDR: redis:6379
       ABTEST_CACHE_MAX_STALENESS: ${ABTEST_CACHE_MAX_STALENESS:-5s}
       ABTEST_ADMIN_TOKEN: ${ABTEST_ADMIN_TOKEN:-}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       db_migrate:
         condition: service_completed_successfully
@@ -473,6 +482,7 @@ services:
       - backend
 
   call_service:
+    <<: *container-defaults
     profiles: ["calls", "group-calls"]
     build:
       context: ..
@@ -484,7 +494,7 @@ services:
       DB_MAX_IDLE_CONNS: ${CALL_DB_MAX_IDLE_CONNS:-2}
       HTTP_PORT: ${CALL_HTTP_PORT:-8085}
       REDIS_ADDR: redis:6379
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       KAFKA_CALL_TOPIC: call-service
       KAFKA_CONSUMER_GROUP: call-service-group
       CALL_KAFKA_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
@@ -508,7 +518,7 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       CALL_GROUP_MAX_PARTICIPANTS: ${CALL_GROUP_MAX_PARTICIPANTS:-16}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
     depends_on:
@@ -519,6 +529,7 @@ services:
       - backend
 
   push_service:
+    <<: *container-defaults
     profiles: ["notifications", "calls", "group-calls"]
     build:
       context: ..
@@ -529,7 +540,7 @@ services:
       DB_MAX_OPEN_CONNS: ${PUSH_DB_MAX_OPEN_CONNS:-12}
       DB_MAX_IDLE_CONNS: ${PUSH_DB_MAX_IDLE_CONNS:-4}
       HTTP_PORT: ${PUSH_HTTP_PORT:-8086}
-      KAFKA_BROKER: kafka1:9092,kafka2:9094
+      KAFKA_BROKER: kafka1:9092
       KAFKA_PUSH_TOPIC: push-service
       KAFKA_CONSUMER_GROUP: push-service-group
       KAFKA_VOIP_PUSH_TOPIC: push-service-voip
@@ -555,7 +566,7 @@ services:
       APNS_PRIVATE_KEY_BASE64: ${APNS_PRIVATE_KEY_BASE64:-}
       APNS_PRIVATE_KEY_PATH: /run/secrets/apns_key.p8
       PUSH_ADMIN_TOKEN: ${PUSH_ADMIN_TOKEN:-}
-      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${PUSH_HTTP_PORT:-8086}:${PUSH_HTTP_PORT:-8086}"
     depends_on:
@@ -569,6 +580,7 @@ services:
       - backend
 
   livekit:
+    <<: *container-defaults
     profiles: ["group-calls"]
     image: livekit/livekit-server:v1.13.7
     restart: unless-stopped
@@ -598,6 +610,7 @@ services:
       - backend
 
   coturn:
+    <<: *container-defaults
     profiles: ["calls"]
     image: coturn/coturn:latest
     container_name: coturn
@@ -624,5 +637,6 @@ networks:
     driver: bridge
 
 volumes:
+  kafka-single-data:
   grafana-storage:
   rustfs-data:

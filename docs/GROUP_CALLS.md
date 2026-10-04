@@ -147,16 +147,17 @@ CALL_GROUP_MAX_PARTICIPANTS=16
 
 ```bash
 cd services
-# 标准全量测试入口，自动开启 group-calls
+# 日常全功能入口，自动开启 group-calls，不启用诊断工具和第二个 DF
 ./build_docker_compose.sh
-# 不需要监控、Kafka UI 和第二个 DF 时使用较轻的部署
+# 首次需要生成协议时显式追加 --proto
 ./deploy_docker_compose.sh standard --enable group-calls --proto
 # 后续只重建业务容器
 ./rebuild_docker_compose.sh --proto call push df
 ```
 
-`group-calls` 是额外可选 profile；`build_docker_compose.sh` 默认启用，
-`deploy_docker_compose.sh standard/full` 不会自动追加该 profile。
+`standard/distributed/full` 现在默认启用 `group-calls`，常用 build 脚本默认选择日常
+全功能 standard；不再隐式开启监控、Kafka UI 和第二个 DF。只测一对一时追加
+`--without-group-calls`，脚本会清空传给 CallService 的 LiveKit 配置。
 `.env` 被 Git 忽略；密钥只生成一次并保留，构建脚本不会在重建时轮换密钥。
 局域网测试客户端需要能访问宿主机 IP，手机应连接同一 Wi-Fi 并允许应用访问本地网络。
 宿主机 IP 改变时同步修改 LIVEKIT_PUBLIC_URL 与 LIVEKIT_NODE_IP，再重建 CallService 和 LiveKit：

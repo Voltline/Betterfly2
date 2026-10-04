@@ -556,3 +556,39 @@ go test -timeout 35m -count=1 -run '^TestMomentsWebPreview$' -v ./internal/https
 ready 和内嵌网页加载通过。浏览器验证 Cookie 登录、发布、点赞、换行评论、真实图片
 上传/展示及个人列表，桌面和 320px 视口无横向溢出；JS 语法和 `git diff --check` 通过。
 未连接现有业务数据库，未重启现有业务容器。
+
+## 日常部署裁剪与 Kafka 持久化
+
+入口与旧集群维护边界见 [可裁剪部署](../services/DEPLOYMENT_PROFILES.md)。
+部署包测试只验证脚本/Compose 模型，Docker CLI 不存在时配置模型测试明确 skip。
+使用 `/bin/bash` 覆盖 macOS Bash 3.2 的数组行为，不依赖新增 Python/Node/YAML 库。
+
+```bash
+cd services
+go test -count=1 ./...
+go test -race -count=1 ./deployment
+go vet ./...
+bash -n compose_environment.sh deploy_docker_compose.sh build_docker_compose.sh rebuild_docker_compose.sh
+
+# 仅开启可丢弃的隔离 Kafka，不启动业务服务或连接 PostgreSQL
+BETTERFLY_TEST_COMPOSE=true go test -count=1 -run '^TestSingleKafkaPersistenceAndDLQ$' -v ./deployment
+```
+
+覆盖默认 standard 的全部业务服务、单 broker、十三个长期运行容器；distributed 只加 DF2，
+full 加诊断工具。验证重建别名不意外启动 DF2、不默认生成协议/强制重建、显式诊断开关、
+无效参数、关闭群通话时禁用 SFU 配置、忽略遗留全量 COMPOSE_PROFILES，以及旧/异构/
+停止集群和检查故障发生时拒绝危险重建。单/双 Kafka Compose 模型检查数据卷隔离、
+所有 broker 地址、依赖、Topic 副本及日志轮转，保持 DLQ 七天保留期和三分区。
+
+真实 Kafka fixture 使用独立随机 Compose 项目，重置测试容器名和宿主端口，使用自己的
+命名卷；退出时只对该测试项目 `down -v`。不操作已有 kafka1/kafka2，不复用业务数据库。
+2026-10-04 隔离测试已通过：Kafka 4.2.0 启动、五个 DLQ 的分区/副本/保留期、收发及
+提交 offset、broker 容器重建、重建后从原 offset 继续消费，以及新组重放历史数据。
+
+全部十六个 Go module 的默认单测回归通过（真实 PG/RustFS/设备用例未设置环境时 skip）；
+services 模块 `go test -race -count=1 ./...`、`go vet ./...`、脚本语法与 diff 检查通过。
+现有旧 Kafka 的只读切换检查实际返回拒绝，未执行任何重建；隔离测试容器和卷已清理。
+
+本次没有执行旧集群切换，也未对新日常拓扑完成真实 iOS/APNs/音视频/全业务 E2E。
+容器数来自 Compose 模型，不代表实际已经减少当前机器占用；全功能负载峰值及最终节省量
+需在维护切换后采样，不能把隔离 Kafka 测试当成全部产品功能验收。

@@ -102,7 +102,7 @@ export RUSTFS_SECRET_KEY="your_secret_key"
 docker compose ps
 ```
 
-`standard` 启动当前全部业务能力，但不启动 Prometheus、Grafana、Kafka UI 和第二个 DataForwarding 实例。首次部署或证书地址发生变化时使用 `--cert`；修改协议后追加 `--proto`。
+`standard` 使用单 Kafka、单 DataForwarding，启动当前全部业务能力（包含 LiveKit 群通话），但不启动 Prometheus、Grafana、Kafka UI 和第二个 DataForwarding。`distributed` 仅追加第二个 DF；`full` 追加诊断工具。首次部署或证书地址发生变化时使用 `--cert`；修改协议后追加 `--proto`。现有双 Kafka 环境会被切换保护拦截，先按[可裁剪部署](services/DEPLOYMENT_PROFILES.md)处理数据，不能直接停掉 kafka2。
 
 低资源环境可以使用 `minimal`，但它只包含认证、连接以及好友/群组控制面，不包含 Storage Service，因此不是完整的消息发送环境。完整 profile 语义见[可裁剪部署](services/DEPLOYMENT_PROFILES.md)。
 
@@ -115,7 +115,7 @@ cd services
 ./rebuild_docker_compose.sh --list
 ```
 
-`build_docker_compose.sh` 默认全量测试部署并启用 LiveKit 群通话，需要先配置 `services/.env` 中的 LiveKit 地址和密钥（见[群通话部署](docs/GROUP_CALLS.md)）。它会复用已有证书、Go 模块缓存和未变化的容器。只有证书地址变化时才追加 `--cert`，确实需要重建未变化容器时才追加 `--force-recreate`。日常开发优先使用 `rebuild_docker_compose.sh`，避免每次检查全部镜像。
+`build_docker_compose.sh` 默认日常全功能 `standard`，需要先配置 `services/.env` 中的 LiveKit 地址和密钥（见[群通话部署](docs/GROUP_CALLS.md)）。它复用已有证书、Go 模块缓存和未变化的容器，不默认生成 Protobuf，构建并发默认两路。`./build_docker_compose.sh distributed` 开启双 DF；`full` 开启诊断工具。增量重建的 `dataforwarding` 默认只处理 DF，`df-all` 才明确处理两个实例；`--all` 也不再隐式启用 full。
 
 应用镜像使用 BuildKit 共享 Go 模块与编译缓存。首次构建仍需下载和编译依赖；不要在日常开发中执行 `docker builder prune`，否则下一次会重新承担这部分冷启动成本。
 
@@ -150,7 +150,7 @@ Betterfly2/
 | [API 文档](docs/API_DOCUMENTATION.md) | Storage、ABTest、Call、Push 的对外与内部协议 |
 | [接口新增指南](docs/INTERFACE_DEVELOPMENT.md) | DataForwarding、Storage、Friend 模块自注册流程 |
 | [回归测试](docs/REGRESSION_TESTING.md) | Docker Compose 跨 Pod 端到端测试 |
-| [可裁剪部署](services/DEPLOYMENT_PROFILES.md) | `minimal`、`standard`、`full` 与 profile 组合 |
+| [可裁剪部署](services/DEPLOYMENT_PROFILES.md) | 日常单节点、双 DF、诊断模式及 Kafka 切换保护 |
 | [RustFS 配置](services/RUSTFS_SETUP.md) | 对象存储、外部预签名地址与故障排查 |
 | [Call Service](services/callService/README.md) | WebRTC、Coturn 和 PushKit 唤醒 |
 | [群通话](docs/GROUP_CALLS.md) | LiveKit 多人语音/视频、协议和可选部署 |

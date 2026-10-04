@@ -33,6 +33,7 @@ Aliases:
   storage                -> storage_service
   friend                 -> friend_service
   abtest                 -> abtest_service
+  moments                -> moments_service
   call                   -> call_service
   turn                   -> coturn
   sfu                    -> livekit
@@ -56,10 +57,10 @@ EOF
 list_targets() {
   cat <<'EOF'
 Compose services:
-  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service call_service push_service coturn livekit
+  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service moments_service call_service push_service coturn livekit
 
 Useful aliases:
-  dataforwarding df-all auth storage friend abtest call push turn sfu
+  dataforwarding df-all auth storage friend abtest moments call push turn sfu
 EOF
 }
 
@@ -94,6 +95,9 @@ add_target() {
     abtest)
       add_service "abtest_service"
       ;;
+    moments)
+      add_service "moments_service"
+      ;;
     call)
       add_service "call_service"
       ;;
@@ -106,7 +110,7 @@ add_target() {
     push)
       add_service "push_service"
       ;;
-    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|call_service|push_service|coturn|livekit)
+    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|moments_service|call_service|push_service|coturn|livekit)
       add_service "$1"
       ;;
     *)
@@ -209,7 +213,7 @@ COMPOSE_CMD=("${DOCKER_CMD[@]}" compose up -d --build)
 
 if [[ "$ALL_SERVICES" -eq 1 ]]; then
   COMPOSE_CMD=("${DOCKER_CMD[@]}" compose)
-  for profile in storage notifications calls experiments observability tools redundancy; do
+  for profile in storage notifications calls experiments moments observability tools redundancy; do
     COMPOSE_CMD+=(--profile "$profile")
   done
   if [[ "${#SERVICES[@]}" -gt 0 ]]; then

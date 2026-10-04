@@ -36,6 +36,7 @@ func migrationPlan() []Migration {
 		{Version: 7, Name: "image message caption", Apply: migrateImageCaptionSchema},
 		{Version: 8, Name: "channel pin notification preference and message replies", Apply: migrateConversationFeaturesSchema},
 		{Version: 9, Name: "channel discussion threads", Apply: migrateDiscussionSchema},
+		{Version: 10, Name: "friend moments", Apply: migrateMomentsSchema},
 	}
 }
 

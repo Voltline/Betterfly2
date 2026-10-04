@@ -277,7 +277,7 @@ services:
       - backend
 
   rustfs:
-    profiles: ["storage"]
+    profiles: ["storage", "moments"]
     image: rustfs/rustfs:latest
     container_name: rustfs
     ports:
@@ -409,6 +409,41 @@ services:
         condition: service_completed_successfully
     ports:
       - "54401:54401"
+    networks:
+      - backend
+
+  moments_service:
+    profiles: ["moments"]
+    build:
+      context: ..
+      dockerfile: services/momentsService/Dockerfile
+    container_name: moments_service
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      auth_service:
+        condition: service_started
+      rustfs:
+        condition: service_started
+    restart: on-failure
+    environment:
+      <<: *database-env
+      DB_MAX_OPEN_CONNS: ${MOMENTS_DB_MAX_OPEN_CONNS:-6}
+      DB_MAX_IDLE_CONNS: ${MOMENTS_DB_MAX_IDLE_CONNS:-2}
+      PORT: "8087"
+      AUTH_RPC_ADDR: auth_service:50051
+      MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-http://localhost:8087}
+      MOMENTS_BUCKET: ${MOMENTS_BUCKET:-betterfly-moments}
+      RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
+      RUSTFS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ENDPOINT_URL: http://rustfs:9000
+      RUSTFS_EXTERNAL_ENDPOINT_URL: ${RUSTFS_EXTERNAL_ENDPOINT_URL:-http://localhost:9000}
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "8087:8087"
     networks:
       - backend
 

@@ -31,7 +31,7 @@ Presets:
 
 Options:
   --enable <profile>  Add a profile: storage, notifications, calls, experiments,
-                      group-calls, observability, tools or redundancy. May be repeated.
+                      group-calls, moments, observability, tools or redundancy. May be repeated.
   --cert              Regenerate the WebSocket self-signed certificate.
   --proto             Regenerate protobuf code.
   --no-build          Do not build application images.
@@ -47,7 +47,7 @@ add_profile() {
   local profile="$1"
   local existing
   case "$profile" in
-    storage|notifications|calls|group-calls|experiments|observability|tools|redundancy) ;;
+    storage|notifications|calls|group-calls|moments|experiments|observability|tools|redundancy) ;;
     *)
       echo "Unknown profile: $profile" >&2
       exit 1
@@ -93,12 +93,14 @@ case "$PRESET" in
     add_profile notifications
     add_profile calls
     add_profile experiments
+    add_profile moments
     ;;
   full)
     add_profile storage
     add_profile notifications
     add_profile calls
     add_profile experiments
+    add_profile moments
     add_profile observability
     add_profile tools
     add_profile redundancy

@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: moments-service
+  namespace: betterfly2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: moments-service
+  template:
+    metadata:
+      labels:
+        app: moments-service
+    spec:
+      containers:
+        - name: moments-service
+          image: betterfly2/moments-service:schema-v10
+          ports:
+            - containerPort: 8087
+          envFrom:
+            - configMapRef:
+                name: betterfly2-config
+          env:
+            - name: PORT
+              value: "8087"
+            - name: DB_MAX_OPEN_CONNS
+              value: "6"
+            - name: DB_MAX_IDLE_CONNS
+              value: "2"
+            - name: AUTH_RPC_ADDR
+              value: auth-service:50051
+            - name: PGSQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: PGSQL_DSN
+            - name: RUSTFS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: betterfly2-secret
+                  key: RUSTFS_SECRET_KEY
+            - name: MOMENTS_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: betterfly2-moments
+                  key: MOMENTS_PUBLIC_URL
+            - name: RUSTFS_EXTERNAL_ENDPOINT_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: betterfly2-moments
+                  key: RUSTFS_EXTERNAL_ENDPOINT_URL
+            - name: MOMENTS_BUCKET
+              value: betterfly-moments
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: 8087
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8087
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8087
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: moments-service
+  namespace: betterfly2
+spec:
+  selector:
+    app: moments-service
+  ports:
+    - port: 8087
+      targetPort: 8087

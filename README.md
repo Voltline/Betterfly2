@@ -17,6 +17,7 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 - [广播频道](docs/CHANNELS.md)：公开发现/订阅、私有邀请、管理员发布与完整历史分页。
 - [会话功能](docs/CONVERSATION_FEATURES.md)：频道置顶、群聊／频道免打扰及引用回复。
 - [频道讨论区](docs/CHANNEL_DISCUSSIONS.md)：关联普通群、按公告评论、入群后完整线程历史。
+- [好友动态](docs/MOMENTS.md)：独立网页与 HTTP API、九图、点赞评论及好友可见性。
 - PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
 - Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
 - RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。
@@ -32,6 +33,10 @@ flowchart LR
     Client["iOS client"] -->|"WSS + Protobuf"| DF["DataForwarding Service"]
     Client -->|"HTTP"| Storage["Storage Service"]
     Client -->|"HTTP"| AB["ABTest Service"]
+    Client -->|"HTTP / Web"| Moments["Moments Service"]
+    Moments --> Auth
+    Moments --> PG
+    Moments --> RustFS
     DF -->|"gRPC"| Auth["Auth Service"]
     DF <--> Redis[(Redis)]
     DF <--> Kafka[(Kafka)]
@@ -68,6 +73,7 @@ flowchart LR
 | Storage Service | Kafka `storage-service`；HTTP `8081` | 消息与资料持久化、同步查询、文件控制面 |
 | Friend Service | Kafka `friend-service`；HTTP `54401` | 好友关系、群组和群成员维护；HTTP 仅提供内网探针 |
 | ABTest Service | HTTP `8082` | 实验配置获取、服务端求值和管理后台 |
+| Moments Service | HTTP `8087` | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
 | Call Service | Kafka `call-service`；HTTP `8085` | 一对一及可选群会议控制面、探针与签名 SFU 回调 |
 | Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
 

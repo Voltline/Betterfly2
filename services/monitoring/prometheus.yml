@@ -45,3 +45,9 @@ scrape_configs:
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']
+
+  - job_name: 'moments'
+    static_configs:
+      - targets: ['moments_service:8087']
+        labels:
+          service: 'moments'

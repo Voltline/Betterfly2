@@ -8,7 +8,7 @@ Betterfly2 使用 Docker Compose Profiles 将基础聊天链路与可选能力�
 | 预设 | 包含能力 | 不包含能力 |
 | --- | --- | --- |
 | `minimal` | Redis、双 Kafka、单 DataForwarding、Auth、Friend | 消息持久化与完整发送链路、文件、APNs、通话、AB 实验、监控、Kafka UI、第二个 DataForwarding |
-| `standard` | 核心链路及文件、APNs、通话、AB 实验 | Prometheus、Grafana、Kafka UI、第二个 DataForwarding |
+| `standard` | 核心链路及文件、APNs、通话、AB 实验、好友动态 | Prometheus、Grafana、Kafka UI、第二个 DataForwarding |
 | `full` | 原有全部服务 | LiveKit（需显式启用 group-calls） |
 
 `minimal` 适合验证认证、WebSocket 和好友/群组控制面。当前消息发送依赖 Storage Service，因而 `minimal` 不是完整聊天部署；需要收发和同步消息时应使用 `standard`，或在 `minimal` 上追加 `storage`。
@@ -56,6 +56,7 @@ cd services
 | `calls` | CallService、PushService、Coturn |
 | `group-calls` | LiveKit SFU、CallService、PushService（需要配置 LIVEKIT_*，见 ../docs/GROUP_CALLS.md） |
 | `experiments` | ABTestService |
+| `moments` | MomentsService、RustFS（独立私有动态 bucket；需先迁移 v10，见 ../docs/MOMENTS.md） |
 | `observability` | Prometheus、Grafana |
 | `tools` | Kafka UI |
 | `redundancy` | 第二个 DataForwarding Pod |

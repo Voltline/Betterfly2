@@ -270,7 +270,7 @@ func TestDiscussionPostgresUpgradeFromV8AndScopeValidation(t *testing.T) {
 	database := discussionPostgres(t)
 	// Simulate the deployed v8 schema, not a fresh AutoMigrate of new models.
 	for _, statement := range []string{
-		`DELETE FROM schema_migrations WHERE version = 9`,
+		`DELETE FROM schema_migrations WHERE version >= 9`,
 		`ALTER TABLE messages DROP COLUMN discussion_root_message_id CASCADE`,
 		`ALTER TABLE messages DROP COLUMN source_channel_message_id CASCADE`,
 		`ALTER TABLE messages DROP COLUMN discussion_closed CASCADE`,

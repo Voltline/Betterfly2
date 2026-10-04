@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f7f6f2">
+  <title>动态 · Betterfly</title>
+  <link rel="icon" href="brand.jpg">
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#feed"><img src="brand.jpg" alt="Betterfly Logo"><span class="brand-note">动态</span></a>
+    <nav aria-label="主要导航"><a href="#feed" id="nav-feed">好友动态</a><a href="#mine" id="nav-mine">我的动态</a></nav>
+    <div class="account-actions"><button id="compose-open" class="primary" hidden>＋ 发布</button><button id="signout" hidden>退出</button></div>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="login-view" class="login-panel" hidden>
+      <img class="login-logo" src="brand.jpg" alt="Betterfly">
+      <p class="eyebrow">BETTERFLY MOMENTS</p><h1>朋友们的近况</h1><p class="muted">用 Betterfly 账号登录，看看大家最近在做什么。</p>
+      <form id="login-form"><label>账号<input id="account" name="username" autocomplete="username" maxlength="50" required></label><label>密码<input id="password" name="password" type="password" autocomplete="current-password" maxlength="72" required></label><p id="login-error" class="error" role="alert"></p><button class="primary" type="submit">登录</button></form>
+    </section>
+    <section id="feed-view" hidden>
+      <div class="page-heading"><div><p id="feed-subtitle" class="eyebrow"></p><h1 id="feed-title">朋友们的近况</h1></div><button id="refresh">刷新</button></div>
+      <button id="quick-compose" class="quick-compose"><span class="avatar" id="self-avatar"></span><span>记录这一刻，分享给朋友…</span><span class="muted">＋</span></button>
+      <div id="posts" aria-live="polite"></div><div class="list-footer"><button id="load-posts" hidden>加载更多</button></div>
+    </section>
+    <section id="compose-view" hidden>
+      <div class="page-heading"><div><p class="eyebrow">分享近况</p><h1>记录这一刻</h1></div><button id="compose-cancel">返回</button></div>
+      <div class="compose-panel"><label for="draft">正文</label><textarea id="draft" rows="7" placeholder="今天有什么想分享的？"></textarea><div class="compose-meta"><span id="draft-count">0 / 4096</span><label class="inline-label">谁可以看<select id="visibility"><option value="friends">好友可见</option><option value="private">仅自己可见</option></select></label></div>
+      <div id="draft-images" class="draft-images"></div><div class="compose-tools"><label class="file-button">＋ 添加图片<input id="photo-input" type="file" accept="image/jpeg,image/png" multiple></label><span class="muted">JPEG / PNG · 最多 9 张 · 每张 10 MiB</span></div><p id="publish-error" class="error" role="alert"></p><button id="publish" class="primary">发布动态</button></div>
+    </section>
+    <section id="detail-view" hidden>
+      <div class="page-heading"><h1>动态详情</h1><button id="detail-back">返回</button></div><div id="detail-post"></div>
+      <section class="detail-interactions"><h2>点赞</h2><div id="all-likes"></div><button id="load-likes" hidden>更多点赞</button><h2>评论</h2><div id="all-comments"></div><button id="load-comments" hidden>更多评论</button>
+      <form id="comment-form"><div id="reply-target" hidden></div><label for="comment-input">写评论</label><textarea id="comment-input" rows="3" placeholder="说点什么…"></textarea><div class="compose-meta"><span>最多 1000 字</span><button id="reply-cancel" type="button" hidden>取消回复</button><button class="primary" type="submit">发送</button></div><p id="comment-error" class="error" role="alert"></p></form></section>
+    </section>
+    <p id="loading" class="empty">正在加载…</p>
+  </main>
+  <dialog id="photo-viewer"><button id="photo-close" aria-label="关闭图片">关闭</button><img id="full-photo" alt="动态图片"><div class="photo-controls"><button id="photo-prev">上一张</button><span id="photo-index"></span><button id="photo-next">下一张</button></div></dialog>
+  <footer>Betterfly · 让分享回到朋友之间</footer>
+</body>
+</html>

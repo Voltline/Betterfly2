@@ -506,3 +506,53 @@ go build ./...
 静音、退后台、Wi-Fi/蜂窝重连、移除成员、最后退出、重复创建与 private/group busy 互斥。
 另测 AUDIO 无摄像头发布、未入群拒绝 Join、人数上限、离线 PushKit 邀请及结束后重拨。
 真实 APNs、iOS CallKit 和音视频设备验收需客户端适配后执行，不能以单元测试替代。
+
+## 好友动态（Schema v10）
+
+代码：`services/momentsService`；接口及部署见 [MOMENTS.md](MOMENTS.md)。
+
+- 单测覆盖 JWT 返回身份、Cookie/Origin/CSRF、登录故障和限流、请求体限制、Unicode、
+  幂等冲突/已删重试、图片 hash/真实类型/截断/尺寸、元数据失败重试和固定批量查询数。
+- PostgreSQL 覆盖双向好友/仅自己可见、非共同好友的点赞评论、删除关系后撤权、并发
+  重复发布/评论/点赞、九图绑定事务、删除与互动竞争、相同时间戳分页。
+- v10 迁移覆盖新建、v9 升级、DDL 故障回滚、重试、并发 runner、重复运行及旧消息保留。
+- HTTP + RustFS 覆盖直传→校验→封存→发布→详情→互动→删除；无签名读取被拒绝，
+  覆写旧 staging PUT URL 不改变 sealed 图片。HTTP fixture 使用测试 Auth，不使用真实账号。
+
+请只用独立测试数据库，测试会创建并删除专用 schema；RustFS 应是独立可丢弃容器，
+测试会创建私有 bucket，不会自动回收对象。测试凭据固定为 `moments-test-access` /
+`moments-test-secret`，只适用于该测试 RustFS，不能配置到正式环境。
+
+```bash
+export BETTERFLY_TEST_POSTGRES_DSN='host=127.0.0.1 port=55439 user=moments_test password=moments-test-only dbname=moments_test sslmode=disable'
+export BETTERFLY_TEST_RUSTFS_ENDPOINT=http://127.0.0.1:19047
+
+cd services/momentsService
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+
+cd ../../shared
+go test -race -count=1 ./...
+go vet ./...
+```
+
+不设置测试环境变量时，真实 PG/RustFS 测试明确 skip，不应计为通过。
+临时 UI 验证可在 Moments 模块执行下面命令，仅绑定回环地址并使用上述独立环境，
+登录测试账号 `u1` / `test-only`；不是正式服务的认证旁路。
+
+```bash
+BETTERFLY_MOMENTS_WEB_TEST_ADDR=127.0.0.1:18087 \
+go test -timeout 35m -count=1 -run '^TestMomentsWebPreview$' -v ./internal/httpserver
+```
+
+网页验收：Cookie 登录、文本发布/点赞/评论、JPEG/PNG 选择与真实上传、草稿和失败反馈、
+图片查看、仅自己可见、个人时间流、退出；桌面与 320px 手机不得横向溢出。
+真实 Auth、外网 HTTPS/反向代理和 iOS 原生接入仍需部署环境联调，不被 fixture 结果替代。
+
+2026-10-04 本地验收：全部 16 个 Go module 的 `go test ./...` 和 `go vet ./...`
+通过；Moments 与 shared 使用独立 PostgreSQL/RustFS 的 `go test -race -count=1 ./...`
+通过。迁移镜像在独立测试库首次运行、重复运行均成功；最终 Moments 镜像的 health、
+ready 和内嵌网页加载通过。浏览器验证 Cookie 登录、发布、点赞、换行评论、真实图片
+上传/展示及个人列表，桌面和 320px 视口无横向溢出；JS 语法和 `git diff --check` 通过。
+未连接现有业务数据库，未重启现有业务容器。

@@ -13,10 +13,10 @@ func TestMomentsMigrationIsExplicitAdditiveAndRetryable(t *testing.T) {
 	plan := migrationPlan()
 	versions := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	pending, err := pendingMigrations(plan, versions)
-	if err != nil || len(pending) != 2 || pending[0].Version != 10 {
+	if err != nil || len(pending) != 3 || pending[0].Version != 10 {
 		t.Fatal(pending, err)
 	}
-	if pending, err := pendingMigrations(plan, append(versions, 10)); err != nil || len(pending) != 1 || pending[0].Version != 11 {
+	if pending, err := pendingMigrations(plan, append(versions, 10)); err != nil || len(pending) != 2 || pending[0].Version != 11 {
 		t.Fatal(pending, err)
 	}
 	database, mock := newInboxDatabase(t)

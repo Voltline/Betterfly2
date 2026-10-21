@@ -15,9 +15,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// downloadURLTTL 限制下载URL的有效期；客户端拿到URL后立即下载，不缓存URL。
+const downloadURLTTL = 10 * time.Minute
+
 // DownloadHandler 处理文件下载请求
+//
+// 只有持有者、头像，或当前能看到引用该文件且未撤回消息的用户才能拿到下载URL；
+// 无权访问与文件不存在返回同样的响应，避免借下载接口探测文件是否存在。
 type DownloadHandler struct {
 	getFileMetadata         func(string) (*db.FileMetadata, error)
+	canDownloadFile         func(string, int64) (bool, error)
 	deleteFileMetadata      func(string) error
 	fileExistsInStorage     func(context.Context, string) (bool, error)
 	getPresignedDownloadURL func(context.Context, string, time.Duration) (string, error)
@@ -28,6 +35,7 @@ type DownloadHandler struct {
 func NewDownloadHandler(rustfsClient *rustfs.RustFSClient) *DownloadHandler {
 	return &DownloadHandler{
 		getFileMetadata:         db.GetFileMetadata,
+		canDownloadFile:         db.CanDownloadFile,
 		deleteFileMetadata:      db.DeleteFileMetadata,
 		fileExistsInStorage:     rustfsClient.FileExists,
 		getPresignedDownloadURL: rustfsClient.GetPresignedDownloadURL,
@@ -38,6 +46,12 @@ func NewDownloadHandler(rustfsClient *rustfs.RustFSClient) *DownloadHandler {
 // HandleDownloadRequest 处理下载请求
 func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.Request) {
 	sugar := logger.Sugar()
+
+	userID, ok := authenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	// 从Query参数获取file_hash
 	fileHash := r.URL.Query().Get("file_hash")
@@ -64,7 +78,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	sugar.Debugf("收到下载请求: file_hash=%s", fileHash)
+	sugar.Debugf("收到下载请求: user_id=%d, file_hash=%s", userID, fileHash)
 
 	// 检查文件是否存在于数据库
 	fileMetadata, err := h.getFileMetadata(fileHash)
@@ -75,13 +89,20 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 	}
 
 	if fileMetadata == nil {
-		// 文件不存在
-		resp := &storage.DownloadFileResponse{
-			Exists:       false,
-			ErrorMessage: "File not found",
-		}
-		h.sendResponse(w, resp)
+		h.sendNotFound(w)
 		sugar.Debugf("文件不存在: file_hash=%s", fileHash)
+		return
+	}
+
+	allowed, err := h.canDownloadFile(fileHash, userID)
+	if err != nil {
+		sugar.Errorf("查询文件下载授权失败: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !allowed {
+		h.sendNotFound(w)
+		sugar.Debugf("用户无权下载文件: user_id=%d, file_hash=%s", userID, fileHash)
 		return
 	}
 	if !fileMetadata.IsVerified {
@@ -116,7 +137,7 @@ func (h *DownloadHandler) HandleDownloadRequest(w http.ResponseWriter, r *http.R
 	}
 
 	// 生成预签名下载URL
-	expiresIn := 1 * time.Hour // URL有效期1小时
+	expiresIn := downloadURLTTL
 	downloadURL, err := h.getDownloadURL(ctx, r, fileHash, expiresIn)
 	if err != nil {
 		sugar.Errorf("生成预签名下载URL失败: %v", err)
@@ -140,6 +161,10 @@ func (h *DownloadHandler) getDownloadURL(ctx context.Context, r *http.Request, f
 		return h.getPresignedDownloadFor(ctx, fileHash, expiresIn, resolveRustFSExternalEndpoint(r))
 	}
 	return h.getPresignedDownloadURL(ctx, fileHash, expiresIn)
+}
+
+func (h *DownloadHandler) sendNotFound(w http.ResponseWriter) {
+	h.sendResponse(w, &storage.DownloadFileResponse{Exists: false, ErrorMessage: "File not found"})
 }
 
 // sendResponse 发送响应（支持JSON和Protobuf）

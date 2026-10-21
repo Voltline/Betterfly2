@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"Betterfly2/shared/db"
 	"storageService/internal/rustfs"
 )
 
@@ -171,6 +172,42 @@ func TestRustFSStagedUploadFlow(t *testing.T) {
 	}
 	if _, ok := readObject(t, client, otherStaging); ok {
 		t.Fatal("possession proof staging object was not cleaned up")
+	}
+
+	// 下载走真实预签名URL：持有者拿到原始内容，无权用户与文件不存在的响应一致。
+	download := NewDownloadHandler(client)
+	download.getFileMetadata = func(fileHash string) (*db.FileMetadata, error) {
+		return &db.FileMetadata{FileHash: fileHash, IsVerified: true, FileSize: metadata.verified[fileHash]}, nil
+	}
+	download.canDownloadFile = func(fileHash string, userID int64) (bool, error) {
+		return metadata.grants[grantKey(fileHash, userID)], nil
+	}
+	for userID, allowed := range map[int64]bool{uploaderID: true, otherID: true, 3003: false} {
+		rec := httptest.NewRecorder()
+		download.HandleDownloadRequest(rec, asUser(httptest.NewRequest(http.MethodGet, "/storage_service/download?file_hash="+payloadHash, nil), userID))
+		var resp struct {
+			Exists       bool   `json:"exists"`
+			DownloadURL  string `json:"download_url"`
+			ErrorMessage string `json:"error_message"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("user %d download response: status=%d err=%v", userID, rec.Code, err)
+		}
+		if !allowed {
+			if resp.Exists || resp.DownloadURL != "" || resp.ErrorMessage != "File not found" {
+				t.Fatalf("unauthorized user %d got a download URL: %+v", userID, resp)
+			}
+			continue
+		}
+		got, err := http.Get(resp.DownloadURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(got.Body)
+		got.Body.Close()
+		if got.StatusCode != http.StatusOK || string(body) != payload {
+			t.Fatalf("user %d presigned download failed: status=%d body=%q", userID, got.StatusCode, body)
+		}
 	}
 }
 

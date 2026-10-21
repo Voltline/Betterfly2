@@ -408,6 +408,25 @@ func (h *FriendHandler) handleUpdateGroupAvatarWithDB(database *gorm.DB, req *fr
 		}, nil
 	}
 
+	// 群头像对所有人可下载，只能设置为操作者本人已持有的文件。
+	allowed, err := db.CanUseFileWithDB(database, payload.GetAvatarHash(), payload.GetRequestUserId())
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return &friend.ResponseMessage{
+			Result:       friend.FriendResult_FORBIDDEN,
+			TargetUserId: req.TargetUserId,
+			Payload: &friend.ResponseMessage_GroupOperationRsp{
+				GroupOperationRsp: &friend.GroupOperationRsp{
+					Operation: "update_group_avatar",
+					GroupId:   payload.GetGroupId(),
+					UserId:    payload.GetRequestUserId(),
+				},
+			},
+		}, nil
+	}
+
 	updated, updateTime, err := db.UpdateGroupAvatarWithDB(database, payload.GetGroupId(), payload.GetAvatarHash())
 	if err != nil {
 		return nil, err

@@ -7,6 +7,8 @@ import (
 	"Betterfly2/shared/dispatch"
 	"errors"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 func init() {
@@ -31,6 +33,9 @@ func handleChannelRequest(ctx friendRequestContext, request *channel.ChannelRequ
 			p := payload.Create
 			if !validChannelVisibility(p.GetVisibility()) {
 				err = db.ErrChannelInvalidArgument
+				break
+			}
+			if err = requireOwnedAvatar(ctx.database, p.GetAvatarHash(), actorID); err != nil {
 				break
 			}
 			view, err = db.CreateChannelWithDB(ctx.database, actorID, p.GetChannelId(), p.GetName(), p.GetDescription(), p.GetAvatarHash(), p.GetUsername(), p.GetVisibility() == channel.Visibility_PUBLIC)
@@ -63,6 +68,9 @@ func handleChannelRequest(ctx friendRequestContext, request *channel.ChannelRequ
 					err = db.ErrChannelInvalidArgument
 				}
 				groupUpdates["avatar"] = strings.TrimSpace(p.GetAvatarHash())
+				if err == nil {
+					err = requireOwnedAvatar(ctx.database, p.GetAvatarHash(), actorID)
+				}
 			}
 			if p.Username != nil {
 				var username string
@@ -203,6 +211,22 @@ func listChannelResponse(ctx friendRequestContext, response *channel.ChannelResp
 	for i := range views {
 		response.Channels = append(response.Channels, channelInfo(&views[i]))
 		response.NextCursorId = views[i].GroupID
+	}
+	return nil
+}
+
+// requireOwnedAvatar 要求频道头像为空（清除）或操作者已持有的文件，头像对所有人可下载。
+func requireOwnedAvatar(database *gorm.DB, avatarHash string, actorID int64) error {
+	avatarHash = strings.TrimSpace(avatarHash)
+	if avatarHash == "" {
+		return nil
+	}
+	allowed, err := db.CanUseFileWithDB(database, avatarHash, actorID)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return db.ErrChannelForbidden
 	}
 	return nil
 }

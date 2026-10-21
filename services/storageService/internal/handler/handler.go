@@ -241,6 +241,24 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
 		}
 	}
+	if db.IsFileMessageType(msg.GetMessageType()) {
+		// 文件消息只能引用发送者已证明持有的文件，否则知道哈希就能借消息拿到下载权限。
+		fileHash, ok := db.FileHashFromContent(msg.GetContent())
+		if !ok {
+			return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+		}
+		allowed := false
+		if req.GetTargetUserId() > 0 && req.GetTargetUserId() == msg.GetFromUserId() {
+			var err error
+			if allowed, err = db.CanUseFileWithDB(database, fileHash, msg.GetFromUserId()); err != nil {
+				return nil, err
+			}
+		}
+		if !allowed {
+			sugar.Warnw("拒绝引用未持有文件的消息", "requester_id", req.GetTargetUserId(), "file_hash", fileHash)
+			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+		}
+	}
 
 	// 保存到数据库
 	start := time.Now()
@@ -664,6 +682,17 @@ func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *st
 	sugar := logger.Sugar()
 	if resp := profileUpdateForbidden(req, update.GetUserId()); resp != nil {
 		return resp, nil
+	}
+	if avatar := update.GetNewAvatarUrl(); avatar != "" {
+		// 头像对所有人可下载，只能设置为本人已持有的文件；空字符串表示清除头像。
+		allowed, err := db.CanUseFileWithDB(database, avatar, update.GetUserId())
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			sugar.Warnw("拒绝设置未持有文件为头像", "user_id", update.GetUserId())
+			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+		}
 	}
 
 	// 更新数据库

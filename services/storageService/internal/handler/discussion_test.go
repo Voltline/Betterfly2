@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,8 +112,12 @@ func TestDiscussionStoragePostgresPublicationAndPagination(t *testing.T) {
 	if _, err := db.SetDiscussionGroupWithDB(database, 1, 9001, 9002); err != nil {
 		t.Fatal(err)
 	}
+	// 图片消息只能引用发送者已持有的文件。
+	if err := db.StoreVerifiedFileWithDB(database, strings.Repeat("a", 128), 1, "aa/"+strings.Repeat("a", 128), 1); err != nil {
+		t.Fatal(err)
+	}
 	h := &StorageHandler{database: database, l1Cache: newMockCache()}
-	postReq := &storage.RequestMessage{FromKafkaTopic: "df", TargetUserId: 1, Payload: &storage.RequestMessage_StoreNewMessage{StoreNewMessage: &storage.StoreNewMessage{FromUserId: 1, ToUserId: 9001, IsGroup: true, Content: "image-hash", Caption: "# Announcement\ncaption", MessageType: "image", ClientMessageId: "post"}}}
+	postReq := &storage.RequestMessage{FromKafkaTopic: "df", TargetUserId: 1, Payload: &storage.RequestMessage_StoreNewMessage{StoreNewMessage: &storage.StoreNewMessage{FromUserId: 1, ToUserId: 9001, IsGroup: true, Content: originalImageContent, Caption: "# Announcement\ncaption", MessageType: "image", ClientMessageId: "post"}}}
 	raw, _ := proto.Marshal(postReq)
 	for range 2 {
 		if err := h.HandleMessage(kafkaconsumer.WithOperationKey(context.Background(), "post/0/1"), raw); err != nil {

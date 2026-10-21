@@ -16,9 +16,19 @@ import (
 
 const fixtureCaption = "  # 公告\n**完整配文** 😀\n保留末尾空格  "
 
+var (
+	originalImageContent = strings.Repeat("a", 128) + ".jpg"
+	retryImageContent    = strings.Repeat("b", 128) + ".jpg"
+)
+
+// expectFileGrant 模拟文件消息发送前的持有校验。
+func expectFileGrant(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`(?s)SELECT count\(\*\) FROM file_access_grants`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+}
+
 func captionRows(recalled bool) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"message_id", "client_message_id", "from_user_id", "to_user_id", "content", "caption", "message_type", "timestamp", "real_file_name", "is_group", "is_recalled"}).
-		AddRow(41, "image-1", 1, 2, "original-image-hash", fixtureCaption, "image", "2026-10-01T00:00:00Z", "", false, recalled)
+		AddRow(41, "image-1", 1, 2, originalImageContent, fixtureCaption, "image", "2026-10-01T00:00:00Z", "", false, recalled)
 }
 
 func assertCaptionMessage(t *testing.T, msg *storage.MessageRsp, recalled bool) {
@@ -30,7 +40,7 @@ func assertCaptionMessage(t *testing.T, msg *storage.MessageRsp, recalled bool) 
 		if msg.GetContent() != "" || msg.GetCaption() != "" || msg.GetRealFileName() != "" {
 			t.Fatal("recalled image exposed content")
 		}
-	} else if msg.GetContent() != "original-image-hash" || msg.GetCaption() != fixtureCaption {
+	} else if msg.GetContent() != originalImageContent || msg.GetCaption() != fixtureCaption {
 		t.Fatal("canonical image/caption changed")
 	}
 }
@@ -40,16 +50,18 @@ func TestImageCaptionStoreAndDuplicateUseCanonicalRecord(t *testing.T) {
 		t.Run(map[bool]string{false: "active", true: "recalled"}[recalled], func(t *testing.T) {
 			mock := useMockDB(t)
 			h := &StorageHandler{l1Cache: newMockCache()}
-			message := &storage.StoreNewMessage{FromUserId: 1, ToUserId: 2, Content: "original-image-hash", MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}
+			message := &storage.StoreNewMessage{FromUserId: 1, ToUserId: 2, Content: originalImageContent, MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}
 			req := &storage.RequestMessage{TargetUserId: 1}
+			expectFileGrant(mock)
 			mock.ExpectBegin()
-			mock.ExpectQuery("INSERT INTO \"messages\"").WithArgs("image-1", int64(1), int64(2), "original-image-hash", fixtureCaption, int64(0), int64(0), int64(0), sqlmock.AnyArg(), "image", "", false, false, "", int64(0), false).WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
+			mock.ExpectQuery("INSERT INTO \"messages\"").WithArgs("image-1", int64(1), int64(2), originalImageContent, fixtureCaption, int64(0), int64(0), int64(0), sqlmock.AnyArg(), "image", "", false, false, "", int64(0), false).WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
 			mock.ExpectCommit()
 			resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), req, message, nil)
 			if err != nil || !resp.GetStoreMsgRsp().GetCreated() || resp.GetStoreMsgRsp().GetCaption() != fixtureCaption {
 				t.Fatalf("store failed: %v", err)
 			}
-			message.Content, message.Caption = "retry-image-hash", "different retry caption"
+			message.Content, message.Caption = retryImageContent, "different retry caption"
+			expectFileGrant(mock)
 			mock.ExpectBegin()
 			mock.ExpectQuery("INSERT INTO \"messages\"").WillReturnRows(sqlmock.NewRows([]string{"message_id"}))
 			mock.ExpectCommit()
@@ -66,7 +78,7 @@ func TestImageCaptionStoreAndDuplicateUseCanonicalRecord(t *testing.T) {
 				if stored.GetCaption() != "" || stored.GetContent() != "" || stored.GetRealFileName() != "" {
 					t.Fatal("duplicate exposed recalled content")
 				}
-			} else if stored.GetCaption() != fixtureCaption || stored.GetContent() != "original-image-hash" {
+			} else if stored.GetCaption() != fixtureCaption || stored.GetContent() != originalImageContent {
 				t.Fatal("retry overwrote canonical content")
 			}
 		})
@@ -126,14 +138,14 @@ func TestCaptionHistoryAndRecallMask(t *testing.T) {
 	database, mock := setupMockDB(t)
 	h := &StorageHandler{database: database, l1Cache: newMockCache()}
 	mock.ExpectQuery("(?s)SELECT groups.group_id.*JOIN groups").WillReturnRows(sqlmock.NewRows([]string{"group_id", "is_public"}).AddRow(9, true))
-	mock.ExpectQuery("SELECT \\* FROM \"messages\"").WillReturnRows(sqlmock.NewRows([]string{"message_id", "content", "caption", "message_type", "is_recalled", "real_file_name"}).AddRow(41, "original-image-hash", fixtureCaption, "image", false, "").AddRow(40, "secret-image-hash", "secret caption", "image", true, "secret.jpg"))
+	mock.ExpectQuery("SELECT \\* FROM \"messages\"").WillReturnRows(sqlmock.NewRows([]string{"message_id", "content", "caption", "message_type", "is_recalled", "real_file_name"}).AddRow(41, originalImageContent, fixtureCaption, "image", false, "").AddRow(40, "secret-image-hash", "secret caption", "image", true, "secret.jpg"))
 	req := &storage.RequestMessage{TargetUserId: 2, Payload: &storage.RequestMessage_QueryChannelHistory{QueryChannelHistory: &channel.QueryChannelHistory{ChannelId: 9, PageSize: 50}}}
 	resp, err := getStorageRequestRouter().Dispatch(storageRequestContext{handler: h, database: database, request: req}, req.Payload)
 	if err != nil {
 		t.Fatal(err)
 	}
 	posts := resp.GetChannelResponse().GetPosts()
-	if len(posts) != 2 || posts[0].GetCaption() != fixtureCaption || posts[0].GetContent() != "original-image-hash" || posts[1].GetCaption() != "" || posts[1].GetContent() != "" || posts[1].GetRealFileName() != "" {
+	if len(posts) != 2 || posts[0].GetCaption() != fixtureCaption || posts[0].GetContent() != originalImageContent || posts[1].GetCaption() != "" || posts[1].GetContent() != "" || posts[1].GetRealFileName() != "" {
 		t.Fatal("history changed image/caption or exposed recall")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -144,11 +156,12 @@ func TestCaptionHistoryAndRecallMask(t *testing.T) {
 func TestCaptionDatabaseFailureRemainsRetryable(t *testing.T) {
 	mock := useMockDB(t)
 	injected := errors.New("database temporarily unavailable")
+	expectFileGrant(mock)
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO \"messages\"").WillReturnError(injected)
 	mock.ExpectRollback()
 	h := &StorageHandler{}
-	resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), &storage.RequestMessage{TargetUserId: 1}, &storage.StoreNewMessage{FromUserId: 1, ToUserId: 2, MessageType: "image", Content: "hash", Caption: fixtureCaption, ClientMessageId: "image-1"}, nil)
+	resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), &storage.RequestMessage{TargetUserId: 1}, &storage.StoreNewMessage{FromUserId: 1, ToUserId: 2, MessageType: "image", Content: originalImageContent, Caption: fixtureCaption, ClientMessageId: "image-1"}, nil)
 	if resp != nil || !errors.Is(err, injected) {
 		t.Fatalf("database failure not retryable: %v", err)
 	}
@@ -163,12 +176,13 @@ func TestChannelManagersCanStoreImageCaption(t *testing.T) {
 	for _, sender := range []int64{1, 2} {
 		mock := useMockDB(t)
 		mock.ExpectQuery("(?s)SELECT count\\(\\*\\).*channel_settings.group_id IS NULL OR group_members.role IN").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		expectFileGrant(mock)
 		mock.ExpectBegin()
 		mock.ExpectQuery("INSERT INTO \"messages\"").WillReturnRows(sqlmock.NewRows([]string{"message_id"}).AddRow(41))
 		mock.ExpectCommit()
 		h := &StorageHandler{l1Cache: newMockCache()}
 		mock.ExpectQuery(`SELECT \* FROM "channel_settings"`).WillReturnRows(sqlmock.NewRows([]string{"group_id"}))
-		resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), &storage.RequestMessage{TargetUserId: sender}, &storage.StoreNewMessage{FromUserId: sender, ToUserId: 9, IsGroup: true, Content: "image-hash", MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}, nil)
+		resp, err := h.handleStoreNewMessageWithDB(h.requestDatabase(), &storage.RequestMessage{TargetUserId: sender}, &storage.StoreNewMessage{FromUserId: sender, ToUserId: 9, IsGroup: true, Content: originalImageContent, MessageType: "image", Caption: fixtureCaption, ClientMessageId: "image-1"}, nil)
 		if err != nil || resp.GetResult() != storage.StorageResult_OK || resp.GetStoreMsgRsp().GetCaption() != fixtureCaption {
 			t.Fatal("manager image publication failed")
 		}

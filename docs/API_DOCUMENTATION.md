@@ -609,6 +609,8 @@ message StoreNewMessage {
 }
 ```
 
+文件消息（`image`/`gif`/`video`/`audio`/`voice`/`file`）的 `content` 必须是小写 SHA-512 十六进制哈希，可带 `.<后缀>`；格式错误返回 `INVALID_ARGUMENT`。发送者必须已持有该文件（已校验且有访问授权），否则返回 `FORBIDDEN` 且不入库，DF 向发送者回 Warn。
+
 **响应消息**: `StoreMsgRsp`
 
 ```protobuf
@@ -757,6 +759,8 @@ message UpdateUserAvatar {
 
 **响应消息**: `ResponseMessage` (无payload，仅result字段)
 
+非空头像必须是请求者本人已持有（已校验且有访问授权）的文件哈希，否则返回 `FORBIDDEN` 且不修改资料。群头像与频道头像同样要求操作者持有该文件。
+
 ---
 
 ## Protobuf 消息定义
@@ -895,7 +899,7 @@ message DownloadFileResponse {
    - 如果哈希不匹配，只删除该用户的暂存对象并返回错误；正式路径和已验证文件不会被改写或删除
 
 4. **客户端发送消息**
-   - 客户端确认文件上传成功后，通过数据转发服务发送消息
+   - 客户端确认文件上传成功后，通过数据转发服务发送消息；Storage 只接受引用发送者已持有文件的文件消息
    - 文件消息仍然使用普通 `Post` 报文发送
    - 约定 `msg_type = "file"`
    - 约定 `msg = file_hash`

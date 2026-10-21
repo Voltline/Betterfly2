@@ -465,7 +465,7 @@ func TestHandleUpdateUserName(t *testing.T) {
 	// 创建测试请求
 	req := &storage.RequestMessage{
 		FromKafkaTopic: "test-topic",
-		TargetUserId:   1001,
+		TargetUserId:   1000,
 		Payload: &storage.RequestMessage_UpdateUserName{
 			UpdateUserName: &storage.UpdateUserName{
 				UserId:      1000,
@@ -493,7 +493,7 @@ func TestHandleUpdateUserName(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, storage.StorageResult_OK, resp.Result)
-	assert.Equal(t, int64(1001), resp.TargetUserId)
+	assert.Equal(t, int64(1000), resp.TargetUserId)
 }
 
 func TestHandleUpdateUserNameDefersCacheInvalidationUntilCommit(t *testing.T) {
@@ -501,7 +501,7 @@ func TestHandleUpdateUserNameDefersCacheInvalidationUntilCommit(t *testing.T) {
 	cache := newMockCache()
 	cache.Set("user:1000", "cached", time.Minute)
 	handler := &StorageHandler{l1Cache: cache}
-	req := &storage.RequestMessage{TargetUserId: 1001}
+	req := &storage.RequestMessage{TargetUserId: 1000}
 	update := &storage.UpdateUserName{UserId: 1000, NewUserName: "NewUsername"}
 
 	mock.ExpectBegin()
@@ -534,7 +534,7 @@ func TestHandleUpdateUserNameFailureKeepsCache(t *testing.T) {
 	cache := newMockCache()
 	cache.Set("user:1000", "cached", time.Minute)
 	handler := &StorageHandler{l1Cache: cache}
-	req := &storage.RequestMessage{TargetUserId: 1001}
+	req := &storage.RequestMessage{TargetUserId: 1000}
 	update := &storage.UpdateUserName{UserId: 1000, NewUserName: "NewUsername"}
 	injected := errors.New("database temporarily unavailable")
 
@@ -565,7 +565,7 @@ func TestHandleUpdateUserName_NotFound(t *testing.T) {
 	// 创建测试请求
 	req := &storage.RequestMessage{
 		FromKafkaTopic: "test-topic",
-		TargetUserId:   1001,
+		TargetUserId:   99999,
 		Payload: &storage.RequestMessage_UpdateUserName{
 			UpdateUserName: &storage.UpdateUserName{
 				UserId:      99999,
@@ -593,7 +593,28 @@ func TestHandleUpdateUserName_NotFound(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.Equal(t, storage.StorageResult_RECORD_NOT_EXIST, resp.Result)
-	assert.Equal(t, int64(1001), resp.TargetUserId)
+	assert.Equal(t, int64(99999), resp.TargetUserId)
+}
+
+func TestProfileUpdatesRejectOtherUsersWithoutTouchingDB(t *testing.T) {
+	for _, requester := range []int64{0, 1001} {
+		database, mock := setupMockDB(t)
+		handler := &StorageHandler{l1Cache: newMockCache()}
+		req := &storage.RequestMessage{TargetUserId: requester}
+		var cacheKeys []string
+
+		resp, err := handler.handleUpdateUserNameWithDB(database, req, &storage.UpdateUserName{UserId: 1000, NewUserName: "hijacked"}, &cacheKeys)
+		assert.NoError(t, err)
+		assert.Equal(t, storage.StorageResult_FORBIDDEN, resp.GetResult())
+		assert.Equal(t, requester, resp.GetTargetUserId())
+
+		resp, err = handler.handleUpdateUserAvatarWithDB(database, req, &storage.UpdateUserAvatar{UserId: 1000, NewAvatarUrl: "hijacked"}, &cacheKeys)
+		assert.NoError(t, err)
+		assert.Equal(t, storage.StorageResult_FORBIDDEN, resp.GetResult())
+
+		assert.Empty(t, cacheKeys)
+		assert.NoError(t, mock.ExpectationsWereMet())
+	}
 }
 
 func TestHandleQuerySyncMessages_IncludesDirectAndGroupMessages(t *testing.T) {

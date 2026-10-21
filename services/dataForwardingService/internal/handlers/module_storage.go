@@ -6,6 +6,7 @@ import (
 	"Betterfly2/shared/dispatch"
 	"Betterfly2/shared/logger"
 	"data_forwarding_service/internal/monitor"
+	"errors"
 	"fmt"
 )
 
@@ -32,11 +33,11 @@ func registerStorageRequestModules(router *dispatch.OneofRouter[dfRequestContext
 	})
 	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateUserName) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 UpdateUserName 消息")
-		return dfRequestResult{}, handleUpdateUserName(ctx.fromID, ctx.message)
+		return profileUpdateResult(handleUpdateUserName(ctx.fromID, ctx.message))
 	})
 	dispatch.Register(router, func(ctx dfRequestContext, _ *pb.RequestMessage_UpdateUserAvatar) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 UpdateUserAvatar 消息")
-		return dfRequestResult{}, handleUpdateUserAvatar(ctx.fromID, ctx.message)
+		return profileUpdateResult(handleUpdateUserAvatar(ctx.fromID, ctx.message))
 	})
 }
 
@@ -183,14 +184,9 @@ func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	currentContainerID := currentContainerTopic()
-
-	storeReq := newStorageRequest(currentContainerID, fromID)
-	storeReq.Payload = &storage.RequestMessage_UpdateUserName{
-		UpdateUserName: &storage.UpdateUserName{
-			UserId:      payload.GetUserId(),
-			NewUserName: payload.GetNewUserName(),
-		},
+	storeReq, err := prepareUpdateUserNameStorageRequest(fromID, payload, currentContainerTopic())
+	if err != nil {
+		return err
 	}
 
 	if err := publishStorageRequest(storeReq); err != nil {
@@ -198,8 +194,22 @@ func handleUpdateUserName(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	logger.Sugar().Debugf("用户名更新请求已发送到storageService: user_id=%d, new_name=%s", payload.GetUserId(), payload.GetNewUserName())
+	logger.Sugar().Debugf("用户名更新请求已发送到storageService: user_id=%d, new_name=%s", fromID, payload.GetNewUserName())
 	return nil
+}
+
+func prepareUpdateUserNameStorageRequest(fromID int64, payload *pb.UpdateUserName, currentContainerID string) (*storage.RequestMessage, error) {
+	if err := validateProfileUpdateTarget(fromID, payload.GetUserId()); err != nil {
+		return nil, err
+	}
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_UpdateUserName{
+		UpdateUserName: &storage.UpdateUserName{
+			UserId:      fromID,
+			NewUserName: payload.GetNewUserName(),
+		},
+	}
+	return storeReq, nil
 }
 
 // handleUpdateUserAvatar 处理更新用户头像请求
@@ -209,14 +219,9 @@ func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	currentContainerID := currentContainerTopic()
-
-	storeReq := newStorageRequest(currentContainerID, fromID)
-	storeReq.Payload = &storage.RequestMessage_UpdateUserAvatar{
-		UpdateUserAvatar: &storage.UpdateUserAvatar{
-			UserId:       payload.GetUserId(),
-			NewAvatarUrl: payload.GetNewAvatarUrl(),
-		},
+	storeReq, err := prepareUpdateUserAvatarStorageRequest(fromID, payload, currentContainerTopic())
+	if err != nil {
+		return err
 	}
 
 	if err := publishStorageRequest(storeReq); err != nil {
@@ -224,6 +229,40 @@ func handleUpdateUserAvatar(fromID int64, message *pb.RequestMessage) error {
 		return err
 	}
 
-	logger.Sugar().Debugf("用户头像更新请求已发送到storageService: user_id=%d, new_avatar=%s", payload.GetUserId(), payload.GetNewAvatarUrl())
+	logger.Sugar().Debugf("用户头像更新请求已发送到storageService: user_id=%d, new_avatar=%s", fromID, payload.GetNewAvatarUrl())
 	return nil
+}
+
+func prepareUpdateUserAvatarStorageRequest(fromID int64, payload *pb.UpdateUserAvatar, currentContainerID string) (*storage.RequestMessage, error) {
+	if err := validateProfileUpdateTarget(fromID, payload.GetUserId()); err != nil {
+		return nil, err
+	}
+	storeReq := newStorageRequest(currentContainerID, fromID)
+	storeReq.Payload = &storage.RequestMessage_UpdateUserAvatar{
+		UpdateUserAvatar: &storage.UpdateUserAvatar{
+			UserId:       fromID,
+			NewAvatarUrl: payload.GetNewAvatarUrl(),
+		},
+	}
+	return storeReq, nil
+}
+
+// validateProfileUpdateTarget lets clients omit user_id but never edit another
+// user's profile; the stored identity always comes from the session.
+func validateProfileUpdateTarget(fromID, requestedUserID int64) error {
+	if fromID <= 0 || requestedUserID != 0 && requestedUserID != fromID {
+		logger.Sugar().Warnf("安全拒绝修改其他用户资料: requester_user_id=%d requested_user_id=%d", fromID, requestedUserID)
+		return errProfileForbidden
+	}
+	return nil
+}
+
+var errProfileForbidden = errors.New("无权修改其他用户的资料")
+
+// profileUpdateResult tells the client why a forged profile update was dropped.
+func profileUpdateResult(err error) (dfRequestResult, error) {
+	if errors.Is(err, errProfileForbidden) {
+		return dfRequestResult{response: &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: err.Error()}}}}, nil
+	}
+	return dfRequestResult{}, err
 }

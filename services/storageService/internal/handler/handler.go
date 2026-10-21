@@ -594,9 +594,25 @@ func normalizeSyncPageSize(requested int32) int {
 	return int(requested)
 }
 
+// profileUpdateForbidden rejects profile writes whose target is not the requester,
+// so a forged envelope cannot edit someone else's name or avatar.
+func profileUpdateForbidden(req *storage.RequestMessage, userID int64) *storage.ResponseMessage {
+	if req.GetTargetUserId() > 0 && req.GetTargetUserId() == userID {
+		return nil
+	}
+	logger.Sugar().Warnf("拒绝修改其他用户资料: requester_id=%d user_id=%d", req.GetTargetUserId(), userID)
+	return &storage.ResponseMessage{
+		Result:       storage.StorageResult_FORBIDDEN,
+		TargetUserId: req.GetTargetUserId(),
+	}
+}
+
 // handleUpdateUserName 处理更新用户名请求
 func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserName, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
+	if resp := profileUpdateForbidden(req, update.GetUserId()); resp != nil {
+		return resp, nil
+	}
 
 	// 更新数据库
 	start := time.Now()
@@ -646,6 +662,9 @@ func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *stor
 // handleUpdateUserAvatar 处理更新用户头像请求
 func (h *StorageHandler) handleUpdateUserAvatarWithDB(database *gorm.DB, req *storage.RequestMessage, update *storage.UpdateUserAvatar, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
+	if resp := profileUpdateForbidden(req, update.GetUserId()); resp != nil {
+		return resp, nil
+	}
 
 	// 更新数据库
 	start := time.Now()

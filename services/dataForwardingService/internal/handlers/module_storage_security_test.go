@@ -2,6 +2,7 @@ package handlers
 
 import (
 	pb "Betterfly2/proto/data_forwarding"
+	"errors"
 	"testing"
 )
 
@@ -42,5 +43,47 @@ func TestSyncMessagesCanOnlyBeRequestedForAuthenticatedUser(t *testing.T) {
 		if !query.GetIncludeRecalledChanges() || query.GetRecallCursorTimestamp() != "2026-07-13T00:01:00Z" || query.GetRecallCursorMessageId() != 41 {
 			t.Fatalf("recall cursor lost: %+v", query)
 		}
+	}
+}
+
+func TestProfileUpdatesCanOnlyTargetAuthenticatedUser(t *testing.T) {
+	if req, err := prepareUpdateUserNameStorageRequest(1001, &pb.UpdateUserName{UserId: 2002, NewUserName: "x"}, "df-pod-1"); err == nil || req != nil {
+		t.Fatalf("requester A renamed user B: req=%+v err=%v", req, err)
+	}
+	if req, err := prepareUpdateUserAvatarStorageRequest(1001, &pb.UpdateUserAvatar{UserId: 2002, NewAvatarUrl: "x"}, "df-pod-1"); err == nil || req != nil {
+		t.Fatalf("requester A changed user B's avatar: req=%+v err=%v", req, err)
+	}
+
+	for _, target := range []int64{0, 1001} {
+		nameReq, err := prepareUpdateUserNameStorageRequest(1001, &pb.UpdateUserName{UserId: target, NewUserName: "alice"}, "df-pod-1")
+		if err != nil {
+			t.Fatalf("own rename with user_id %d was rejected: %v", target, err)
+		}
+		if nameReq.GetTargetUserId() != 1001 || nameReq.GetUpdateUserName().GetUserId() != 1001 || nameReq.GetUpdateUserName().GetNewUserName() != "alice" {
+			t.Fatalf("rename identity was not forced to authenticated user: %+v", nameReq)
+		}
+		avatarReq, err := prepareUpdateUserAvatarStorageRequest(1001, &pb.UpdateUserAvatar{UserId: target, NewAvatarUrl: "hash"}, "df-pod-1")
+		if err != nil {
+			t.Fatalf("own avatar update with user_id %d was rejected: %v", target, err)
+		}
+		if avatarReq.GetTargetUserId() != 1001 || avatarReq.GetUpdateUserAvatar().GetUserId() != 1001 || avatarReq.GetUpdateUserAvatar().GetNewAvatarUrl() != "hash" {
+			t.Fatalf("avatar identity was not forced to authenticated user: %+v", avatarReq)
+		}
+	}
+}
+
+func TestForgedProfileUpdateReturnsWarn(t *testing.T) {
+	_, err := prepareUpdateUserNameStorageRequest(1001, &pb.UpdateUserName{UserId: 2002}, "df-pod-1")
+	result, err := profileUpdateResult(err)
+	if err != nil {
+		t.Fatalf("forged update should be answered with a warning, got error %v", err)
+	}
+	if result.response.GetWarn().GetWarningMessage() != errProfileForbidden.Error() {
+		t.Fatalf("expected forbidden warning, got %+v", result.response)
+	}
+
+	other := errors.New("kafka unavailable")
+	if result, err := profileUpdateResult(other); !errors.Is(err, other) || result.response != nil {
+		t.Fatalf("non-authorization errors must pass through unchanged: result=%+v err=%v", result, err)
 	}
 }

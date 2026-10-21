@@ -10,6 +10,46 @@ import (
 
 // StoreFileMetadata 存储文件元数据
 func StoreFileMetadata(fileHash string, fileSize int64, storagePath string) error {
+	return storeFileMetadataWithDB(DB(), fileHash, fileSize, storagePath)
+}
+
+// StoreVerifiedFile 在同一事务中标记文件已校验并授权上传者，避免出现无主的已校验文件。
+func StoreVerifiedFile(fileHash string, fileSize int64, storagePath string, userID int64) error {
+	return StoreVerifiedFileWithDB(DB(), fileHash, fileSize, storagePath, userID)
+}
+
+func StoreVerifiedFileWithDB(database *gorm.DB, fileHash string, fileSize int64, storagePath string, userID int64) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := storeFileMetadataWithDB(tx, fileHash, fileSize, storagePath); err != nil {
+			return err
+		}
+		return GrantFileAccessWithDB(tx, fileHash, userID)
+	})
+}
+
+// GrantFileAccess 记录用户持有该文件；重复授权是幂等的。
+func GrantFileAccess(fileHash string, userID int64) error {
+	return GrantFileAccessWithDB(DB(), fileHash, userID)
+}
+
+func GrantFileAccessWithDB(database *gorm.DB, fileHash string, userID int64) error {
+	return database.Clauses(clause.OnConflict{DoNothing: true}).Create(&FileAccessGrant{
+		FileHash: fileHash, UserID: userID, CreatedAt: utils.NowTime(),
+	}).Error
+}
+
+// HasFileAccess 检查用户是否已证明持有该文件。
+func HasFileAccess(fileHash string, userID int64) (bool, error) {
+	return HasFileAccessWithDB(DB(), fileHash, userID)
+}
+
+func HasFileAccessWithDB(database *gorm.DB, fileHash string, userID int64) (bool, error) {
+	var count int64
+	err := database.Model(&FileAccessGrant{}).Where("file_hash = ? AND user_id = ?", fileHash, userID).Count(&count).Error
+	return count > 0, err
+}
+
+func storeFileMetadataWithDB(database *gorm.DB, fileHash string, fileSize int64, storagePath string) error {
 	nowTime := utils.NowTime()
 	fileMetadata := &FileMetadata{
 		FileHash:    fileHash,
@@ -19,7 +59,7 @@ func StoreFileMetadata(fileHash string, fileSize int64, storagePath string) erro
 		CreatedAt:   nowTime,
 		UpdatedAt:   nowTime,
 	}
-	return DB().Clauses(clause.OnConflict{
+	return database.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "file_hash"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"file_size":    fileSize,

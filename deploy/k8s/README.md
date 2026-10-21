@@ -85,15 +85,15 @@ Run the versioned database migration before applying or rolling business Pods:
 kubectl apply -f deploy/k8s/base/namespace.yaml
 kubectl apply -f deploy/k8s/base/configmap.yaml -f /tmp/betterfly2-secret.yaml
 kubectl apply -k deploy/k8s/migrations
-kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v10 --timeout=5m
+kubectl -n betterfly2 wait --for=condition=complete job/betterfly-db-migrate-v11 --timeout=5m
 kubectl apply -k deploy/k8s/base
 ```
 
-The migration image tag is tied to schema v10 (friend moments) and the Job is an Argo CD `PreSync`
-hook. Replace the tag with your registry digest in production. Do not add a
-completed migration Job back to the ordinary base apply path.
+The migration image tag is tied to schema v11 (file access grants) and the Job is an Argo CD
+`PreSync` hook. Replace the tag with your registry digest in production. Do not
+add a completed migration Job back to the ordinary base apply path.
 
-Moments is optional: apply `deploy/k8s/moments.yaml` after v10 succeeds, configure
+Moments is optional: apply `deploy/k8s/moments.yaml` after v11 succeeds, configure
 `betterfly2-moments` with the public HTTP origin and public S3 endpoint, and route
 `/moments` to `moments-service:8087`. See [Moments deployment](../../docs/MOMENTS.md).
 

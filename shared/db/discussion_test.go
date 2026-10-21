@@ -62,10 +62,10 @@ func TestDiscussionMigrationV9IdempotentAndRetryable(t *testing.T) {
 	database, mock := newInboxDatabase(t)
 	plan := migrationPlan()
 	pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7, 8})
-	if err != nil || len(pending) != 2 || pending[0].Version != 9 {
+	if err != nil || len(pending) != 3 || pending[0].Version != 9 {
 		t.Fatal(pending, err)
 	}
-	if pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7, 8, 9}); err != nil || len(pending) != 1 || pending[0].Version != 10 {
+	if pending, err := pendingMigrations(plan, []int{1, 2, 3, 4, 5, 6, 7, 8, 9}); err != nil || len(pending) != 2 || pending[0].Version != 10 {
 		t.Fatal(pending, err)
 	}
 	injected := errors.New("DDL interruption")

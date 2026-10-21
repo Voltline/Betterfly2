@@ -149,8 +149,8 @@ docker compose run --rm --no-deps db_migrate
 ./rebuild_docker_compose.sh --no-sudo df-all
 ```
 
-本功能最初使用 schema-v9 Job；当前活动 migration kustomization 使用 schema-v10 Job，先构建/发布固定镜像，
-等待 betterfly-db-migrate-v10 成功，再 rollout。所有副本升级后才能开放客户端入口。
+本功能最初使用 schema-v9 Job；当前活动 migration kustomization 使用 schema-v11 Job，先构建/发布固定镜像，
+等待 betterfly-db-migrate-v11 成功，再 rollout。所有副本升级后才能开放客户端入口。
 旧客户端新增字段默认0、仍可用原有聊天；不会展示讨论入口/引用卡片。
 混合版本仅保证旧功能，不保证新字段透传或讨论权限；不能提前启用讨论功能。
 回滚顺序先DF再业务服务，保留增量列。不要回滚到旧代码后继续暴露新讨论入口。

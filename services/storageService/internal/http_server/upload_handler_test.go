@@ -82,8 +82,29 @@ func (s *fakeObjectStore) delete(_ context.Context, key string) error {
 
 type fakeFileMetadata struct {
 	verified  map[string]int64
+	grants    map[string]bool
 	pending   []string
 	storeErrs []error
+}
+
+func grantKey(fileHash string, userID int64) string {
+	return fmt.Sprintf("%s:%d", fileHash, userID)
+}
+
+func (m *fakeFileMetadata) hasAccess(fileHash string, userID int64) (bool, error) {
+	return m.grants[grantKey(fileHash, userID)], nil
+}
+
+func (m *fakeFileMetadata) grant(fileHash string, userID int64) error {
+	m.grants[grantKey(fileHash, userID)] = true
+	return nil
+}
+
+func (m *fakeFileMetadata) storeVerified(fileHash string, fileSize int64, storagePath string, userID int64) error {
+	if err := m.store(fileHash, fileSize, storagePath); err != nil {
+		return err
+	}
+	return m.grant(fileHash, userID)
 }
 
 func (m *fakeFileMetadata) exists(fileHash string) (bool, error) {
@@ -111,20 +132,46 @@ func (m *fakeFileMetadata) store(fileHash string, fileSize int64, storagePath st
 	return nil
 }
 
+func (m *fakeFileMetadata) install(handler *UploadHandler) {
+	if m.verified == nil {
+		m.verified = map[string]int64{}
+	}
+	if m.grants == nil {
+		m.grants = map[string]bool{}
+	}
+	handler.fileExists = m.exists
+	handler.hasFileAccess = m.hasAccess
+	handler.grantFileAccess = m.grant
+	handler.upsertPendingFileMetadata = m.upsertPending
+	handler.storeFileMetadata = m.store
+	handler.storeVerifiedFile = m.storeVerified
+}
+
 func newTestUploadHandler(store *fakeObjectStore, metadata *fakeFileMetadata) *UploadHandler {
-	if metadata.verified == nil {
-		metadata.verified = map[string]int64{}
+	handler := &UploadHandler{
+		objectExists:   store.exists,
+		openObject:     store.open,
+		copyObject:     store.copy,
+		deleteObject:   store.delete,
+		verifyFileHash: rustfs.VerifyFileHash,
 	}
-	return &UploadHandler{
-		fileExists:                metadata.exists,
-		upsertPendingFileMetadata: metadata.upsertPending,
-		storeFileMetadata:         metadata.store,
-		objectExists:              store.exists,
-		openObject:                store.open,
-		copyObject:                store.copy,
-		deleteObject:              store.delete,
-		verifyFileHash:            rustfs.VerifyFileHash,
+	metadata.install(handler)
+	return handler
+}
+
+func requestUpload(t *testing.T, handler *UploadHandler, userID int64) (int, bool, string) {
+	t.Helper()
+	req := asUser(httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+payloadHash+`","file_size":7}`)), userID)
+	rec := httptest.NewRecorder()
+	handler.HandleUploadRequest(rec, req)
+	var resp struct {
+		Exists    bool   `json:"exists"`
+		UploadURL string `json:"upload_url"`
 	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Code, resp.Exists, resp.UploadURL
 }
 
 type storageVerifyResponse struct {
@@ -146,27 +193,30 @@ func verifyAs(t *testing.T, handler *UploadHandler, userID int64, fileHash strin
 	return rec.Code, response
 }
 
-func TestHandleUploadRequestReturnsExistsWithoutUploadURL(t *testing.T) {
-	metadata := &fakeFileMetadata{verified: map[string]int64{payloadHash: 7}}
+func TestHandleUploadRequestDeduplicatesOnlyForGrantedUser(t *testing.T) {
+	metadata := &fakeFileMetadata{
+		verified: map[string]int64{payloadHash: 7},
+		grants:   map[string]bool{grantKey(payloadHash, uploaderID): true},
+	}
 	handler := newTestUploadHandler(newFakeObjectStore(), metadata)
-	handler.getPresignedUploadURL = func(context.Context, string, time.Duration, string) (string, error) {
-		t.Fatal("verified files must not get an upload URL")
-		return "", nil
+	var signedKeys []string
+	handler.getPresignedUploadURL = func(_ context.Context, key string, _ time.Duration, _ string) (string, error) {
+		signedKeys = append(signedKeys, key)
+		return "https://example.com/upload", nil
 	}
 
-	req := asUser(httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(`{"file_hash":"`+payloadHash+`","file_size":7}`)), uploaderID)
-	rec := httptest.NewRecorder()
-	handler.HandleUploadRequest(rec, req)
-
-	var resp struct {
-		Exists    bool   `json:"exists"`
-		UploadURL string `json:"upload_url"`
+	if status, exists, url := requestUpload(t, handler, uploaderID); status != http.StatusOK || !exists || url != "" {
+		t.Fatalf("granted user should skip the upload: status=%d exists=%v url=%q", status, exists, url)
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-		t.Fatal(err)
+	// 只知道哈希的用户必须真正上传一次，不能凭哈希直接拿到已存在的文件。
+	if status, exists, url := requestUpload(t, handler, otherID); status != http.StatusOK || exists || url != "https://example.com/upload" {
+		t.Fatalf("ungranted user must prove possession: status=%d exists=%v url=%q", status, exists, url)
 	}
-	if rec.Code != http.StatusOK || !resp.Exists || resp.UploadURL != "" {
-		t.Fatalf("unexpected response: status=%d %+v", rec.Code, resp)
+	if len(signedKeys) != 1 || signedKeys[0] != rustfs.GetStagingPath(otherID, payloadHash) {
+		t.Fatalf("possession proof must target the requester's staging path, signed %v", signedKeys)
+	}
+	if len(metadata.pending) != 0 {
+		t.Fatalf("verified metadata must not be touched by a possession proof request: %v", metadata.pending)
 	}
 }
 
@@ -244,6 +294,9 @@ func TestVerifyPromotesStagedObjectToCanonicalPath(t *testing.T) {
 	if metadata.verified[payloadHash] != int64(len(payload)) {
 		t.Fatalf("unexpected verified metadata: %v", metadata.verified)
 	}
+	if !metadata.grants[grantKey(payloadHash, uploaderID)] || len(metadata.grants) != 1 {
+		t.Fatalf("only the uploader should be granted: %v", metadata.grants)
+	}
 }
 
 func TestVerifyMismatchOnlyDeletesRequesterStagingObject(t *testing.T) {
@@ -283,24 +336,77 @@ func TestVerifyCannotPromoteAnotherUsersStagedObject(t *testing.T) {
 	}
 }
 
-func TestVerifyNeverRewritesAlreadyVerifiedFile(t *testing.T) {
+func verifiedFileStore() (*fakeObjectStore, *fakeFileMetadata) {
 	store := newFakeObjectStore()
+	store.objects[rustfs.GetStoragePath(payloadHash)] = payload
+	return store, &fakeFileMetadata{
+		verified: map[string]int64{payloadHash: int64(len(payload))},
+		grants:   map[string]bool{grantKey(payloadHash, uploaderID): true},
+	}
+}
+
+func TestVerifyForgedPossessionProofNeverRewritesVerifiedFile(t *testing.T) {
+	store, metadata := verifiedFileStore()
 	staging := rustfs.GetStagingPath(otherID, payloadHash)
-	canonical := rustfs.GetStoragePath(payloadHash)
 	store.objects[staging] = "forged"
-	store.objects[canonical] = payload
-	metadata := &fakeFileMetadata{verified: map[string]int64{payloadHash: int64(len(payload))}}
 	handler := newTestUploadHandler(store, metadata)
 
 	status, resp := verifyAs(t, handler, otherID, payloadHash)
-	if status != http.StatusOK || !resp.Success {
-		t.Fatalf("verify of a verified file should be idempotent: status=%d %+v", status, resp)
+	if status != http.StatusOK || resp.Success || resp.ErrorMessage != "File hash mismatch" {
+		t.Fatalf("forged possession proof was accepted: status=%d %+v", status, resp)
 	}
-	if store.objects[canonical] != payload || len(store.copies) != 0 {
+	if store.objects[rustfs.GetStoragePath(payloadHash)] != payload || len(store.copies) != 0 {
 		t.Fatal("verified canonical object was rewritten")
 	}
 	if _, ok := store.objects[staging]; ok {
-		t.Fatal("requester's leftover staging object should be cleaned up")
+		t.Fatal("forged staging object should be cleaned up")
+	}
+	if metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("forged possession proof must not grant access")
+	}
+}
+
+func TestVerifyPossessionProofGrantsWithoutCopy(t *testing.T) {
+	store, metadata := verifiedFileStore()
+	staging := rustfs.GetStagingPath(otherID, payloadHash)
+	store.objects[staging] = payload
+	handler := newTestUploadHandler(store, metadata)
+
+	if status, resp := verifyAs(t, handler, otherID, payloadHash); status != http.StatusOK || !resp.Success {
+		t.Fatalf("matching possession proof was rejected: status=%d %+v", status, resp)
+	}
+	if !metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("matching possession proof should grant access")
+	}
+	if _, ok := store.objects[staging]; ok || len(store.copies) != 0 {
+		t.Fatalf("possession proof should only remove the staging object: copies=%v", store.copies)
+	}
+}
+
+func TestVerifyVerifiedFileWithoutGrantRequiresUpload(t *testing.T) {
+	store, metadata := verifiedFileStore()
+	handler := newTestUploadHandler(store, metadata)
+
+	status, resp := verifyAs(t, handler, otherID, payloadHash)
+	if status != http.StatusOK || resp.Success || resp.ErrorMessage != "File not found in storage" {
+		t.Fatalf("verify without a possession proof was accepted: status=%d %+v", status, resp)
+	}
+	if metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("verify without upload must not grant access")
+	}
+}
+
+func TestVerifyGrantedUserIsIdempotentAndCleansStaging(t *testing.T) {
+	store, metadata := verifiedFileStore()
+	staging := rustfs.GetStagingPath(uploaderID, payloadHash)
+	store.objects[staging] = "leftover"
+	handler := newTestUploadHandler(store, metadata)
+
+	if status, resp := verifyAs(t, handler, uploaderID, payloadHash); status != http.StatusOK || !resp.Success {
+		t.Fatalf("verify by a granted user should be idempotent: status=%d %+v", status, resp)
+	}
+	if _, ok := store.objects[staging]; ok || len(store.copies) != 0 {
+		t.Fatal("granted user's leftover staging object should be removed without copying")
 	}
 }
 
@@ -332,6 +438,9 @@ func TestVerifyChecksCanonicalObjectWithoutDeletingIt(t *testing.T) {
 	if metadata.verified[payloadHash] != int64(len(payload)) {
 		t.Fatalf("unexpected verified metadata: %v", metadata.verified)
 	}
+	if len(metadata.grants) != 0 {
+		t.Fatalf("canonical-only verification proves no possession and must not grant: %v", metadata.grants)
+	}
 
 	store = newFakeObjectStore()
 	store.objects[canonical] = "forged"
@@ -355,11 +464,20 @@ func TestVerifyCanRetryAfterMetadataFailure(t *testing.T) {
 	if status != http.StatusInternalServerError || resp.Success || resp.ErrorMessage != "Failed to save verified file metadata" {
 		t.Fatalf("metadata failure was not reported: status=%d %+v", status, resp)
 	}
+	if _, ok := store.objects[rustfs.GetStagingPath(uploaderID, payloadHash)]; !ok {
+		t.Fatal("staging object must survive a metadata failure so the retry can still grant the uploader")
+	}
 	if status, resp := verifyAs(t, handler, uploaderID, payloadHash); status != http.StatusOK || !resp.Success {
-		t.Fatalf("retry did not complete from the canonical object: status=%d %+v", status, resp)
+		t.Fatalf("retry did not complete: status=%d %+v", status, resp)
 	}
 	if metadata.verified[payloadHash] != int64(len(payload)) {
 		t.Fatalf("unexpected verified metadata: %v", metadata.verified)
+	}
+	if !metadata.grants[grantKey(payloadHash, uploaderID)] {
+		t.Fatal("retry should grant the uploader")
+	}
+	if _, ok := store.objects[rustfs.GetStagingPath(uploaderID, payloadHash)]; ok {
+		t.Fatal("staging object should be removed after a successful retry")
 	}
 }
 

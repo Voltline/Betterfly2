@@ -96,8 +96,8 @@ docker compose run --rm --no-deps db_migrate
 ```
 
 如果同时重新构建其他业务服务，新 shared 也要求 schema >=7，必须先迁移。
-配文最初使用 schema-v7 Job；当前 migrations kustomization 使用 schema-v10 Job，
-镜像 betterfly2/db-migrate:schema-v10 应替换为已发布固定 tag/digest。
+配文最初使用 schema-v7 Job；当前 migrations kustomization 使用 schema-v11 Job，
+镜像 betterfly2/db-migrate:schema-v11 应替换为已发布固定 tag/digest。
 先等待 Job 成功，再部署 Storage，最后全部 DF；Push wire 不变，可滚动升级。
 完成所有 Storage/DF 副本升级后再启用客户端配文入口。
 混合版本仍能解析旧/新 PB，但旧 Storage/DF 的字段转换可能丢弃 caption，
@@ -170,7 +170,7 @@ JWT 为占位符。频道 ID=9001，操作者=1001，message_id=7001。
 
 各受影响模块执行 go test ./...、go test -race ./...、go vet ./... 和 go build ./...。
 协议使用 make -C proto，生成物不手改。
-真实链路验收需要专用 Compose 已重建并完成当前 schema v10：
+真实链路验收需要专用 Compose 已重建并完成当前 schema v11：
 
 ```bash
 cd services/dataForwardingService

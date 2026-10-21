@@ -47,10 +47,7 @@ func rustfsIntegrationClient(t *testing.T) *rustfs.RustFSClient {
 
 func newRustFSUploadHandler(client *rustfs.RustFSClient, metadata *fakeFileMetadata) *UploadHandler {
 	handler := NewUploadHandler(client)
-	metadata.verified = map[string]int64{}
-	handler.fileExists = metadata.exists
-	handler.upsertPendingFileMetadata = metadata.upsertPending
-	handler.storeFileMetadata = metadata.store
+	metadata.install(handler)
 	return handler
 }
 
@@ -143,28 +140,38 @@ func TestRustFSStagedUploadFlow(t *testing.T) {
 		t.Fatalf("unexpected metadata: %v", metadata.verified)
 	}
 
-	// 已校验文件不能被另一位用户的伪造上传改写或删除。
-	forgedURL := requestUploadURLIgnoringExists(t, handler, otherID, payloadHash)
+	if !metadata.grants[grantKey(payloadHash, uploaderID)] {
+		t.Fatal("uploader was not granted after verify")
+	}
+
+	// 另一位用户只知道哈希：拿到的是自己的暂存URL，伪造内容既不能改写正式对象也拿不到授权。
+	forgedURL := requestUploadURL(t, handler, otherID, payloadHash, len(payload))
 	putObject(t, forgedURL, "forged")
-	if status, resp := verifyAs(t, handler, otherID, payloadHash); status != http.StatusOK || !resp.Success {
-		t.Fatalf("verify of an already verified file should be idempotent: status=%d %+v", status, resp)
+	if status, resp := verifyAs(t, handler, otherID, payloadHash); status != http.StatusOK || resp.Success || resp.ErrorMessage != "File hash mismatch" {
+		t.Fatalf("forged possession proof was accepted: status=%d %+v", status, resp)
 	}
 	if content, _ := readObject(t, client, canonical); content != payload {
 		t.Fatalf("verified canonical object was rewritten: %q", content)
 	}
-	if _, ok := readObject(t, client, rustfs.GetStagingPath(otherID, payloadHash)); ok {
+	otherStaging := rustfs.GetStagingPath(otherID, payloadHash)
+	if _, ok := readObject(t, client, otherStaging); ok {
 		t.Fatal("forged staging object was not cleaned up")
 	}
-}
-
-// requestUploadURLIgnoringExists 模拟攻击者绕过去重直接拿自己暂存路径的URL。
-func requestUploadURLIgnoringExists(t *testing.T, handler *UploadHandler, userID int64, fileHash string) string {
-	t.Helper()
-	url, err := handler.getPresignedUploadURL(context.Background(), rustfs.GetStagingPath(userID, fileHash), uploadURLTTL, "")
-	if err != nil {
-		t.Fatal(err)
+	if metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("forged possession proof granted access")
 	}
-	return url
+
+	// 真正持有文件的用户重新上传一次即可获得授权，正式对象保持不变。
+	putObject(t, requestUploadURL(t, handler, otherID, payloadHash, len(payload)), payload)
+	if status, resp := verifyAs(t, handler, otherID, payloadHash); status != http.StatusOK || !resp.Success {
+		t.Fatalf("matching possession proof was rejected: status=%d %+v", status, resp)
+	}
+	if !metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("matching possession proof did not grant access")
+	}
+	if _, ok := readObject(t, client, otherStaging); ok {
+		t.Fatal("possession proof staging object was not cleaned up")
+	}
 }
 
 func TestRustFSHashMismatchKeepsCanonicalObject(t *testing.T) {

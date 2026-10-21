@@ -135,6 +135,13 @@ type FileMetadata struct {
 	UpdatedAt   string `gorm:"type:varchar(25);comment:文件更新时间"`
 }
 
+// FileAccessGrant 记录用户已通过上传证明持有某个文件；表结构由 v11 迁移显式创建。
+type FileAccessGrant struct {
+	FileHash  string `gorm:"primaryKey;type:varchar(128)"`
+	UserID    int64  `gorm:"primaryKey"`
+	CreatedAt string `gorm:"type:varchar(35);not null"`
+}
+
 type ABExperiment struct {
 	ID              int64  `gorm:"primaryKey;autoIncrement:true;comment:实验ID"`
 	ExperimentKey   string `gorm:"uniqueIndex;type:varchar(100);comment:实验唯一key"`

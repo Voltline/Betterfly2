@@ -43,6 +43,7 @@ type ConnectionManager struct {
 	loggedInCount       int64
 	userLocks           *keyedLocker
 	beforeExternalLogin func(context.Context, string) error
+	publishKafkaKick    func(context.Context, []byte, string) error
 	sessionLeaseTTL     time.Duration
 	routeLeaseTTL       time.Duration
 }
@@ -119,12 +120,8 @@ func (cm *ConnectionManager) Login(ctx context.Context, connectionID, rawUserID 
 		return fmt.Errorf("读取现有会话失败: %w", err)
 	}
 	if exists && previous.ContainerID != "" && previous.OwnerToken != "" {
-		if err := dsm.PublishOwnedKickNotification(ctx, userID, previous.ContainerID, previous.OwnerToken); err != nil {
-			logger.Sugar().Warnw("发送旧会话踢出通知失败", "user_id", userID, "container_id", previous.ContainerID, "error", err)
-			kick := fmt.Sprintf("DELETE USER %s TARGET %s OWNER %s", userID, previous.ContainerID, previous.OwnerToken)
-			if kafkaErr := publisher.PublishRawMessageContext(ctx, []byte(kick), "user-kick-topic", nil); kafkaErr != nil {
-				return fmt.Errorf("发布旧会话踢出通知失败: redis=%v kafka=%w", err, kafkaErr)
-			}
+		if err := cm.kickPreviousSession(ctx, dsm, userID, previous); err != nil {
+			return err
 		}
 	}
 
@@ -210,6 +207,36 @@ func newOwnerToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(value), nil
+}
+
+// kickPreviousSession prefers Redis pub/sub and falls back to the old Pod's own
+// Kafka topic, which only that Pod consumes; the shared user-kick-topic would hand
+// the kick to an arbitrary DF Pod in the consumer group. The owner token fences
+// kicks that arrive late or are replayed after the Pod restarts.
+func (cm *ConnectionManager) kickPreviousSession(ctx context.Context, dsm *redisClient.DistributedSessionManager, userID string, previous redisClient.SessionData) error {
+	receivers, err := dsm.PublishOwnedKickNotification(ctx, userID, previous.ContainerID, previous.OwnerToken)
+	if err == nil && receivers > 0 {
+		return nil
+	}
+	logger.Sugar().Warnw("Redis旧会话踢出通知未送达，改用Kafka", "user_id", userID, "container_id", previous.ContainerID, "receivers", receivers, "error", err)
+	kick := fmt.Sprintf("DELETE USER %s TARGET %s OWNER %s", userID, previous.ContainerID, previous.OwnerToken)
+	publishKick := cm.publishKafkaKick
+	if publishKick == nil {
+		publishKick = func(ctx context.Context, payload []byte, topic string) error {
+			return publisher.PublishRawMessageContext(ctx, payload, topic, nil)
+		}
+	}
+	kafkaErr := publishKick(ctx, []byte(kick), previous.ContainerID)
+	if kafkaErr == nil {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("发布旧会话踢出通知失败: redis=%v kafka=%w", err, kafkaErr)
+	}
+	// No subscriber usually means the old Pod is gone. A surviving old connection
+	// still closes on its next lease refresh, so this best-effort kick must not block login.
+	logger.Sugar().Warnw("Kafka旧会话踢出通知发布失败", "user_id", userID, "container_id", previous.ContainerID, "error", kafkaErr)
+	return nil
 }
 
 func currentContainerID() string {

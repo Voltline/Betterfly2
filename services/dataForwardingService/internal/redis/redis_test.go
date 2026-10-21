@@ -215,7 +215,7 @@ func TestKickSubscriptionUsesLifecycleContextAndStopsOnClose(t *testing.T) {
 
 	deadline := time.Now().Add(time.Second)
 	for {
-		if err := dsm.PublishOwnedKickNotification(context.Background(), "42", "pod-lifecycle", "owner-42"); err != nil {
+		if _, err := dsm.PublishOwnedKickNotification(context.Background(), "42", "pod-lifecycle", "owner-42"); err != nil {
 			t.Fatal(err)
 		}
 		select {

@@ -128,10 +128,12 @@ func (dsm *DistributedSessionManager) RemoveOwnedSessionAndRoute(ctx context.Con
 	).Err()
 }
 
-func (dsm *DistributedSessionManager) PublishOwnedKickNotification(ctx context.Context, userID, targetContainerID, ownerToken string) error {
+// PublishOwnedKickNotification returns how many subscribers received the kick;
+// pub/sub drops messages silently when the target Pod is not subscribed.
+func (dsm *DistributedSessionManager) PublishOwnedKickNotification(ctx context.Context, userID, targetContainerID, ownerToken string) (int64, error) {
 	channel := "user_kick:" + targetContainerID
 	message := "KICK:" + userID + ":" + ownerToken
-	return Rdb.Publish(ctx, channel, message).Err()
+	return Rdb.Publish(ctx, channel, message).Result()
 }
 
 func (dsm *DistributedSessionManager) PublishKickNotification(ctx context.Context, userID, targetContainerID string) error {

@@ -26,7 +26,7 @@ func ConsumerRoutine() {
 		topic = "message-topic"
 	}
 
-	// 所有容器都需要监听踢出消息topic
+	// 兼容滚动升级期间旧版本Pod发布到共享topic的踢出消息；新版本直接发布到目标Pod的topic
 	kickTopic := "user-kick-topic"
 	broker := os.Getenv("KAFKA_BROKER")
 	if broker == "" {

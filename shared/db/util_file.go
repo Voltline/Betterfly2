@@ -30,8 +30,12 @@ func StoreFileMetadata(fileHash string, fileSize int64, storagePath string) erro
 	}).Create(fileMetadata).Error
 }
 
-// UpsertPendingFileMetadata 记录待验证文件元数据
+// UpsertPendingFileMetadata 记录待验证文件元数据；已校验的记录不会被降级为待验证。
 func UpsertPendingFileMetadata(fileHash string, fileSize int64, storagePath string) error {
+	return UpsertPendingFileMetadataWithDB(DB(), fileHash, fileSize, storagePath)
+}
+
+func UpsertPendingFileMetadataWithDB(database *gorm.DB, fileHash string, fileSize int64, storagePath string) error {
 	nowTime := utils.NowTime()
 	fileMetadata := &FileMetadata{
 		FileHash:    fileHash,
@@ -42,12 +46,14 @@ func UpsertPendingFileMetadata(fileHash string, fileSize int64, storagePath stri
 		UpdatedAt:   nowTime,
 	}
 
-	return DB().Clauses(clause.OnConflict{
+	return database.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "file_hash"}},
+		Where: clause.Where{Exprs: []clause.Expression{
+			clause.Eq{Column: clause.Column{Table: "file_metadata", Name: "is_verified"}, Value: false},
+		}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"file_size":    fileSize,
 			"storage_path": storagePath,
-			"is_verified":  false,
 			"updated_at":   nowTime,
 		}),
 	}).Create(fileMetadata).Error

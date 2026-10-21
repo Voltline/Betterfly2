@@ -4,8 +4,10 @@ import (
 	"Betterfly2/shared/logger"
 	"context"
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // RustFSClient RustFS客户端封装
@@ -134,36 +137,58 @@ func GetStoragePath(fileHash string) string {
 	return fmt.Sprintf("%s/%s", fileHash[:2], fileHash)
 }
 
-// DownloadFile 从RustFS下载文件
-func (c *RustFSClient) DownloadFile(ctx context.Context, fileHash string) (io.ReadCloser, error) {
-	storagePath := GetStoragePath(fileHash)
+// GetStagingPath 返回某个用户上传某个文件时使用的暂存路径。
+// 客户端只能拿到暂存路径的上传URL，正式路径只由服务端在哈希校验通过后复制写入。
+func GetStagingPath(userID int64, fileHash string) string {
+	return fmt.Sprintf("staging/%d/%s", userID, fileHash)
+}
 
+// OpenObject 读取对象内容，并返回读取时的ETag，供后续条件复制使用。
+func (c *RustFSClient) OpenObject(ctx context.Context, key string) (io.ReadCloser, string, error) {
 	resp, err := c.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucket),
-		Key:    aws.String(storagePath),
+		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to download file: %v", err)
+		return nil, "", fmt.Errorf("failed to download file: %v", err)
 	}
 
-	return resp.Body, nil
+	return resp.Body, aws.ToString(resp.ETag), nil
+}
+
+// CopyObject 在桶内复制对象；sourceETag 非空时要求源对象未被改写。
+func (c *RustFSClient) CopyObject(ctx context.Context, sourceKey, destinationKey, sourceETag string) (string, error) {
+	input := &s3.CopyObjectInput{
+		Bucket:     aws.String(c.bucket),
+		CopySource: aws.String(c.bucket + "/" + sourceKey),
+		Key:        aws.String(destinationKey),
+	}
+	if sourceETag != "" {
+		input.CopySourceIfMatch = aws.String(sourceETag)
+	}
+	resp, err := c.client.CopyObject(ctx, input)
+	if err != nil {
+		return "", fmt.Errorf("failed to copy object: %v", err)
+	}
+	if resp.CopyObjectResult == nil {
+		return "", nil
+	}
+	return aws.ToString(resp.CopyObjectResult.ETag), nil
 }
 
 // FileExists 检查文件是否存在
 func (c *RustFSClient) FileExists(ctx context.Context, fileHash string) (bool, error) {
-	storagePath := GetStoragePath(fileHash)
+	return c.ObjectExists(ctx, GetStoragePath(fileHash))
+}
 
+// ObjectExists 检查指定路径的对象是否存在
+func (c *RustFSClient) ObjectExists(ctx context.Context, key string) (bool, error) {
 	_, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(c.bucket),
-		Key:    aws.String(storagePath),
+		Key:    aws.String(key),
 	})
 	if err != nil {
-		var nsk *types.NotFound
-		if err, ok := err.(interface{ As(interface{}) bool }); ok && err.As(&nsk) {
-			return false, nil
-		}
-		// 检查是否是NoSuchKey错误
-		if err.Error() == "NotFound" {
+		if isObjectNotFound(err) {
 			return false, nil
 		}
 		return false, err
@@ -171,13 +196,19 @@ func (c *RustFSClient) FileExists(ctx context.Context, fileHash string) (bool, e
 	return true, nil
 }
 
-// GetPresignedUploadURL 获取预签名上传URL
-func (c *RustFSClient) GetPresignedUploadURL(ctx context.Context, fileHash string, expiresIn time.Duration) (string, error) {
-	return c.GetPresignedUploadURLForEndpoint(ctx, fileHash, expiresIn, "")
+// isObjectNotFound 识别 SDK 包装后的 404；HeadObject 没有响应体，只能依赖类型或状态码。
+func isObjectNotFound(err error) bool {
+	var notFound *types.NotFound
+	var noSuchKey *types.NoSuchKey
+	if errors.As(err, &notFound) || errors.As(err, &noSuchKey) {
+		return true
+	}
+	var responseErr *smithyhttp.ResponseError
+	return errors.As(err, &responseErr) && responseErr.HTTPStatusCode() == http.StatusNotFound
 }
 
-func (c *RustFSClient) GetPresignedUploadURLForEndpoint(ctx context.Context, fileHash string, expiresIn time.Duration, externalEndpoint string) (string, error) {
-	storagePath := GetStoragePath(fileHash)
+// GetPresignedUploadURLForKey 为指定对象路径生成预签名上传URL
+func (c *RustFSClient) GetPresignedUploadURLForKey(ctx context.Context, storagePath string, expiresIn time.Duration, externalEndpoint string) (string, error) {
 	presignClient, endpoint := c.presignClientForEndpoint(externalEndpoint)
 
 	putObjectInput := s3.PutObjectInput{
@@ -269,10 +300,8 @@ func VerifyFileHash(reader io.Reader, expectedHash string) (bool, error) {
 	return actualHash == expectedHash, nil
 }
 
-// DeleteFile 删除文件
-func (c *RustFSClient) DeleteFile(ctx context.Context, fileHash string) error {
-	storagePath := GetStoragePath(fileHash)
-
+// DeleteObject 删除指定路径的对象
+func (c *RustFSClient) DeleteObject(ctx context.Context, storagePath string) error {
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(storagePath),
@@ -281,6 +310,6 @@ func (c *RustFSClient) DeleteFile(ctx context.Context, fileHash string) error {
 		return fmt.Errorf("failed to delete file: %v", err)
 	}
 
-	logger.Sugar().Debugf("File deleted successfully: hash=%s, path=%s", fileHash, storagePath)
+	logger.Sugar().Debugf("Object deleted successfully: path=%s", storagePath)
 	return nil
 }

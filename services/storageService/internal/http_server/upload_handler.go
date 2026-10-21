@@ -8,24 +8,30 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 	"storageService/internal/rustfs"
 )
 
+// uploadURLTTL 限制上传URL的有效期；URL只能写入请求者自己的暂存路径。
+const uploadURLTTL = 15 * time.Minute
+
 // UploadHandler 处理文件上传请求
+//
+// 客户端只拿到 staging/<user_id>/<hash> 的上传URL。校验时服务端读取暂存对象计算哈希，
+// 通过后再在桶内复制到正式路径 <hash[:2]>/<hash>，因此任何人都无法直接改写正式对象，
+// 哈希不匹配时也只会删除请求者自己的暂存对象。
 type UploadHandler struct {
 	fileExists                func(string) (bool, error)
 	upsertPendingFileMetadata func(string, int64, string) error
-	deleteFileMetadata        func(string) error
-	updateFileMetadata        func(string, int64, string) error
 	storeFileMetadata         func(string, int64, string) error
-	fileExistsInStorage       func(context.Context, string) (bool, error)
-	downloadFile              func(context.Context, string) (io.ReadCloser, error)
-	deleteFile                func(context.Context, string) error
-	getPresignedUploadURL     func(context.Context, string, time.Duration) (string, error)
-	getPresignedUploadURLFor  func(context.Context, string, time.Duration, string) (string, error)
+	objectExists              func(context.Context, string) (bool, error)
+	openObject                func(context.Context, string) (io.ReadCloser, string, error)
+	copyObject                func(context.Context, string, string, string) (string, error)
+	deleteObject              func(context.Context, string) error
+	getPresignedUploadURL     func(context.Context, string, time.Duration, string) (string, error)
 	verifyFileHash            func(io.Reader, string) (bool, error)
 }
 
@@ -45,14 +51,12 @@ func NewUploadHandler(rustfsClient *rustfs.RustFSClient) *UploadHandler {
 	return &UploadHandler{
 		fileExists:                db.FileExists,
 		upsertPendingFileMetadata: db.UpsertPendingFileMetadata,
-		deleteFileMetadata:        db.DeleteFileMetadata,
-		updateFileMetadata:        db.UpdateFileMetadata,
 		storeFileMetadata:         db.StoreFileMetadata,
-		fileExistsInStorage:       rustfsClient.FileExists,
-		downloadFile:              rustfsClient.DownloadFile,
-		deleteFile:                rustfsClient.DeleteFile,
-		getPresignedUploadURL:     rustfsClient.GetPresignedUploadURL,
-		getPresignedUploadURLFor:  rustfsClient.GetPresignedUploadURLForEndpoint,
+		objectExists:              rustfsClient.ObjectExists,
+		openObject:                rustfsClient.OpenObject,
+		copyObject:                rustfsClient.CopyObject,
+		deleteObject:              rustfsClient.DeleteObject,
+		getPresignedUploadURL:     rustfsClient.GetPresignedUploadURLForKey,
 		verifyFileHash:            rustfs.VerifyFileHash,
 	}
 }
@@ -60,6 +64,12 @@ func NewUploadHandler(rustfsClient *rustfs.RustFSClient) *UploadHandler {
 // HandleUploadRequest 处理上传请求（第一阶段：获取上传URL）
 func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Request) {
 	sugar := logger.Sugar()
+
+	userID, ok := authenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	// 解析请求
 	var req storage.UploadFileRequest
@@ -93,9 +103,7 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	sugar.Debugf("收到上传请求: file_hash=%s, file_size=%d", fileHash, fileSize)
-
-	storagePath := rustfs.GetStoragePath(fileHash)
+	sugar.Debugf("收到上传请求: user_id=%d, file_hash=%s, file_size=%d", userID, fileHash, fileSize)
 
 	// 检查文件是否已存在
 	exists, err := h.fileExists(fileHash)
@@ -116,16 +124,14 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 记录待验证状态，确保上传完成前后元数据状态可追踪。
-	if err := h.upsertPendingFileMetadata(fileHash, fileSize, storagePath); err != nil {
+	if err := h.upsertPendingFileMetadata(fileHash, fileSize, rustfs.GetStoragePath(fileHash)); err != nil {
 		sugar.Errorf("记录待验证文件元数据失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// 生成预签名上传URL
-	ctx := r.Context()
-	expiresIn := 1 * time.Hour // URL有效期1小时
-	uploadURL, err := h.getUploadURL(ctx, r, fileHash, expiresIn)
+	// 生成指向请求者暂存路径的预签名上传URL
+	uploadURL, err := h.getPresignedUploadURL(r.Context(), rustfs.GetStagingPath(userID, fileHash), uploadURLTTL, resolveRustFSExternalEndpoint(r))
 	if err != nil {
 		sugar.Errorf("生成预签名上传URL失败: %v", err)
 		http.Error(w, "Failed to generate upload URL", http.StatusInternalServerError)
@@ -135,23 +141,22 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 	resp := &storage.UploadFileResponse{
 		Exists:    false,
 		UploadUrl: uploadURL,
-		ExpiresIn: int64(expiresIn.Seconds()),
+		ExpiresIn: int64(uploadURLTTL.Seconds()),
 	}
 
 	h.sendResponse(w, resp)
-	sugar.Debugf("生成上传URL成功: file_hash=%s", fileHash)
-}
-
-func (h *UploadHandler) getUploadURL(ctx context.Context, r *http.Request, fileHash string, expiresIn time.Duration) (string, error) {
-	if h.getPresignedUploadURLFor != nil {
-		return h.getPresignedUploadURLFor(ctx, fileHash, expiresIn, resolveRustFSExternalEndpoint(r))
-	}
-	return h.getPresignedUploadURL(ctx, fileHash, expiresIn)
+	sugar.Debugf("生成上传URL成功: user_id=%d, file_hash=%s", userID, fileHash)
 }
 
 // HandleVerifyUpload 处理上传验证请求（第二阶段：验证上传的文件）
 func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Request) {
 	sugar := logger.Sugar()
+
+	userID, ok := authenticatedUserID(r)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	// 解析请求
 	var req storage.VerifyUploadRequest
@@ -178,87 +183,162 @@ func (h *UploadHandler) HandleVerifyUpload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	sugar.Debugf("收到上传验证请求: file_hash=%s", fileHash)
+	sugar.Debugf("收到上传验证请求: user_id=%d, file_hash=%s", userID, fileHash)
 
-	// 检查文件是否存在于RustFS
 	ctx := r.Context()
-	exists, err := h.fileExistsInStorage(ctx, fileHash)
+	stagingPath := rustfs.GetStagingPath(userID, fileHash)
+	storagePath := rustfs.GetStoragePath(fileHash)
+
+	verified, err := h.fileExists(fileHash)
 	if err != nil {
-		sugar.Errorf("检查文件是否存在失败: %v", err)
+		sugar.Errorf("查询文件是否存在失败: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if verified {
+		// 已有人完成校验：正式对象不再改写，只清理请求者自己的暂存对象。
+		h.removeStagingObject(ctx, stagingPath)
+		h.sendResponse(w, &storage.VerifyUploadResponse{Success: true})
+		return
+	}
+
+	staged, err := h.objectExists(ctx, stagingPath)
+	if err != nil {
+		sugar.Errorf("检查暂存文件是否存在失败: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if !exists {
-		_ = h.deleteFileMetadata(fileHash)
-		resp := &storage.VerifyUploadResponse{
-			Success:      false,
-			ErrorMessage: "File not found in storage",
+	var fileSize int64
+	if staged {
+		size, result := h.promoteStagedObject(ctx, stagingPath, storagePath, fileHash)
+		if result != nil {
+			h.writeVerifyFailure(w, result)
+			return
 		}
-		h.sendResponse(w, resp)
-		return
-	}
-
-	// 下载文件并验证哈希
-	fileReader, err := h.downloadFile(ctx, fileHash)
-	if err != nil {
-		sugar.Errorf("下载文件失败: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-	defer fileReader.Close()
-
-	// 验证时流式读取对象，避免大文件整体进入内存。
-	counter := &countingReader{reader: fileReader}
-	valid, err := h.verifyFileHash(counter, fileHash)
-	if err != nil {
-		sugar.Errorf("验证文件哈希失败: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	if !valid {
-		// 哈希不匹配，删除文件
-		_ = h.deleteFile(ctx, fileHash)
-		_ = h.deleteFileMetadata(fileHash)
-		resp := &storage.VerifyUploadResponse{
-			Success:      false,
-			ErrorMessage: "File hash mismatch",
+		fileSize = size
+	} else {
+		// 没有暂存对象时，正式对象可能来自元数据写入失败后的重试或升级前签发的旧URL；
+		// 只校验不删除，避免误删其他用户已上传的内容。
+		size, result := h.checkCanonicalObject(ctx, storagePath, fileHash)
+		if result != nil {
+			h.writeVerifyFailure(w, result)
+			return
 		}
-		h.sendResponse(w, resp)
-		sugar.Warnf("文件哈希不匹配，已删除: file_hash=%s", fileHash)
-		return
+		fileSize = size
 	}
 
 	// 保存文件元数据到数据库
-	fileSize := counter.bytes
-	storagePath := rustfs.GetStoragePath(fileHash)
-	err = h.updateFileMetadata(fileHash, fileSize, storagePath)
+	if err := h.storeFileMetadata(fileHash, fileSize, storagePath); err != nil {
+		sugar.Errorw("上传对象校验成功但元数据保存失败", "file_hash", fileHash, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		h.sendResponse(w, &storage.VerifyUploadResponse{
+			Success:      false,
+			ErrorMessage: "Failed to save verified file metadata",
+		})
+		return
+	}
+
+	h.sendResponse(w, &storage.VerifyUploadResponse{Success: true})
+	sugar.Infof("文件上传验证成功: user_id=%d, file_hash=%s, file_size=%d", userID, fileHash, fileSize)
+}
+
+// verifyFailure 描述一次未通过的校验；status 为 0 表示业务失败（HTTP 200 + success=false）。
+type verifyFailure struct {
+	status  int
+	message string
+}
+
+var errVerifyInternal = &verifyFailure{status: http.StatusInternalServerError, message: "Internal server error"}
+
+// promoteStagedObject 校验暂存对象并复制到正式路径，返回文件大小。
+func (h *UploadHandler) promoteStagedObject(ctx context.Context, stagingPath, storagePath, fileHash string) (int64, *verifyFailure) {
+	sugar := logger.Sugar()
+
+	size, etag, valid, err := h.hashObject(ctx, stagingPath, fileHash)
 	if err != nil {
-		// 如果待验证记录不存在，回退为创建已验证记录，兼容旧流程。
-		fallbackErr := h.storeFileMetadata(fileHash, fileSize, storagePath)
-		if fallbackErr != nil {
-			sugar.Errorw("上传对象校验成功但元数据保存失败",
-				"file_hash", fileHash,
-				"update_error", err,
-				"fallback_error", fallbackErr,
-			)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			h.sendResponse(w, &storage.VerifyUploadResponse{
-				Success:      false,
-				ErrorMessage: "Failed to save verified file metadata",
-			})
-			return
-		}
+		sugar.Errorf("校验暂存文件失败: %v", err)
+		return 0, errVerifyInternal
+	}
+	if !valid {
+		h.removeStagingObject(ctx, stagingPath)
+		sugar.Warnf("暂存文件哈希不匹配，已删除暂存对象: path=%s", stagingPath)
+		return 0, &verifyFailure{message: "File hash mismatch"}
 	}
 
-	resp := &storage.VerifyUploadResponse{
-		Success: true,
+	// 条件复制保证复制的仍是刚才校验过的内容，防止校验期间暂存对象被再次改写。
+	copiedETag, err := h.copyObject(ctx, stagingPath, storagePath, etag)
+	if err != nil {
+		sugar.Errorf("复制暂存文件到正式路径失败: %v", err)
+		return 0, errVerifyInternal
+	}
+	if etag != "" && copiedETag != "" && normalizeETag(etag) != normalizeETag(copiedETag) {
+		sugar.Warnf("暂存文件在校验期间被改写: path=%s", stagingPath)
+		return 0, &verifyFailure{message: "File changed during verification"}
 	}
 
-	h.sendResponse(w, resp)
-	sugar.Infof("文件上传验证成功: file_hash=%s, file_size=%d", fileHash, fileSize)
+	h.removeStagingObject(ctx, stagingPath)
+	return size, nil
+}
+
+// checkCanonicalObject 校验已在正式路径中的对象，不匹配时只报告失败。
+func (h *UploadHandler) checkCanonicalObject(ctx context.Context, storagePath, fileHash string) (int64, *verifyFailure) {
+	sugar := logger.Sugar()
+
+	exists, err := h.objectExists(ctx, storagePath)
+	if err != nil {
+		sugar.Errorf("检查文件是否存在失败: %v", err)
+		return 0, errVerifyInternal
+	}
+	if !exists {
+		return 0, &verifyFailure{message: "File not found in storage"}
+	}
+
+	size, _, valid, err := h.hashObject(ctx, storagePath, fileHash)
+	if err != nil {
+		sugar.Errorf("校验文件失败: %v", err)
+		return 0, errVerifyInternal
+	}
+	if !valid {
+		sugar.Warnf("正式路径文件哈希不匹配: file_hash=%s", fileHash)
+		return 0, &verifyFailure{message: "File hash mismatch"}
+	}
+	return size, nil
+}
+
+// hashObject 流式读取对象计算哈希，避免大文件整体进入内存。
+func (h *UploadHandler) hashObject(ctx context.Context, key, fileHash string) (int64, string, bool, error) {
+	reader, etag, err := h.openObject(ctx, key)
+	if err != nil {
+		return 0, "", false, err
+	}
+	defer reader.Close()
+
+	counter := &countingReader{reader: reader}
+	valid, err := h.verifyFileHash(counter, fileHash)
+	if err != nil {
+		return 0, "", false, err
+	}
+	return counter.bytes, etag, valid, nil
+}
+
+func (h *UploadHandler) removeStagingObject(ctx context.Context, stagingPath string) {
+	if err := h.deleteObject(ctx, stagingPath); err != nil {
+		logger.Sugar().Warnf("删除暂存对象失败: path=%s err=%v", stagingPath, err)
+	}
+}
+
+func (h *UploadHandler) writeVerifyFailure(w http.ResponseWriter, failure *verifyFailure) {
+	if failure.status != 0 {
+		http.Error(w, failure.message, failure.status)
+		return
+	}
+	h.sendResponse(w, &storage.VerifyUploadResponse{Success: false, ErrorMessage: failure.message})
+}
+
+func normalizeETag(etag string) string {
+	return strings.Trim(etag, `"`)
 }
 
 // sendResponse 发送响应（支持JSON和Protobuf）

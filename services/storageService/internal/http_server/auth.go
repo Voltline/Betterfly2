@@ -2,6 +2,7 @@ package http_server
 
 import (
 	"Betterfly2/shared/logger"
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -81,6 +82,18 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 		sugar.Debugf("JWT验证成功: user_id=%d, account=%s", checkJWTRsp.UserId, checkJWTRsp.Account)
 
 		// 继续处理请求
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(withAuthenticatedUserID(r.Context(), userID)))
 	})
+}
+
+type authenticatedUserIDKey struct{}
+
+func withAuthenticatedUserID(ctx context.Context, userID int64) context.Context {
+	return context.WithValue(ctx, authenticatedUserIDKey{}, userID)
+}
+
+// authenticatedUserID 返回中间件校验过JWT的用户ID；未经过中间件时返回false。
+func authenticatedUserID(r *http.Request) (int64, bool) {
+	userID, ok := r.Context().Value(authenticatedUserIDKey{}).(int64)
+	return userID, ok && userID > 0
 }

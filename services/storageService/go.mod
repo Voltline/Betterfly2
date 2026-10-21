@@ -13,6 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.32.6
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.41
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.70.0
+	github.com/aws/smithy-go v1.22.1
 	github.com/dgraph-io/ristretto v0.2.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/prometheus/client_golang v1.21.0
@@ -32,7 +33,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.4.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.6 // indirect
-	github.com/aws/smithy-go v1.22.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect

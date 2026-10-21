@@ -120,3 +120,17 @@ func withAuthClient(t *testing.T, client auth.AuthServiceClient) {
 	getAuthClient = func() (auth.AuthServiceClient, error) { return client, nil }
 	t.Cleanup(func() { getAuthClient = original })
 }
+
+func TestSignupHandlerMapsPasswordLengthResults(t *testing.T) {
+	cases := map[auth.AuthResult]pb.SignupResult{
+		auth.AuthResult_PASSWORD_TOO_SHORT: pb.SignupResult_PASSWORD_TOO_SHORT,
+		auth.AuthResult_PASSWORD_TOO_LONG:  pb.SignupResult_PASSWORD_TOO_LONG,
+	}
+	for authResult, want := range cases {
+		withAuthClient(t, authClientStub{signupResponse: &auth.SignupRsp{Result: authResult, Account: "alice"}})
+		response, err := HandleSignupMessage(&pb.RequestMessage{Payload: &pb.RequestMessage_Signup{Signup: &pb.SignupReq{Account: "alice", Password: "x"}}})
+		if err != nil || response.GetSignup().GetResult() != want {
+			t.Fatalf("auth result %s: got response=%+v err=%v, want %s", authResult, response, err, want)
+		}
+	}
+}

@@ -131,6 +131,9 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 		result = pb.AuthResult_PASSWORD_EMPTY
 		goto RETURN
 	}
+	if result = validateNewPassword([]byte(password)); result != pb.AuthResult_OK {
+		goto RETURN
+	}
 
 	user, err = db.GetUserByAccount(account)
 	if err != nil {
@@ -222,11 +225,8 @@ func (*AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq)
 	}
 
 	newPassword := []byte(req.GetNewPassword())
-	if len(newPassword) < 8 {
-		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_TOO_SHORT}, nil
-	}
-	if len(newPassword) > 72 {
-		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_TOO_LONG}, nil
+	if result := validateNewPassword(newPassword); result != pb.AuthResult_OK {
+		return &pb.ChangePasswordRsp{Result: result}, nil
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.GetOldPassword())) != nil {
@@ -283,6 +283,23 @@ func (*AuthService) RevokeSessions(_ context.Context, req *pb.RevokeSessionsReq)
 	}
 	logger.Sugar().Infow("用户会话已全部撤销", "user_id", user.ID)
 	return &pb.RevokeSessionsRsp{Result: pb.AuthResult_OK}, nil
+}
+
+const (
+	minPasswordBytes = 8
+	maxPasswordBytes = 72 // bcrypt rejects longer input
+)
+
+// validateNewPassword applies the same rules to signup and password changes.
+// Login does not call it, so accounts created before the rule still sign in.
+func validateNewPassword(password []byte) pb.AuthResult {
+	if len(password) < minPasswordBytes {
+		return pb.AuthResult_PASSWORD_TOO_SHORT
+	}
+	if len(password) > maxPasswordBytes {
+		return pb.AuthResult_PASSWORD_TOO_LONG
+	}
+	return pb.AuthResult_OK
 }
 
 func authenticateUser(userID int64, jwt string) (*db.User, pb.AuthResult) {

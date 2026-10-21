@@ -26,6 +26,8 @@ func TestSignupRejectsInvalidCredentialsBeforeDatabaseAccess(t *testing.T) {
 		{name: "empty account", req: &pb.SignupReq{Password: "password"}, want: pb.AuthResult_ACCOUNT_EMPTY},
 		{name: "account too long", req: &pb.SignupReq{Account: strings.Repeat("a", db.MaxNameLen+1), Password: "password"}, want: pb.AuthResult_ACCOUNT_TOO_LONG},
 		{name: "empty password", req: &pb.SignupReq{Account: "alice"}, want: pb.AuthResult_PASSWORD_EMPTY},
+		{name: "password too short", req: &pb.SignupReq{Account: "alice", Password: "1234567"}, want: pb.AuthResult_PASSWORD_TOO_SHORT},
+		{name: "password too long", req: &pb.SignupReq{Account: "alice", Password: strings.Repeat("x", 73)}, want: pb.AuthResult_PASSWORD_TOO_LONG},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

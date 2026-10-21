@@ -16,6 +16,8 @@ enum SignupResult {
   ACCOUNT_EMPTY = 2;
   PASSWORD_EMPTY = 3;
   ACCOUNT_TOO_LONG = 4;
+  PASSWORD_TOO_SHORT = 5; // 少于 8 字节
+  PASSWORD_TOO_LONG = 6;  // 超过 72 字节（bcrypt 上限）
   SIGNUP_SVR_ERROR = 10;
 }
 

@@ -181,6 +181,10 @@ func HandleSignupMessage(message *pb.RequestMessage) (*pb.ResponseMessage, error
 		signupRsp.Result = pb.SignupResult_PASSWORD_EMPTY
 	case auth.AuthResult_ACCOUNT_TOO_LONG:
 		signupRsp.Result = pb.SignupResult_ACCOUNT_TOO_LONG
+	case auth.AuthResult_PASSWORD_TOO_SHORT:
+		signupRsp.Result = pb.SignupResult_PASSWORD_TOO_SHORT
+	case auth.AuthResult_PASSWORD_TOO_LONG:
+		signupRsp.Result = pb.SignupResult_PASSWORD_TOO_LONG
 	default:
 		signupRsp.Result = pb.SignupResult_SIGNUP_SVR_ERROR
 	}

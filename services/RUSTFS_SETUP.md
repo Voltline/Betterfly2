@@ -76,7 +76,7 @@ RUSTFS_EXTERNAL_PORT=9000
 docker compose --profile storage ps
 docker logs rustfs
 docker logs storageService
-curl http://localhost:9000/minio/health/live
+curl http://localhost:9000/health
 curl http://localhost:8081/health
 curl http://localhost:8081/ready
 ```

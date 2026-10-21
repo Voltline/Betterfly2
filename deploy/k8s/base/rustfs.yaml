@@ -61,7 +61,7 @@ spec:
               mountPath: /data
           readinessProbe:
             httpGet:
-              path: /minio/health/live
+              path: /health
               port: s3
             initialDelaySeconds: 30
             periodSeconds: 15

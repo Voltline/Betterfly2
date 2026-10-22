@@ -5,7 +5,6 @@ import (
 	"errors"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -47,7 +46,7 @@ func NormalizeChannelUsername(value string) (string, error) {
 }
 
 func ValidChannelText(value string, maximum int) bool {
-	return utf8.ValidString(value) && utf8.RuneCountInString(value) <= maximum
+	return utils.ValidText(value, maximum)
 }
 
 func ChannelPageSize(size int32) (int, error) {

@@ -8,8 +8,10 @@ import (
 	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
+	"Betterfly2/shared/utils"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -187,7 +189,7 @@ func (h *FriendHandler) handleRemoveDirectFriendWithDB(database *gorm.DB, req *f
 }
 
 func (h *FriendHandler) handleUpdateFriendAliasWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateFriendAlias) (*friend.ResponseMessage, error) {
-	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 {
+	if payload.GetUserId() <= 0 || payload.GetFriendId() <= 0 || !utils.ValidText(payload.GetAlias(), db.MaxNameLen) {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
@@ -267,7 +269,8 @@ func (h *FriendHandler) handleUpdateFriendNotifyWithDB(database *gorm.DB, req *f
 }
 
 func (h *FriendHandler) handleCreateGroupWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.CreateGroup) (*friend.ResponseMessage, error) {
-	if payload.GetOwnerUserId() <= 0 || payload.GetGroupId() <= 0 || payload.GetGroupName() == "" {
+	groupName := strings.TrimSpace(payload.GetGroupName())
+	if payload.GetOwnerUserId() <= 0 || payload.GetGroupId() <= 0 || !validGroupName(groupName) {
 		return &friend.ResponseMessage{
 			Result:       friend.FriendResult_INVALID_ARGUMENT,
 			TargetUserId: req.TargetUserId,
@@ -300,7 +303,7 @@ func (h *FriendHandler) handleCreateGroupWithDB(database *gorm.DB, req *friend.R
 		}, nil
 	}
 
-	alreadyExists, updateTime, err := db.CreateGroupWithOwnerWithDB(database, payload.GetOwnerUserId(), payload.GetGroupId(), payload.GetGroupName())
+	alreadyExists, updateTime, err := db.CreateGroupWithOwnerWithDB(database, payload.GetOwnerUserId(), payload.GetGroupId(), groupName)
 	if err != nil {
 		return nil, err
 	}

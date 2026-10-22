@@ -218,7 +218,8 @@ func mutationCacheKeys(req *storage.RequestMessage) []string {
 // handleStoreNewMessage 处理存储新消息请求
 func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *storage.RequestMessage, msg *storage.StoreNewMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {
 	sugar := logger.Sugar()
-	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil {
+	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil ||
+		!db.ValidMessageFields(msg.GetContent(), msg.GetMessageType(), msg.GetRealFileName(), msg.GetClientMessageId()) {
 		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
 	}
 	if msg.GetReplyToMessageId() < 0 || msg.GetDiscussionRootMessageId() < 0 || (msg.GetDiscussionRootMessageId() > 0 && !msg.GetIsGroup()) {

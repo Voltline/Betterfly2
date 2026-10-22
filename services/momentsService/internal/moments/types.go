@@ -1,6 +1,7 @@
 package moments
 
 import (
+	"Betterfly2/shared/utils"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -9,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 var (
@@ -113,7 +113,7 @@ func validKey(value string) bool {
 	return true
 }
 func validText(value string, points, bytes int) bool {
-	return utf8.ValidString(value) && len(value) <= bytes && utf8.RuneCountInString(value) <= points
+	return len(value) <= bytes && utils.ValidText(value, points)
 }
 func validatePost(input CreatePost) ([]int64, error) {
 	if !validKey(input.ClientPostID) || !validText(input.Content, 4096, 16<<10) || input.Visibility != "friends" && input.Visibility != "private" || len(input.AssetIDs) > 9 || strings.TrimSpace(input.Content) == "" && len(input.AssetIDs) == 0 {

@@ -3,9 +3,9 @@ package handler
 import (
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/utils"
 	"errors"
 	"gorm.io/gorm"
-	"unicode/utf8"
 )
 
 func (h *FriendHandler) handleAddDirectFriendWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.AddDirectFriend) (*friend.ResponseMessage, error) {
@@ -204,7 +204,7 @@ func decisionStatus(decision friend.RequestDecision) (string, bool) {
 }
 
 func validVerificationMessage(message string) bool {
-	return utf8.ValidString(message) && utf8.RuneCountInString(message) <= 255
+	return utils.ValidText(message, 255)
 }
 
 func relationshipDBError(req *friend.RequestMessage, operation string, err error) (*friend.ResponseMessage, error) {

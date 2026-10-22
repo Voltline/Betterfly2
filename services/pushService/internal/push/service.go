@@ -123,8 +123,8 @@ func validToken(token string) bool {
 }
 
 func validDeviceID(deviceID string) bool {
-	length := len(strings.TrimSpace(deviceID))
-	return length > 0 && length <= 128
+	deviceID = strings.TrimSpace(deviceID)
+	return deviceID != "" && len(deviceID) <= 128 && !strings.ContainsRune(deviceID, 0)
 }
 
 func validEnvironment(environment pushpb.PushEnvironment) bool {

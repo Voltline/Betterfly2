@@ -6,6 +6,7 @@ import (
 	"Betterfly2/shared/kafkaconsumer"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -306,6 +307,24 @@ func TestFriendHandlersRejectInvalidArgumentsWithoutDatabaseAccess(t *testing.T)
 		}},
 		{name: "create unnamed group", call: func() (*friend.ResponseMessage, error) {
 			return handler.handleCreateGroupWithDB(handler.database, req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2})
+		}},
+		{name: "create blank group name", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleCreateGroupWithDB(handler.database, req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2, GroupName: " \t"})
+		}},
+		{name: "create overlong group name", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleCreateGroupWithDB(handler.database, req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2, GroupName: strings.Repeat("群", 101)})
+		}},
+		{name: "create group name with NUL", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleCreateGroupWithDB(handler.database, req, &friend.CreateGroup{OwnerUserId: 1, GroupId: 2, GroupName: "a\x00"})
+		}},
+		{name: "overlong alias", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleUpdateFriendAliasWithDB(handler.database, req, &friend.UpdateFriendAlias{UserId: 1, FriendId: 2, Alias: strings.Repeat("名", 51)})
+		}},
+		{name: "alias with NUL", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleUpdateFriendAliasWithDB(handler.database, req, &friend.UpdateFriendAlias{UserId: 1, FriendId: 2, Alias: "a\x00"})
+		}},
+		{name: "friend request message with NUL", call: func() (*friend.ResponseMessage, error) {
+			return handler.handleAddDirectFriendWithDB(handler.database, req, &friend.AddDirectFriend{UserId: 1, FriendId: 2, Message: "hi\x00"})
 		}},
 		{name: "add invalid group member", call: func() (*friend.ResponseMessage, error) {
 			return handler.handleAddGroupMemberWithDB(handler.database, req, &friend.AddGroupMember{UserId: 1})

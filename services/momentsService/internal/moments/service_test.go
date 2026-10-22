@@ -102,7 +102,7 @@ func TestValidationAndScopedStableCursors(t *testing.T) {
 	if _, err := validatePost(good); err != nil {
 		t.Fatal(err)
 	}
-	for _, input := range []CreatePost{{ClientPostID: "a", Visibility: "friends"}, {ClientPostID: "a", Content: "\xff", Visibility: "friends"}, {ClientPostID: "a", Content: strings.Repeat("界", 4097), Visibility: "friends"}, {ClientPostID: "a", Content: "ok", Visibility: "public"}, {ClientPostID: "a", Content: "ok", Visibility: "friends", AssetIDs: []string{"1", "1"}}} {
+	for _, input := range []CreatePost{{ClientPostID: "a", Visibility: "friends"}, {ClientPostID: "a", Content: "\xff", Visibility: "friends"}, {ClientPostID: "a", Content: "a\x00b", Visibility: "friends"}, {ClientPostID: "a", Content: strings.Repeat("界", 4097), Visibility: "friends"}, {ClientPostID: "a", Content: "ok", Visibility: "public"}, {ClientPostID: "a", Content: "ok", Visibility: "friends", AssetIDs: []string{"1", "1"}}} {
 		if _, err := validatePost(input); err == nil {
 			t.Fatal(input)
 		}

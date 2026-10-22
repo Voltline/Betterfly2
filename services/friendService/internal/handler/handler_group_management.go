@@ -3,15 +3,20 @@ package handler
 import (
 	friend "Betterfly2/proto/friend"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/utils"
 	"strings"
-	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
 
+// validGroupName 与groups.name列宽及客户端上限一致：去掉首尾空白后非空且不超过100个字符。
+func validGroupName(name string) bool {
+	return name != "" && utils.ValidText(name, 100)
+}
+
 func (h *FriendHandler) handleUpdateGroupNameWithDB(database *gorm.DB, req *friend.RequestMessage, payload *friend.UpdateGroupName) (*friend.ResponseMessage, error) {
 	groupName := strings.TrimSpace(payload.GetGroupName())
-	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 || groupName == "" || !utf8.ValidString(groupName) || utf8.RuneCountInString(groupName) > 100 {
+	if payload.GetRequestUserId() <= 0 || payload.GetGroupId() <= 0 || !validGroupName(groupName) {
 		return groupManagementOperation(req, "update_group_name", friend.FriendResult_INVALID_ARGUMENT, payload.GetGroupId(), payload.GetRequestUserId(), "", "", groupName, 0), nil
 	}
 

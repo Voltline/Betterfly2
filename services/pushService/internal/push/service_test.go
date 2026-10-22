@@ -322,7 +322,7 @@ func TestPushValidationHelpers(t *testing.T) {
 	if !validToken(valid) || validToken("abc") || validToken(strings.Repeat("z", 64)) {
 		t.Fatal("token validation returned an unexpected result")
 	}
-	if !validDeviceID("iphone") || validDeviceID(" ") || validDeviceID(strings.Repeat("x", 129)) {
+	if !validDeviceID("iphone") || validDeviceID(" ") || validDeviceID(strings.Repeat("x", 129)) || validDeviceID("ipad\x00") {
 		t.Fatal("device ID validation returned an unexpected result")
 	}
 }

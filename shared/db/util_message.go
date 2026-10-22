@@ -14,6 +14,21 @@ const MessageRecallWindow = 2 * time.Minute
 
 var ErrInvalidReply = errors.New("reply target is unavailable or outside the conversation")
 
+// 与messages表列宽一致，客户端也按同样上限校验。
+const (
+	MaxMessageContentLen  = 700
+	MaxMessageTypeLen     = 10
+	MaxRealFileNameLen    = 255
+	MaxClientMessageIDLen = 128
+)
+
+// ValidMessageFields 校验客户端提交的消息文本字段能否写入messages表，
+// 否则入库报错会被当作暂时故障重试并进入死信，发送方收不到任何结果。
+func ValidMessageFields(content, messageType, realFileName, clientMessageID string) bool {
+	return utils.ValidText(content, MaxMessageContentLen) && utils.ValidText(messageType, MaxMessageTypeLen) &&
+		utils.ValidText(realFileName, MaxRealFileNameLen) && utils.ValidText(strings.TrimSpace(clientMessageID), MaxClientMessageIDLen)
+}
+
 type MessageRecallStatus int
 
 const (

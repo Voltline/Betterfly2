@@ -510,6 +510,31 @@ func TestHandleUpdateUserNameRejectsInvalidName(t *testing.T) {
 	}
 }
 
+func TestHandleStoreNewMessageRejectsUnstorableText(t *testing.T) {
+	useMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	valid := func() *storage.StoreNewMessage {
+		return &storage.StoreNewMessage{FromUserId: 1000, ToUserId: 1001, Content: "hi", MessageType: "text", ClientMessageId: "c1"}
+	}
+	cases := map[string]func(*storage.StoreNewMessage){
+		"content too long":   func(m *storage.StoreNewMessage) { m.Content = strings.Repeat("字", db.MaxMessageContentLen+1) },
+		"content NUL":        func(m *storage.StoreNewMessage) { m.Content = "a\x00b" },
+		"type too long":      func(m *storage.StoreNewMessage) { m.MessageType = strings.Repeat("t", db.MaxMessageTypeLen+1) },
+		"file name too long": func(m *storage.StoreNewMessage) { m.RealFileName = strings.Repeat("f", db.MaxRealFileNameLen+1) },
+		"client id too long": func(m *storage.StoreNewMessage) { m.ClientMessageId = strings.Repeat("c", db.MaxClientMessageIDLen+1) },
+		"client id NUL":      func(m *storage.StoreNewMessage) { m.ClientMessageId = "c\x00" },
+		"caption NUL":        func(m *storage.StoreNewMessage) { m.MessageType, m.Caption = "image", "a\x00" },
+	}
+	for name, mutate := range cases {
+		msg := valid()
+		mutate(msg)
+		req := &storage.RequestMessage{TargetUserId: 1000, Payload: &storage.RequestMessage_StoreNewMessage{StoreNewMessage: msg}}
+		resp, err := handler.handleStoreNewMessageWithDB(handler.requestDatabase(), req, msg, nil)
+		assert.NoError(t, err, name)
+		assert.Equal(t, storage.StorageResult_INVALID_ARGUMENT, resp.GetResult(), name)
+	}
+}
+
 func TestHandleUpdateUserNameDefersCacheInvalidationUntilCommit(t *testing.T) {
 	database, mock := setupMockDB(t)
 	cache := newMockCache()

@@ -296,6 +296,20 @@ func resolveRequest(database *gorm.DB, actorID, requestID int64, requestType, de
 		if !canResolveRequest(tx, actorID, &request, decision) {
 			return ErrRelationshipForbidden
 		}
+		// 邀请人离群或被降为普通成员后，其发出的邀请不再有效。
+		if request.RequestType == RequestTypeGroupInvite && decision == RequestStatusAccepted {
+			role, err := groupRoleTx(tx, request.GroupID, request.RequesterUserID)
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if !canManageGroup(role) {
+				if err := closeRequest(tx, &request, RequestStatusExpired, actorID, now); err != nil {
+					return err
+				}
+				outcomeErr = ErrRelationshipExpired
+				return nil
+			}
+		}
 		status := RequestStatusRejected
 		switch decision {
 		case RequestStatusAccepted:

@@ -204,6 +204,9 @@ func TestHandleRemoveGroupMember_LastOwnerLeavesAndClosesGroup(t *testing.T) {
 	mock.ExpectExec(`UPDATE "groups" SET "is_delete"=\$1,"update_time"=\$2 WHERE group_id = \$3 AND is_delete = \$4`).
 		WithArgs(true, sqlmock.AnyArg(), int64(3001), false).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE "relationship_requests" SET "active_key"=\$1,"resolved_at"=\$2,"resolved_by"=\$3,"status"=\$4 WHERE group_id = \$5 AND status = \$6`).
+		WithArgs(nil, sqlmock.AnyArg(), int64(1001), "cancelled", int64(3001), "pending").
+		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectExec(`DELETE FROM "group_members" WHERE group_id = \$1 AND user_id = \$2`).
 		WithArgs(int64(3001), int64(1001)).
 		WillReturnResult(sqlmock.NewResult(0, 1))

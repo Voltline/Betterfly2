@@ -239,6 +239,11 @@ func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, 
 					Updates(map[string]interface{}{"is_delete": true, "update_time": now}).Error; err != nil {
 					return err
 				}
+				// 群已解散，待处理的入群申请和邀请不可能再被接受，直接取消，不留到过期。
+				if err := tx.Model(&RelationshipRequest{}).Where("group_id = ? AND status = ?", groupID, RequestStatusPending).
+					Updates(map[string]any{"status": RequestStatusCancelled, "active_key": nil, "resolved_by": userID, "resolved_at": relationshipTime(relationshipNow())}).Error; err != nil {
+					return err
+				}
 			case err != nil:
 				return err
 			default:

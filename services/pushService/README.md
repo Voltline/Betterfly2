@@ -93,7 +93,7 @@ PushService 分别请求 `api.sandbox.push.apple.com` 和 `api.push.apple.com`�
 - 查询普通 APNs/VoIP token、环境和有效状态，完整 token 永不返回浏览器。
 - 持久化记录操作人、脱敏目标、APNs ID、成功数和失败原因。
 
-管理 API 使用 `Authorization: Bearer <PUSH_ADMIN_TOKEN>` 或 `X-Admin-Token`。页面将 token 仅保存到当前标签页的 `sessionStorage`。可通过 `X-Admin-Operator` 标记操作人。
+管理 API 使用 `Authorization: Bearer <PUSH_ADMIN_TOKEN>` 或 `X-Admin-Token`。页面将 token 仅保存到当前标签页的 `sessionStorage`。可通过 `X-Admin-Operator` 标记操作人，非 ASCII 字符需百分号编码（管理页会自动编码），最长 100 个字符。
 
 全量通知接口为 `POST /push/admin/api/send/broadcast`。它会固定本次受众的 token ID 上界并分页投递，避免一次加载全部设备；这是普通 APNs alert 的服务端 fan-out。Apple 的 Broadcast Push Notifications 仅支持 iOS 18 及以上的 Live Activities channel，不能用于普通广告横幅。
 

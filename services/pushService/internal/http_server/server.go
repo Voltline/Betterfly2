@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -187,10 +188,16 @@ func decodeAdminJSON(w http.ResponseWriter, r *http.Request, value any) error {
 	return decoder.Decode(value)
 }
 
+// operatorName 读取管理页填写的操作人。页面对其做百分号编码，因为浏览器不允许在请求头里放非Latin-1字符；
+// 未编码的值原样使用。结果保证是合法UTF-8且不超过审计表的100个字符，否则审计写入会失败。
 func operatorName(r *http.Request) string {
-	operator := strings.TrimSpace(r.Header.Get("X-Admin-Operator"))
-	if len(operator) > 100 {
-		operator = operator[:100]
+	operator := r.Header.Get("X-Admin-Operator")
+	if decoded, err := url.PathUnescape(operator); err == nil {
+		operator = decoded
+	}
+	operator = strings.TrimSpace(strings.ToValidUTF8(operator, ""))
+	if runes := []rune(operator); len(runes) > 100 {
+		operator = strings.TrimSpace(string(runes[:100]))
 	}
 	return operator
 }

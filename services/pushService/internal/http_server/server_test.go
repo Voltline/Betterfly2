@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
@@ -174,5 +176,23 @@ func TestAdminBroadcastEndpointSendsAndAudits(t *testing.T) {
 	}
 	if len(store.audits) != 1 || store.audits[0].Kind != "broadcast" {
 		t.Fatalf("broadcast audit not stored: %+v", store.audits)
+	}
+}
+
+func TestOperatorNameIsValidUTF8AndBounded(t *testing.T) {
+	tests := []struct{ header, want string }{
+		{"alice", "alice"},
+		{url.PathEscape("  运维 小王 "), "运维 小王"},
+		{"Jos\xe9", "Jos"},
+		{url.PathEscape(strings.Repeat("名", 120)), strings.Repeat("名", 100)},
+		{"50%off", "50%off"},
+	}
+	for _, tt := range tests {
+		r := httptest.NewRequest(http.MethodPost, "/push/admin/api/send/message", nil)
+		r.Header.Set("X-Admin-Operator", tt.header)
+		got := operatorName(r)
+		if got != tt.want || !utf8.ValidString(got) {
+			t.Fatalf("operatorName(%q) = %q, want %q", tt.header, got, tt.want)
+		}
 	}
 }

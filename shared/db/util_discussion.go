@@ -104,6 +104,19 @@ func SetDiscussionGroupWithDB(database *gorm.DB, actorID, channelID, groupID int
 	return view, err
 }
 
+// unbindDissolvedDiscussionGroupTx 在讨论群解散时解除频道关联并关闭其中的讨论。
+// 群ID由客户端选择，已解散的群可以被任何人重建；不解除关联的话，重建者会接管频道之后的讨论。
+// 调用方已锁定讨论群；这里不锁频道群，避免与按ID顺序加锁的SetDiscussionGroupWithDB死锁。
+func unbindDissolvedDiscussionGroupTx(tx *gorm.DB, groupID int64) error {
+	result := tx.Model(&ChannelSettings{}).Where("discussion_group_id = ?", groupID).Update("discussion_group_id", nil)
+	if result.Error != nil || result.RowsAffected == 0 {
+		return result.Error
+	}
+	return tx.Model(&Message{}).
+		Where("to_user_id = ? AND is_group = TRUE AND source_channel_message_id > 0 AND discussion_closed = FALSE", groupID).
+		Update("discussion_closed", true).Error
+}
+
 // Cards contain only a reference, never a second copy of channel content.
 // Caller owns the Inbox/Outbox transaction, including both inserts and events.
 func CreateDiscussionRootWithDB(tx *gorm.DB, post *Message) (*Message, error) {

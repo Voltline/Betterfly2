@@ -413,3 +413,54 @@ func TestDiscussionPostgresOwnerBindingAndModeration(t *testing.T) {
 		t.Fatal("deleted channel retained unique discussion binding", err)
 	}
 }
+
+func TestDiscussionPostgresDissolvedGroupCannotBeRevivedIntoBinding(t *testing.T) {
+	database := discussionPostgres(t)
+	discussionFixture(t, database)
+	if err := database.Model(&Group{}).Where("group_id = ?", 9002).Update("avatar", "old-avatar").Error; err != nil {
+		t.Fatal(err)
+	}
+	publish := func() (*Message, *Message) {
+		t.Helper()
+		var source, root *Message
+		if err := database.Transaction(func(tx *gorm.DB) error {
+			var err error
+			source, _, err = StoreNewMessageWithDB(tx, 1, 9001, "announcement", "text", "", true, fmt.Sprintf("source-%d", time.Now().UnixNano()), "", 0)
+			if err != nil {
+				return err
+			}
+			root, err = CreateDiscussionRootWithDB(tx, source)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return source, root
+	}
+	_, root := publish()
+	if root == nil {
+		t.Fatal("bound discussion group did not receive a thread")
+	}
+	// 讨论群唯一成员（群主）退出，群解散。
+	if exists, removed, _, err := RemoveUserFromGroupWithDB(database, 9002, 1); err != nil || !exists || !removed {
+		t.Fatalf("dissolve: exists=%v removed=%v err=%v", exists, removed, err)
+	}
+	settings, err := GetChannelSettingsWithDB(database, 9001)
+	if err != nil || settings.DiscussionGroupID != nil {
+		t.Fatalf("channel still bound to dissolved group: %+v err=%v", settings, err)
+	}
+	var closed Message
+	if err := database.First(&closed, "message_id = ?", root.MessageID).Error; err != nil || !closed.DiscussionClosed {
+		t.Fatalf("thread in dissolved group left open: %+v err=%v", closed, err)
+	}
+	// 其他用户用同一ID重建群，不继承头像，也不会接管频道讨论。
+	if exists, _, err := CreateGroupWithOwnerWithDB(database, 2, 9002, "revived"); err != nil || exists {
+		t.Fatalf("revive: exists=%v err=%v", exists, err)
+	}
+	revived, err := GetGroupByIDWithDB(database, 9002)
+	if err != nil || revived.Avatar != "" || revived.OwnerUserID != 2 {
+		t.Fatalf("revived group inherited state: %+v err=%v", revived, err)
+	}
+	if _, root := publish(); root != nil {
+		t.Fatalf("channel post opened a thread in the revived group: %+v", root)
+	}
+}

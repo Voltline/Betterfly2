@@ -85,6 +85,7 @@ func CreateGroupWithOwnerWithDB(database *gorm.DB, ownerUserID, groupID int64, g
 				Where("group_id = ?", groupID).
 				Updates(map[string]interface{}{
 					"name":          groupName,
+					"avatar":        "", // 重建的群与已解散的旧群无关，不继承旧头像
 					"owner_user_id": ownerUserID,
 					"is_delete":     false,
 					"update_time":   now,
@@ -242,6 +243,9 @@ func RemoveUserFromGroupWithDB(database *gorm.DB, groupID, userID int64) (bool, 
 				// 群已解散，待处理的入群申请和邀请不可能再被接受，直接取消，不留到过期。
 				if err := tx.Model(&RelationshipRequest{}).Where("group_id = ? AND status = ?", groupID, RequestStatusPending).
 					Updates(map[string]any{"status": RequestStatusCancelled, "active_key": nil, "resolved_by": userID, "resolved_at": relationshipTime(relationshipNow())}).Error; err != nil {
+					return err
+				}
+				if err := unbindDissolvedDiscussionGroupTx(tx, groupID); err != nil {
 					return err
 				}
 			case err != nil:

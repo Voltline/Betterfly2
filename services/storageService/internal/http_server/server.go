@@ -116,3 +116,28 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	sugar.Info("正在关闭HTTP服务器...")
 	return s.server.Shutdown(ctx)
 }
+
+// 上传URL有效期只有15分钟，校验紧随上传；超过保留期仍未校验的暂存对象视为放弃的上传。
+const (
+	stagingRetention       = 24 * time.Hour
+	stagingCleanupInterval = time.Hour
+)
+
+// RunStagingCleanup 定期删除过期暂存对象，直到 ctx 结束；多副本同时运行时删除是幂等的。
+func (s *HTTPServer) RunStagingCleanup(ctx context.Context) {
+	ticker := time.NewTicker(stagingCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			deleted, err := s.rustfsClient.DeleteStagingObjectsBefore(ctx, time.Now().Add(-stagingRetention))
+			if err != nil {
+				logger.Sugar().Warnw("清理过期暂存对象失败", "deleted", deleted, "error", err)
+			} else if deleted > 0 {
+				logger.Sugar().Infow("已清理过期暂存对象", "deleted", deleted)
+			}
+		}
+	}
+}

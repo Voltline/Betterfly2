@@ -85,6 +85,8 @@ func main() {
 		sugar.Fatalf("初始化HTTP服务器失败: %v", err)
 	}
 
+	go httpServer.RunStagingCleanup(ctx)
+
 	// 4. 启动HTTP服务器（在goroutine中）
 	go func() {
 		if err := httpServer.Start(); err != nil && err != http.ErrServerClosed {

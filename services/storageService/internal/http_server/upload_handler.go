@@ -6,6 +6,7 @@ import (
 	"Betterfly2/shared/logger"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -39,6 +40,20 @@ type UploadHandler struct {
 	deleteObject              func(context.Context, string) error
 	getPresignedUploadURL     func(context.Context, string, time.Duration, string) (string, error)
 	verifyFileHash            func(io.Reader, string) (bool, error)
+	// maxFileBytes 为 0 时使用 maxUploadFileBytes。
+	maxFileBytes int64
+}
+
+// errFileTooLarge 表示对象超过上传上限；预签名PUT无法限制长度，只能在校验时拒绝。
+var errFileTooLarge = errors.New("file exceeds the upload limit")
+
+var errVerifyTooLarge = &verifyFailure{message: "File too large"}
+
+func (h *UploadHandler) fileSizeLimit() int64 {
+	if h.maxFileBytes > 0 {
+		return h.maxFileBytes
+	}
+	return maxUploadFileBytes
 }
 
 type countingReader struct {
@@ -67,6 +82,7 @@ func NewUploadHandler(rustfsClient *rustfs.RustFSClient) *UploadHandler {
 		deleteObject:              rustfsClient.DeleteObject,
 		getPresignedUploadURL:     rustfsClient.GetPresignedUploadURLForKey,
 		verifyFileHash:            rustfs.VerifyFileHash,
+		maxFileBytes:              maxUploadFileBytes,
 	}
 }
 
@@ -109,6 +125,11 @@ func (h *UploadHandler) HandleUploadRequest(w http.ResponseWriter, r *http.Reque
 
 	if fileSize <= 0 {
 		http.Error(w, "file_size must be greater than 0", http.StatusBadRequest)
+		return
+	}
+
+	if fileSize > h.fileSizeLimit() {
+		http.Error(w, "file_size exceeds the upload limit", http.StatusRequestEntityTooLarge)
 		return
 	}
 
@@ -281,6 +302,12 @@ func (h *UploadHandler) verifyPossession(ctx context.Context, w http.ResponseWri
 	}
 
 	_, _, valid, err := h.hashObject(ctx, stagingPath, fileHash)
+	if errors.Is(err, errFileTooLarge) {
+		h.removeStagingObject(ctx, stagingPath)
+		sugar.Warnf("暂存文件超过上传上限，已删除暂存对象: path=%s", stagingPath)
+		h.writeVerifyFailure(w, errVerifyTooLarge)
+		return
+	}
 	if err != nil {
 		sugar.Errorf("校验暂存文件失败: %v", err)
 		h.writeVerifyFailure(w, errVerifyInternal)
@@ -315,6 +342,11 @@ func (h *UploadHandler) promoteStagedObject(ctx context.Context, stagingPath, st
 	sugar := logger.Sugar()
 
 	size, etag, valid, err := h.hashObject(ctx, stagingPath, fileHash)
+	if errors.Is(err, errFileTooLarge) {
+		h.removeStagingObject(ctx, stagingPath)
+		sugar.Warnf("暂存文件超过上传上限，已删除暂存对象: path=%s", stagingPath)
+		return 0, errVerifyTooLarge
+	}
 	if err != nil {
 		sugar.Errorf("校验暂存文件失败: %v", err)
 		return 0, errVerifyInternal
@@ -352,6 +384,10 @@ func (h *UploadHandler) checkCanonicalObject(ctx context.Context, storagePath, f
 	}
 
 	size, _, valid, err := h.hashObject(ctx, storagePath, fileHash)
+	if errors.Is(err, errFileTooLarge) {
+		sugar.Warnf("正式路径文件超过上传上限: file_hash=%s", fileHash)
+		return 0, errVerifyTooLarge
+	}
 	if err != nil {
 		sugar.Errorf("校验文件失败: %v", err)
 		return 0, errVerifyInternal
@@ -363,7 +399,8 @@ func (h *UploadHandler) checkCanonicalObject(ctx context.Context, storagePath, f
 	return size, nil
 }
 
-// hashObject 流式读取对象计算哈希，避免大文件整体进入内存。
+// hashObject 流式读取对象计算哈希，避免大文件整体进入内存；
+// 最多多读1字节用于判断超限，超限对象不会被完整读取。
 func (h *UploadHandler) hashObject(ctx context.Context, key, fileHash string) (int64, string, bool, error) {
 	reader, etag, err := h.openObject(ctx, key)
 	if err != nil {
@@ -371,10 +408,14 @@ func (h *UploadHandler) hashObject(ctx context.Context, key, fileHash string) (i
 	}
 	defer reader.Close()
 
-	counter := &countingReader{reader: reader}
+	limit := h.fileSizeLimit()
+	counter := &countingReader{reader: io.LimitReader(reader, limit+1)}
 	valid, err := h.verifyFileHash(counter, fileHash)
 	if err != nil {
 		return 0, "", false, err
+	}
+	if counter.bytes > limit {
+		return counter.bytes, etag, false, errFileTooLarge
 	}
 	return counter.bytes, etag, valid, nil
 }

@@ -515,3 +515,58 @@ func TestUploadHandlersPropagateRequestCancellation(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleUploadRequestRejectsOversizedFile(t *testing.T) {
+	handler := newTestUploadHandler(newFakeObjectStore(), &fakeFileMetadata{})
+	handler.getPresignedUploadURL = func(context.Context, string, time.Duration, string) (string, error) {
+		t.Fatal("oversized upload must not be signed")
+		return "", nil
+	}
+	body := fmt.Sprintf(`{"file_hash":"%s","file_size":%d}`, payloadHash, maxUploadFileBytes+1)
+	rec := httptest.NewRecorder()
+	handler.HandleUploadRequest(rec, asUser(httptest.NewRequest(http.MethodPost, "/storage_service/upload", strings.NewReader(body)), uploaderID))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized upload returned %d", rec.Code)
+	}
+}
+
+func TestVerifyRejectsOversizedStagedObject(t *testing.T) {
+	store := newFakeObjectStore()
+	staging := rustfs.GetStagingPath(uploaderID, payloadHash)
+	store.objects[staging] = payload
+	metadata := &fakeFileMetadata{}
+	handler := newTestUploadHandler(store, metadata)
+	handler.maxFileBytes = int64(len(payload)) - 1
+
+	status, resp := verifyAs(t, handler, uploaderID, payloadHash)
+	if status != http.StatusOK || resp.Success || resp.ErrorMessage != "File too large" {
+		t.Fatalf("oversized object accepted: status=%d %+v", status, resp)
+	}
+	if _, ok := store.objects[staging]; ok || len(store.copies) != 0 || len(metadata.verified) != 0 {
+		t.Fatal("oversized staging object must be deleted without promotion")
+	}
+
+	// 恰好等于上限的对象仍然可以通过。
+	store.objects[staging] = payload
+	handler.maxFileBytes = int64(len(payload))
+	if status, resp := verifyAs(t, handler, uploaderID, payloadHash); status != http.StatusOK || !resp.Success {
+		t.Fatalf("object at the limit rejected: status=%d %+v", status, resp)
+	}
+}
+
+func TestVerifyPossessionRejectsOversizedStagedObject(t *testing.T) {
+	store := newFakeObjectStore()
+	staging := rustfs.GetStagingPath(otherID, payloadHash)
+	store.objects[staging] = payload
+	metadata := &fakeFileMetadata{verified: map[string]int64{payloadHash: 7}}
+	handler := newTestUploadHandler(store, metadata)
+	handler.maxFileBytes = 1
+
+	status, resp := verifyAs(t, handler, otherID, payloadHash)
+	if status != http.StatusOK || resp.Success || resp.ErrorMessage != "File too large" {
+		t.Fatalf("oversized possession proof accepted: status=%d %+v", status, resp)
+	}
+	if _, ok := store.objects[staging]; ok || metadata.grants[grantKey(payloadHash, otherID)] {
+		t.Fatal("oversized possession proof must be deleted without granting access")
+	}
+}

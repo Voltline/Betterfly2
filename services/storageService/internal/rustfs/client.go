@@ -140,7 +140,7 @@ func GetStoragePath(fileHash string) string {
 // GetStagingPath 返回某个用户上传某个文件时使用的暂存路径。
 // 客户端只能拿到暂存路径的上传URL，正式路径只由服务端在哈希校验通过后复制写入。
 func GetStagingPath(userID int64, fileHash string) string {
-	return fmt.Sprintf("staging/%d/%s", userID, fileHash)
+	return fmt.Sprintf("%s%d/%s", StagingPrefix, userID, fileHash)
 }
 
 // OpenObject 读取对象内容，并返回读取时的ETag，供后续条件复制使用。
@@ -298,6 +298,35 @@ func VerifyFileHash(reader io.Reader, expectedHash string) (bool, error) {
 
 	actualHash := fmt.Sprintf("%x", hasher.Sum(nil))
 	return actualHash == expectedHash, nil
+}
+
+// StagingPrefix 是所有暂存上传对象的公共前缀。
+const StagingPrefix = "staging/"
+
+// DeleteStagingObjectsBefore 删除最后修改时间早于 cutoff 的暂存对象，返回删除数量。
+// 暂存对象只在上传到校验之间存在，过期未校验的对象属于放弃的上传。
+func (c *RustFSClient) DeleteStagingObjectsBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	paginator := s3.NewListObjectsV2Paginator(c.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String(StagingPrefix),
+	})
+	deleted := 0
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return deleted, fmt.Errorf("failed to list staging objects: %v", err)
+		}
+		for _, object := range page.Contents {
+			if object.LastModified == nil || !object.LastModified.Before(cutoff) {
+				continue
+			}
+			if err := c.DeleteObject(ctx, aws.ToString(object.Key)); err != nil {
+				return deleted, err
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 // DeleteObject 删除指定路径的对象

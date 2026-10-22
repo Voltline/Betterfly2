@@ -282,3 +282,34 @@ func TestRustFSConditionalCopyRejectsChangedSource(t *testing.T) {
 		t.Fatalf("copy result ETag differs from source: source=%s copied=%s", currentETag, copiedETag)
 	}
 }
+
+func TestRustFSDeleteStagingObjectsBeforeKeepsCanonicalAndFresh(t *testing.T) {
+	client := rustfsIntegrationClient(t)
+	handler := newRustFSUploadHandler(client, &fakeFileMetadata{})
+	ctx := context.Background()
+	staging := rustfs.GetStagingPath(uploaderID, payloadHash)
+	putObject(t, requestUploadURL(t, handler, uploaderID, payloadHash, len(payload)), payload)
+	canonical := rustfs.GetStoragePath(payloadHash)
+	if _, err := client.CopyObject(ctx, staging, canonical, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 截止时间早于对象写入时间：新暂存对象不能被删。
+	if deleted, err := client.DeleteStagingObjectsBefore(ctx, time.Now().Add(-time.Hour)); err != nil || deleted != 0 {
+		t.Fatalf("fresh staging object swept: deleted=%d err=%v", deleted, err)
+	}
+	if _, ok := readObject(t, client, staging); !ok {
+		t.Fatal("fresh staging object missing")
+	}
+
+	deleted, err := client.DeleteStagingObjectsBefore(ctx, time.Now().Add(time.Minute))
+	if err != nil || deleted != 1 {
+		t.Fatalf("stale staging object not swept: deleted=%d err=%v", deleted, err)
+	}
+	if _, ok := readObject(t, client, staging); ok {
+		t.Fatal("stale staging object still present")
+	}
+	if content, ok := readObject(t, client, canonical); !ok || content != payload {
+		t.Fatal("sweep touched the canonical object")
+	}
+}

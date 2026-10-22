@@ -424,10 +424,12 @@ Content-Type: application/json
 
 上传URL只能写入请求者自己的暂存路径，15 分钟内有效；同一文件需要用同一用户的 JWT 调用 `upload/verify`。
 秒传只对已持有文件的用户生效：只知道哈希的用户必须真正上传一次，校验通过后才获得该文件的访问授权。
+单个文件上限 512 MiB（与客户端主App上限一致）。超过 24 小时仍未校验的暂存对象会被服务端定期删除。
 
 **错误响应**:
 - `400 Bad Request`: 请求参数错误
 - `401 Unauthorized`: JWT验证失败
+- `413 Request Entity Too Large`: `file_size` 超过 512 MiB
 - `500 Internal Server Error`: 服务器内部错误
 
 ---
@@ -468,6 +470,8 @@ Content-Type: application/json
   "error_message": "File hash mismatch"
 }
 ```
+
+实际上传的对象超过 512 MiB 时返回 `"error_message": "File too large"`，暂存对象会被删除，不入库也不授权。
 
 **错误响应**:
 - `400 Bad Request`: 请求参数错误

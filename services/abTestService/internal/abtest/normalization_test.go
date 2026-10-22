@@ -2,6 +2,7 @@ package abtest
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -87,6 +88,9 @@ func TestNormalizeGroupAndOverrideInputs(t *testing.T) {
 	invalidOverrides := []OverrideInput{
 		{SubjectType: "device", SubjectID: "phone-1", Action: OverrideForceGroup},
 		{SubjectType: "device", SubjectID: "phone-1", Action: "unknown"},
+		{SubjectType: "device", SubjectID: strings.Repeat("x", MaxSubjectIDLen+1), Action: OverrideExclude},
+		{SubjectType: strings.Repeat("t", MaxSubjectTypeLen+1), SubjectID: "phone-1", Action: OverrideExclude},
+		{SubjectType: "device", SubjectID: "a\x00", Action: OverrideExclude},
 	}
 	for _, override := range invalidOverrides {
 		if err := normalizeOverrideInput(&override); err == nil {

@@ -74,8 +74,12 @@ func (s *Server) clientConfig(w http.ResponseWriter, r *http.Request) {
 		SubjectID:   deviceID,
 		Context:     context,
 	})
+	if errors.Is(err, abtest.ErrInvalidSubject) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to evaluate experiments")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -92,8 +96,12 @@ func (s *Server) evaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp, err := s.service.Evaluate(req)
-	if err != nil {
+	if errors.Is(err, abtest.ErrInvalidSubject) {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to evaluate experiments")
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)

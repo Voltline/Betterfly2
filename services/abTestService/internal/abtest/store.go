@@ -641,8 +641,11 @@ func normalizeOverrideInput(req *OverrideInput) error {
 	req.SubjectID = strings.TrimSpace(req.SubjectID)
 	req.Action = strings.TrimSpace(req.Action)
 	req.GroupKey = strings.TrimSpace(req.GroupKey)
-	if req.SubjectType == "" || req.SubjectID == "" || req.Action == "" {
-		return errors.New("subject_type, subject_id and action are required")
+	if req.Action == "" {
+		return errors.New("action is required")
+	}
+	if !validSubject(req.SubjectType, req.SubjectID) {
+		return ErrInvalidSubject
 	}
 	switch req.Action {
 	case OverrideForceGroup:

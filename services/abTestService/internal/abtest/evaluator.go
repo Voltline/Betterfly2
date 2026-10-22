@@ -1,7 +1,6 @@
 package abtest
 
 import (
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -142,8 +141,8 @@ func (s *Service) invalidateAfterWrite(err error) {
 func (s *Service) Evaluate(req EvaluateRequest) (EvaluateResponse, error) {
 	req.SubjectType = strings.TrimSpace(req.SubjectType)
 	req.SubjectID = strings.TrimSpace(req.SubjectID)
-	if req.SubjectType == "" || req.SubjectID == "" {
-		return EvaluateResponse{}, errors.New("subject_type and subject_id are required")
+	if !validSubject(req.SubjectType, req.SubjectID) {
+		return EvaluateResponse{}, ErrInvalidSubject
 	}
 	if req.Context == nil {
 		req.Context = map[string]string{}

@@ -130,6 +130,9 @@ func TestPublicABTestEndpoints(t *testing.T) {
 		{name: "evaluate invalid JSON", method: http.MethodPost, path: "/abtest/v1/evaluate", body: "{", wantStatus: http.StatusBadRequest},
 		{name: "evaluate invalid identity", method: http.MethodPost, path: "/abtest/v1/evaluate", body: `{}`, wantStatus: http.StatusBadRequest},
 		{name: "evaluate", method: http.MethodPost, path: "/abtest/v1/evaluate", body: `{"subject_type":"device","subject_id":"phone-1"}`, wantStatus: http.StatusOK},
+		{name: "evaluate overlong subject", method: http.MethodPost, path: "/abtest/v1/evaluate", body: `{"subject_type":"device","subject_id":"` + strings.Repeat("x", abtest.MaxSubjectIDLen+1) + `"}`, wantStatus: http.StatusBadRequest},
+		{name: "evaluate NUL subject", method: http.MethodPost, path: "/abtest/v1/evaluate", body: `{"subject_type":"device","subject_id":"a\u0000"}`, wantStatus: http.StatusBadRequest},
+		{name: "client config overlong device", method: http.MethodGet, path: "/abtest/v1/client/config?device_id=" + strings.Repeat("x", abtest.MaxSubjectIDLen+1), wantStatus: http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

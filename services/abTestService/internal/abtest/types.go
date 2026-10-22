@@ -1,6 +1,7 @@
 package abtest
 
 import (
+	"Betterfly2/shared/utils"
 	"errors"
 	"time"
 )
@@ -8,7 +9,21 @@ import (
 var (
 	ErrInvalidGroupUpdate = errors.New("invalid group update")
 	ErrGroupConflict      = errors.New("group operation conflicts with experiment state")
+	ErrInvalidSubject     = errors.New("subject_type (max 30 characters) and subject_id (max 128 characters) are required")
 )
+
+// 与ab_overrides表的列宽一致。
+const (
+	MaxSubjectTypeLen = 30
+	MaxSubjectIDLen   = 128
+)
+
+// validSubject 校验评估或覆盖规则的主体。评估接口无需鉴权且按主体缓存覆盖规则，
+// 不限制长度时超长主体ID会让缓存占用大量内存。
+func validSubject(subjectType, subjectID string) bool {
+	return subjectType != "" && subjectID != "" &&
+		utils.ValidText(subjectType, MaxSubjectTypeLen) && utils.ValidText(subjectID, MaxSubjectIDLen)
+}
 
 const (
 	ExperimentTypeAll    = "all"

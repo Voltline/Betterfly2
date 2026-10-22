@@ -139,7 +139,7 @@ func TestPasswordLoginDoesNotIssueJWTWhenSigningKeyPersistenceFails(t *testing.T
 	mock := useAuthMockDB(t)
 	expectUserByAccount(mock, passwordHash, nil)
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE "users" SET "jwt_key"=\$1 WHERE id = \$2`).
+	mock.ExpectExec(`UPDATE "users" SET "jwt_key"=\$1 WHERE id = \$2 AND \(jwt_key IS NULL OR length\(jwt_key\) = 0\)`).
 		WithArgs(sqlmock.AnyArg(), int64(9)).
 		WillReturnError(errors.New("database unavailable"))
 	mock.ExpectRollback()
@@ -151,6 +151,50 @@ func TestPasswordLoginDoesNotIssueJWTWhenSigningKeyPersistenceFails(t *testing.T
 	if resp.GetResult() != pb.AuthResult_SERVICE_ERROR || resp.GetJwt() != "" {
 		t.Fatalf("persistence failure issued a JWT: %+v", resp)
 	}
+}
+
+func TestPasswordLoginCreatesSigningKeyOnlyWhenMissing(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("first login stores a new key", func(t *testing.T) {
+		mock := useAuthMockDB(t)
+		expectUserByAccount(mock, passwordHash, nil)
+		stored := &bytesCapture{}
+		mock.ExpectBegin()
+		mock.ExpectExec(`UPDATE "users" SET "jwt_key"=\$1 WHERE id = \$2 AND \(jwt_key IS NULL OR length\(jwt_key\) = 0\)`).
+			WithArgs(stored, int64(9)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		resp, err := (&AuthService{}).Login(context.Background(), &pb.LoginReq{Account: "alice", Password: "correct-password"})
+		if err != nil || resp.GetResult() != pb.AuthResult_OK {
+			t.Fatalf("login failed: %+v err=%v", resp, err)
+		}
+		if _, err := utils.ValidateJWT(resp.GetJwt(), stored.value); err != nil {
+			t.Fatalf("JWT not signed with the stored key: %v", err)
+		}
+	})
+	t.Run("concurrent login already stored a key", func(t *testing.T) {
+		winner := []byte("0123456789abcdef0123456789abcdef")
+		mock := useAuthMockDB(t)
+		expectUserByAccount(mock, passwordHash, nil)
+		mock.ExpectBegin()
+		mock.ExpectExec(`UPDATE "users" SET "jwt_key"=\$1 WHERE id = \$2 AND \(jwt_key IS NULL OR length\(jwt_key\) = 0\)`).
+			WithArgs(sqlmock.AnyArg(), int64(9)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectCommit()
+		expectUserByID(mock, passwordHash, winner)
+
+		resp, err := (&AuthService{}).Login(context.Background(), &pb.LoginReq{Account: "alice", Password: "correct-password"})
+		if err != nil || resp.GetResult() != pb.AuthResult_OK {
+			t.Fatalf("login failed: %+v err=%v", resp, err)
+		}
+		if _, err := utils.ValidateJWT(resp.GetJwt(), winner); err != nil {
+			t.Fatalf("JWT not signed with the concurrently stored key: %v", err)
+		}
+	})
 }
 
 func TestChangePasswordRotatesCredentialsAndReturnsUsableJWT(t *testing.T) {

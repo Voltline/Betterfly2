@@ -56,15 +56,8 @@ func (s *AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp
 		}
 		s.limiter.Clear(user.ID)
 
-		if len(user.JwtKey) == 0 { // 生成jwt key
-			user.JwtKey = make([]byte, config.JwtKeyLength)
-			_, err = rand.Read(user.JwtKey)
-			if err != nil {
-				logger.Sugar().Errorln(userBriefStr(user), "failed to generate jwt key:", err)
-				result = pb.AuthResult_SERVICE_ERROR
-				goto RETURN
-			}
-			if err = db.UpdateUserJwtKeyById(user.ID, user.JwtKey); err != nil {
+		if len(user.JwtKey) == 0 { // 旧账号没有签名密钥，首次密码登录时生成
+			if user.JwtKey, err = ensureJWTKey(user.ID); err != nil {
 				logger.Sugar().Errorln(userBriefStr(user), "failed to persist jwt key:", err)
 				user.JwtKey = nil
 				result = pb.AuthResult_SERVICE_ERROR
@@ -352,6 +345,29 @@ func authenticateUser(userID int64, jwt string) (*db.User, pb.AuthResult) {
 		return nil, pb.AuthResult_JWT_ERROR
 	}
 	return user, pb.AuthResult_OK
+}
+
+// ensureJWTKey 为没有签名密钥的账号写入新密钥；并发登录已先写入时返回库里的密钥。
+func ensureJWTKey(userID int64) ([]byte, error) {
+	key, err := newJWTKey()
+	if err != nil {
+		return nil, err
+	}
+	set, err := db.SetUserJwtKeyIfEmpty(userID, key)
+	if err != nil {
+		return nil, err
+	}
+	if set {
+		return key, nil
+	}
+	current, err := db.GetUserById(userID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil || len(current.JwtKey) == 0 {
+		return nil, errors.New("signing key missing after concurrent update")
+	}
+	return current.JwtKey, nil
 }
 
 func newJWTKey() ([]byte, error) {

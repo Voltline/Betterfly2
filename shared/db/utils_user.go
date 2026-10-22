@@ -45,10 +45,13 @@ func GetUserByAccountWithDB(database *gorm.DB, account string) (*User, error) {
 	return getUser(&user, err)
 }
 
-func UpdateUserJwtKeyById(id int64, jwtKey []byte) error {
-	return DB().Model(&User{}).
-		Where("id = ?", id).
-		Update("jwt_key", jwtKey).Error
+// SetUserJwtKeyIfEmpty 只在账号还没有签名密钥时写入。并发登录已先写入时返回false，
+// 调用方应改用库里的密钥，否则后写入的会让先签发的JWT失效。
+func SetUserJwtKeyIfEmpty(id int64, jwtKey []byte) (bool, error) {
+	result := DB().Model(&User{}).
+		Where("id = ? AND (jwt_key IS NULL OR length(jwt_key) = 0)", id).
+		Update("jwt_key", jwtKey)
+	return result.RowsAffected == 1, result.Error
 }
 
 func UpdateUserCredentialsCAS(id int64, oldPasswordHash string, oldJwtKey []byte, newPasswordHash string, newJwtKey []byte) (bool, error) {

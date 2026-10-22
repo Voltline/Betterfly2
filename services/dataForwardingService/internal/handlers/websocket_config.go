@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	sharedutils "Betterfly2/shared/utils"
 	"net"
 	"net/http"
 	"net/netip"
@@ -66,7 +67,7 @@ func loadWebSocketConfig() websocketConfig {
 		readHeaderTimeout:  envDurationValue("WS_READ_HEADER_TIMEOUT", 5*time.Second),
 		idleTimeout:        envDurationValue("WS_IDLE_TIMEOUT", 60*time.Second),
 		maxHeaderBytes:     envIntValue("WS_MAX_HEADER_BYTES", 1<<20),
-		trustedProxies:     parseTrustedProxies(envStringValue("WS_TRUSTED_PROXY_CIDRS", defaultTrustedProxyCIDRs)),
+		trustedProxies:     sharedutils.ParseTrustedProxies(envStringValue("WS_TRUSTED_PROXY_CIDRS", sharedutils.DefaultTrustedProxyCIDRs)),
 	}
 }
 

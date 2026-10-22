@@ -3,6 +3,7 @@ package main
 import (
 	pb "Betterfly2/proto/server_rpc/auth"
 	"Betterfly2/shared/db"
+	"authService/internal/loginlimit"
 	"authService/internal/utils"
 	"context"
 	"database/sql/driver"
@@ -12,7 +13,9 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/alicebob/miniredis/v2"
 	goJwt "github.com/golang-jwt/jwt/v5"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -421,5 +424,96 @@ func TestSignupStoresSigningKey(t *testing.T) {
 	}
 	if len(key.value) != 32 {
 		t.Fatalf("signup stored signing key of %d bytes", len(key.value))
+	}
+}
+
+func TestPasswordLoginAccountLimitSkipsBcryptAndClearsOnSuccess(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	service := &AuthService{limiter: loginlimit.New(client)}
+
+	login := func(password string) *pb.LoginRsp {
+		t.Helper()
+		mock := useAuthMockDB(t)
+		expectUserByAccount(mock, passwordHash, key)
+		resp, err := service.Login(context.Background(), &pb.LoginReq{Account: "alice", Password: password})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	for i := 0; i < loginlimit.MaxFailures-1; i++ {
+		if got := login("wrong-password").GetResult(); got != pb.AuthResult_PASSWORD_ERROR {
+			t.Fatalf("attempt %d: %v", i+1, got)
+		}
+	}
+	// 成功登录清零，之后又可以失败满额度。
+	if resp := login("correct-password"); resp.GetResult() != pb.AuthResult_OK || resp.GetJwt() == "" {
+		t.Fatalf("login before limit failed: %+v", resp)
+	}
+	for i := 0; i < loginlimit.MaxFailures; i++ {
+		login("wrong-password")
+	}
+	// 达到上限后连正确密码也拒绝，且不签发JWT。
+	if resp := login("correct-password"); resp.GetResult() != pb.AuthResult_RATE_LIMITED || resp.GetJwt() != "" {
+		t.Fatalf("limited login: %+v", resp)
+	}
+
+	// JWT登录不受密码限流影响，已登录设备照常重连。
+	token, err := utils.GenerateJWT(&db.User{ID: 9, Account: "alice", JwtKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := useAuthMockDB(t)
+	expectUserByAccount(mock, passwordHash, key)
+	resp, err := service.Login(context.Background(), &pb.LoginReq{Account: "alice", Jwt: token})
+	if err != nil || resp.GetResult() != pb.AuthResult_OK {
+		t.Fatalf("jwt login blocked: %+v %v", resp, err)
+	}
+
+	server.FastForward(loginlimit.Window)
+	if resp := login("correct-password"); resp.GetResult() != pb.AuthResult_OK {
+		t.Fatalf("login after window: %+v", resp)
+	}
+}
+
+func TestChangePasswordSharesAccountLimit(t *testing.T) {
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("0123456789abcdef0123456789abcdef")
+	token, err := utils.GenerateJWT(&db.User{ID: 9, Account: "alice", JwtKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	limiter := loginlimit.New(client)
+	service := &AuthService{limiter: limiter}
+
+	for i := 0; i < loginlimit.MaxFailures; i++ {
+		mock := useAuthMockDB(t)
+		expectUserByID(mock, passwordHash, key)
+		resp, err := service.ChangePassword(context.Background(), &pb.ChangePasswordReq{UserId: 9, Jwt: token, OldPassword: "wrong-password", NewPassword: "new-password"})
+		if err != nil || resp.GetResult() != pb.AuthResult_PASSWORD_ERROR {
+			t.Fatalf("attempt %d: %+v %v", i+1, resp, err)
+		}
+	}
+	if !limiter.Blocked(9) {
+		t.Fatal("change password failures not counted")
+	}
+	mock := useAuthMockDB(t)
+	expectUserByID(mock, passwordHash, key)
+	resp, err := service.ChangePassword(context.Background(), &pb.ChangePasswordReq{UserId: 9, Jwt: token, OldPassword: "correct-password", NewPassword: "new-password"})
+	if err != nil || resp.GetResult() != pb.AuthResult_RATE_LIMITED || resp.GetJwt() != "" {
+		t.Fatalf("limited change password: %+v %v", resp, err)
 	}
 }

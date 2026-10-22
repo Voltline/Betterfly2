@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,14 +147,10 @@ func TestInvalidAndOversizedJSONRejectedBeforeBusiness(t *testing.T) {
 	}
 }
 func TestLoginFailureOrAuthOutageNeverSetsCookies(t *testing.T) {
-	for _, err := range []error{errUnauthorized, errUnavailable} {
+	for err, want := range map[error]int{errUnauthorized: 401, errUnavailable: 503, errRateLimited: 429} {
 		a := &fakeAuth{err: err}
 		handler := New(nil, a, "https://bf.test").Routes()
 		w := req(handler, "POST", base+"/session", `{"account":"user","password":"pass"}`, map[string]string{"Origin": "https://bf.test", "Content-Type": "application/json"}, nil)
-		want := 401
-		if errors.Is(err, errUnavailable) {
-			want = 503
-		}
 		if w.Code != want || len(w.Result().Cookies()) != 0 {
 			t.Fatal(w.Code, w.Result().Cookies())
 		}
@@ -185,21 +182,23 @@ func TestLoginLimiterConcurrentBoundedAndExpiry(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Add(1)
-		go func() { defer wg.Done(); l.allow("127.0.0.1:3") }()
+		go func() { defer wg.Done(); l.allow("127.0.0.1") }()
 	}
 	wg.Wait()
-	if l.allow("127.0.0.1:4") {
+	if l.allow("127.0.0.1") {
 		t.Fatal("unbounded login")
 	}
 	l.entries["127.0.0.1"] = attempts{time: time.Now().Add(-2 * time.Minute), count: 99}
-	if !l.allow("127.0.0.1:4") {
+	if !l.allow("127.0.0.1") {
 		t.Fatal("not reset")
 	}
 	for i := 0; i < 4096; i++ {
 		l.entries[string(rune(i))] = attempts{time: time.Now()}
 	}
-	if l.allow("new-host") {
-		t.Fatal("limiter map unbounded")
+	// 表满时放行新来源但不记录，内存不再增长。
+	full := len(l.entries)
+	if !l.allow("new-host") || len(l.entries) != full {
+		t.Fatal("full limiter rejected new source or grew", len(l.entries))
 	}
 }
 
@@ -239,5 +238,53 @@ func TestOriginParsingIsExact(t *testing.T) {
 	origin, err := Origin("https://BF.test:443/")
 	if err != nil || origin != "https://bf.test" {
 		t.Fatal(origin, err)
+	}
+}
+
+func TestSessionLimitsByForwardedClientIP(t *testing.T) {
+	a := &fakeAuth{}
+	handler := New(nil, a, "https://bf.test").Routes()
+	login := func(remote, forwarded string) int {
+		r := httptest.NewRequest("POST", base+"/session", strings.NewReader(`{"account":"user","password":"secret"}`))
+		r.RemoteAddr = remote
+		r.Header.Set("Origin", "https://bf.test")
+		r.Header.Set("Content-Type", "application/json")
+		if forwarded != "" {
+			r.Header.Set("X-Forwarded-For", forwarded)
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Code
+	}
+	for i := 0; i < 10; i++ {
+		if code := login("10.0.0.5:4000", "203.0.113.1"); code != 200 {
+			t.Fatalf("attempt %d: %d", i+1, code)
+		}
+	}
+	if code := login("10.0.0.5:4000", "203.0.113.1"); code != 429 {
+		t.Fatalf("client behind ingress not limited: %d", code)
+	}
+	// 同一ingress后面的其他用户不受影响。
+	if code := login("10.0.0.5:4000", "203.0.113.2"); code != 200 {
+		t.Fatalf("other client behind ingress limited: %d", code)
+	}
+	// 直连客户端伪造的转发头被忽略，仍按对端地址计数。
+	for i := 0; i < 10; i++ {
+		login("198.51.100.7:4000", fmt.Sprintf("192.0.2.%d", i))
+	}
+	if code := login("198.51.100.7:4000", "192.0.2.99"); code != 429 {
+		t.Fatalf("spoofed forwarded header bypassed limit: %d", code)
+	}
+	// ingress没带可用转发头时不按IP限流，交给auth的账号限流。
+	for i := 0; i < 12; i++ {
+		if code := login("10.0.0.6:4000", ""); code != 200 {
+			t.Fatalf("unknown client ip limited: %d", code)
+		}
+	}
+}
+func TestRPCAuthLoginMapsRateLimit(t *testing.T) {
+	_, _, err := (RPCAuth{Client: rpcClient{login: &pb.LoginRsp{Result: pb.AuthResult_RATE_LIMITED}}}).Login(context.Background(), "user", "pass")
+	if !errors.Is(err, errRateLimited) {
+		t.Fatal(err)
 	}
 }

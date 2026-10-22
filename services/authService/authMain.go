@@ -4,6 +4,7 @@ import (
 	pb "Betterfly2/proto/server_rpc/auth"
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
+	"authService/internal/loginlimit"
 	"google.golang.org/grpc"
 	"net"
 	"os"
@@ -24,7 +25,7 @@ func main() {
 		sugar.Fatalln("监听端口失败:", port, ":", err)
 	}
 	grpcServer := grpc.NewServer()
-	pb.RegisterAuthServiceServer(grpcServer, &AuthService{})
+	pb.RegisterAuthServiceServer(grpcServer, &AuthService{limiter: loginlimit.FromEnv()})
 
 	sugar.Infoln("auth服务启动成功！端口:", port)
 	if err := grpcServer.Serve(lis); err != nil {

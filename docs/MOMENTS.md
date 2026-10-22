@@ -71,8 +71,11 @@ group ACL，检查失败不会当作“私有”。默认 Compose 复用现有 R
 
 Cookie 写请求必须带同源 Origin 和 `X-CSRF-Token`，token 由 session / me 响应提供，
 网页只存内存。Bearer 与不同的 Cookie JWT 冲突时拒绝，不隐式切换账号。
-登录入口有每实例、每 IP 每分钟 10 次的有界限流；多副本或开放公网还需入口层限流，
-不相信客户端 X-Forwarded-For。
+密码登录在 Auth 按账号限流：同一账号 15 分钟内密码错误 10 次后暂时拒绝（返回 429），
+与 App 登录、修改密码共用计数，换 IP 或换入口都不能绕过；JWT 接入不受影响。
+网页入口另有每实例、每来源 IP 每分钟 10 次的有界限流。来源 IP 只在对端属于
+`MOMENTS_TRUSTED_PROXY_CIDRS`（默认回环与内网段，即 ingress）时取 X-Forwarded-For /
+X-Real-IP，直连客户端伪造的转发头被忽略；确定不了真实 IP 时只靠账号限流。
 
 `friends`：本人或当前双向有效好友；`private`：仅本人。新增好友可看先前的 friends
 动态；删除任一方向关系后，后续详情、列表、互动及图片签名重新检查权限。

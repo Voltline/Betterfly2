@@ -5,6 +5,7 @@ import (
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
 	"authService/config"
+	"authService/internal/loginlimit"
 	"authService/internal/utils"
 	"context"
 	"crypto/rand"
@@ -16,9 +17,10 @@ import (
 
 type AuthService struct {
 	pb.AuthServiceServer
+	limiter *loginlimit.Limiter
 }
 
-func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
+func (s *AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, error) {
 	account := req.GetAccount()
 	password := req.GetPassword()
 	jwt := req.GetJwt()
@@ -40,12 +42,19 @@ func (*AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp, 
 	}
 
 	if jwt == "" { // 密码验证
+		if s.limiter.Blocked(user.ID) {
+			logger.Sugar().Warnln(userBriefStr(user), "password login rate limited")
+			result = pb.AuthResult_RATE_LIMITED
+			goto RETURN
+		}
 		err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
 		if err != nil {
 			logger.Sugar().Warnln(userBriefStr(user), "password error")
+			s.limiter.RecordFailure(user.ID)
 			result = pb.AuthResult_PASSWORD_ERROR
 			goto RETURN
 		}
+		s.limiter.Clear(user.ID)
 
 		if len(user.JwtKey) == 0 { // 生成jwt key
 			user.JwtKey = make([]byte, config.JwtKeyLength)
@@ -231,7 +240,7 @@ RETURN:
 
 }
 
-func (*AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
+func (s *AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
 	user, result := authenticateUser(req.GetUserId(), req.GetJwt())
 	if result != pb.AuthResult_OK {
 		return &pb.ChangePasswordRsp{Result: result}, nil
@@ -242,9 +251,15 @@ func (*AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq)
 		return &pb.ChangePasswordRsp{Result: result}, nil
 	}
 
+	// 拿到JWT的人也不能借修改密码无限次猜旧密码。
+	if s.limiter.Blocked(user.ID) {
+		return &pb.ChangePasswordRsp{Result: pb.AuthResult_RATE_LIMITED}, nil
+	}
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.GetOldPassword())) != nil {
+		s.limiter.RecordFailure(user.ID)
 		return &pb.ChangePasswordRsp{Result: pb.AuthResult_PASSWORD_ERROR}, nil
 	}
+	s.limiter.Clear(user.ID)
 
 	passwordHash, err := bcrypt.GenerateFromPassword(newPassword, bcrypt.DefaultCost)
 	if err != nil {

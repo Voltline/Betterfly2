@@ -2,12 +2,12 @@ package httpserver
 
 import (
 	pb "Betterfly2/proto/server_rpc/auth"
+	sharedutils "Betterfly2/shared/utils"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,6 +18,7 @@ import (
 
 var errUnauthorized = errors.New("unauthorized")
 var errUnavailable = errors.New("auth unavailable")
+var errRateLimited = errors.New("rate limited")
 
 type Auth interface {
 	Check(context.Context, int64, string) (int64, error)
@@ -46,6 +47,9 @@ func (a RPCAuth) Login(ctx context.Context, account, password string) (int64, st
 	r, err := a.Client.Login(ctx, &pb.LoginReq{Account: account, Password: password})
 	if err != nil || r == nil || r.GetResult() == pb.AuthResult_SERVICE_ERROR {
 		return 0, "", errUnavailable
+	}
+	if r.GetResult() == pb.AuthResult_RATE_LIMITED {
+		return 0, "", errRateLimited
 	}
 	if r.GetResult() != pb.AuthResult_OK || r.GetUserId() <= 0 || r.GetJwt() == "" || len(r.GetJwt()) > 3500 {
 		return 0, "", errUnauthorized
@@ -177,7 +181,8 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 			jwt = parts[1]
 		}
 	} else {
-		if !s.logins.allow(r.RemoteAddr) {
+		// 账号级失败限流在auth里；这里只按真实来源IP限制尝试频率，确定不了IP时不限。
+		if ip := sharedutils.ClientIP(r, s.trustedProxies); ip != "" && !s.logins.allow(ip) {
 			writeError(w, 429, "RATE_LIMITED", "请稍后再尝试登录")
 			return
 		}
@@ -212,11 +217,7 @@ type loginLimiter struct {
 	entries map[string]attempts
 }
 
-func (l *loginLimiter) allow(remote string) bool {
-	ip, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		ip = remote
-	}
+func (l *loginLimiter) allow(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	timestamp := time.Now()
@@ -233,8 +234,9 @@ func (l *loginLimiter) allow(remote string) bool {
 				delete(l.entries, key)
 			}
 		}
+		// 表满时放行但不记录：内存有界，大量来源也不能把所有新IP挡在门外。
 		if len(l.entries) >= 4096 {
-			return false
+			return true
 		}
 	}
 	a.count++

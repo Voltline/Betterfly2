@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"Betterfly2/shared/logger"
+	sharedutils "Betterfly2/shared/utils"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"momentsService/internal/moments"
 	"momentsService/web"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -28,10 +30,16 @@ type Server struct {
 	secure      bool
 	logins      loginLimiter
 	verifySlots chan struct{}
+	// 只信任来自这些地址（ingress）的X-Forwarded-For/X-Real-IP。
+	trustedProxies []netip.Prefix
 }
 
 func New(service *moments.Service, auth Auth, origin string) *Server {
-	return &Server{service: service, auth: auth, origin: origin, secure: strings.HasPrefix(origin, "https://"), verifySlots: make(chan struct{}, 2)}
+	proxies := os.Getenv("MOMENTS_TRUSTED_PROXY_CIDRS")
+	if proxies == "" {
+		proxies = sharedutils.DefaultTrustedProxyCIDRs
+	}
+	return &Server{service: service, auth: auth, origin: origin, secure: strings.HasPrefix(origin, "https://"), verifySlots: make(chan struct{}, 2), trustedProxies: sharedutils.ParseTrustedProxies(proxies)}
 }
 func write(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -51,6 +59,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, 409, "CONFLICT", "幂等请求内容不同，或图片已被使用")
 	case errors.Is(err, moments.ErrGone):
 		writeError(w, 410, "DELETED", "内容已删除，请使用新的客户端 ID")
+	case errors.Is(err, errRateLimited):
+		writeError(w, 429, "RATE_LIMITED", "请稍后再尝试登录")
 	case errors.Is(err, errUnauthorized):
 		writeError(w, 401, "UNAUTHORIZED", "请重新登录或检查请求凭据")
 	case isTooLarge(err):

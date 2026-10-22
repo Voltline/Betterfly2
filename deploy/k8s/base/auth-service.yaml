@@ -20,6 +20,11 @@ spec:
           env:
             - name: PORT
               value: "50051"
+            - name: REDIS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: betterfly2-config
+                  key: REDIS_ADDR
             - name: DB_MAX_OPEN_CONNS
               value: "8"
             - name: DB_MAX_IDLE_CONNS

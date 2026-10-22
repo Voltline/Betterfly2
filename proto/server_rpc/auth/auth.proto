@@ -16,6 +16,7 @@ enum AuthResult {
   ACCOUNT_TOO_LONG = 7;
   PASSWORD_TOO_SHORT = 8;
   PASSWORD_TOO_LONG = 9;
+  RATE_LIMITED = 10; // 同一账号密码错误过多，暂时拒绝密码校验
 }
 
 message LoginReq {

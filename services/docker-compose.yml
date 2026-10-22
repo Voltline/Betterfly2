@@ -271,9 +271,12 @@ services:
       DB_MAX_IDLE_CONNS: ${AUTH_DB_MAX_IDLE_CONNS:-2}
       PORT: 50051
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      REDIS_ADDR: redis:6379
     depends_on:
       db_migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_started
     ports:
       - "50051:50051"
     networks:
@@ -443,6 +446,7 @@ services:
       PORT: "8087"
       AUTH_RPC_ADDR: auth_service:50051
       MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-http://localhost:8087}
+      MOMENTS_TRUSTED_PROXY_CIDRS: ${MOMENTS_TRUSTED_PROXY_CIDRS:-}
       MOMENTS_BUCKET: ${MOMENTS_BUCKET:-betterfly-moments}
       RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
       RUSTFS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}

@@ -34,6 +34,10 @@ func GenerateJWT(user *db.User) (string, error) {
 }
 
 func ValidateJWT(jwtStr string, jwtKey []byte) (*BetterflyClaims, error) {
+	// HMAC accepts an empty key, so anyone could sign for a user who has none.
+	if len(jwtKey) == 0 {
+		return nil, errors.New("jwt signing key is empty")
+	}
 	var parser = goJwt.NewParser(
 		goJwt.WithValidMethods([]string{"HS256"}), // 明确指定签名算法
 		goJwt.WithExpirationRequired(),            // 必须含有 exp 字段

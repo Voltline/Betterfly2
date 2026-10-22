@@ -113,7 +113,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	userName := rsp.GetUserName()
 	result := pb.AuthResult_OK
 	var userID int64 = 0
-	var passwordHash []byte
+	var passwordHash, jwtKey []byte
 	var user *db.User
 	var err error
 
@@ -153,10 +153,18 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 		result = pb.AuthResult_SERVICE_ERROR
 		goto RETURN
 	}
+	// 注册即生成签名密钥，账号不会处于没有密钥的状态
+	jwtKey, err = newJWTKey()
+	if err != nil {
+		logger.Sugar().Errorln("fail to generate jwt key:", err)
+		result = pb.AuthResult_SERVICE_ERROR
+		goto RETURN
+	}
 	user = &db.User{
 		Account:      account,
 		Name:         userName,
 		PasswordHash: string(passwordHash),
+		JwtKey:       jwtKey,
 	}
 	err = db.AddUser(user)
 	if err != nil {
@@ -201,7 +209,12 @@ func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.Chec
 	}
 	account = user.Account
 
-	// 验证jwt
+	// 验证jwt；没有签名密钥的账号不可能持有合法JWT
+	if len(user.JwtKey) == 0 {
+		logger.Sugar().Warnln(userBriefStr(user), "rejected jwt check without a user signing key")
+		result = pb.AuthResult_JWT_ERROR
+		goto RETURN
+	}
 	claim, err = utils.ValidateJWT(jwt, user.JwtKey)
 	if err != nil || claim.ID != userID || claim.Account != account {
 		logger.Sugar().Warnln(userBriefStr(user), "failed to validate jwt:", err)

@@ -9,8 +9,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	goJwt "github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -366,4 +368,58 @@ func useAuthMockDB(t *testing.T) sqlmock.Sqlmock {
 		}
 	})
 	return mock
+}
+
+func TestCheckJwtRejectsTokenForUserWithoutSigningKey(t *testing.T) {
+	// HMAC verifies an empty-key signature, so this token is what an attacker can forge.
+	forged, err := goJwt.NewWithClaims(goJwt.SigningMethodHS256, utils.BetterflyClaims{
+		ID: 9, Account: "alice",
+		RegisteredClaims: goJwt.RegisteredClaims{ExpiresAt: goJwt.NewNumericDate(time.Now().Add(time.Hour))},
+	}).SignedString([]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range [][]byte{nil, {}} {
+		mock := useAuthMockDB(t)
+		expectUserByID(mock, []byte("hash"), key)
+		response, err := (&AuthService{}).CheckJwt(context.Background(), &pb.CheckJwtReq{UserId: 9, Jwt: forged})
+		if err != nil || response.GetResult() != pb.AuthResult_JWT_ERROR {
+			t.Fatalf("forged JWT accepted for key %v: response=%+v err=%v", key, response, err)
+		}
+	}
+}
+
+func TestCheckJwtAcceptsTokenSignedWithUserKey(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	jwt, err := utils.GenerateJWT(&db.User{ID: 9, Account: "alice", JwtKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := useAuthMockDB(t)
+	expectUserByID(mock, []byte("hash"), key)
+	response, err := (&AuthService{}).CheckJwt(context.Background(), &pb.CheckJwtReq{UserId: 9, Jwt: jwt})
+	if err != nil || response.GetResult() != pb.AuthResult_OK || response.GetAccount() != "alice" {
+		t.Fatalf("valid JWT rejected: response=%+v err=%v", response, err)
+	}
+}
+
+func TestSignupStoresSigningKey(t *testing.T) {
+	mock := useAuthMockDB(t)
+	mock.ExpectQuery(`SELECT \* FROM "users" WHERE account = \$1`).
+		WithArgs("alice", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	key := &bytesCapture{}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO "users" \("account","name","update_time","avatar","password_hash","jwt_key"\)`).
+		WithArgs("alice", "Alice", sqlmock.AnyArg(), "", sqlmock.AnyArg(), key).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+	mock.ExpectCommit()
+
+	response, err := (&AuthService{}).Signup(context.Background(), &pb.SignupReq{Account: "alice", Password: "password", UserName: "Alice"})
+	if err != nil || response.GetResult() != pb.AuthResult_OK || response.GetUserId() != 9 {
+		t.Fatalf("signup failed: response=%+v err=%v", response, err)
+	}
+	if len(key.value) != 32 {
+		t.Fatalf("signup stored signing key of %d bytes", len(key.value))
+	}
 }

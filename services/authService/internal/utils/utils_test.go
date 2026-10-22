@@ -118,3 +118,18 @@ func signedTestToken(t *testing.T, key []byte, registered goJwt.RegisteredClaims
 	}
 	return token
 }
+
+func TestValidateJWTRejectsEmptyKey(t *testing.T) {
+	token, err := goJwt.NewWithClaims(goJwt.SigningMethodHS256, BetterflyClaims{
+		ID: 1, Account: "alice",
+		RegisteredClaims: goJwt.RegisteredClaims{ExpiresAt: goJwt.NewNumericDate(time.Now().Add(time.Hour))},
+	}).SignedString([]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range [][]byte{nil, {}} {
+		if _, err := ValidateJWT(token, key); err == nil {
+			t.Fatalf("empty key %v validated a token", key)
+		}
+	}
+}

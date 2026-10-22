@@ -631,10 +631,14 @@ func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *stor
 	if resp := profileUpdateForbidden(req, update.GetUserId()); resp != nil {
 		return resp, nil
 	}
+	name, ok := db.NormalizeUserName(update.GetNewUserName())
+	if !ok {
+		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+	}
 
 	// 更新数据库
 	start := time.Now()
-	err := db.UpdateUserNameByIDWithDB(database, update.UserId, update.NewUserName)
+	err := db.UpdateUserNameByIDWithDB(database, update.UserId, name)
 	metrics.RecordDatabaseQuery("update", start)
 	if err != nil {
 		sugar.Errorf("更新用户名失败: %v", err)
@@ -660,7 +664,7 @@ func (h *StorageHandler) handleUpdateUserNameWithDB(database *gorm.DB, req *stor
 	}
 
 	sugar.Debugf("用户名更新成功: user_id=%d, new_name=%s",
-		update.UserId, update.NewUserName)
+		update.UserId, name)
 
 	cacheKey := fmt.Sprintf("user:%d", update.UserId)
 	if cacheKeys != nil {

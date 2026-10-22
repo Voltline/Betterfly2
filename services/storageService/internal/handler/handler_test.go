@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -469,12 +470,12 @@ func TestHandleUpdateUserName(t *testing.T) {
 		Payload: &storage.RequestMessage_UpdateUserName{
 			UpdateUserName: &storage.UpdateUserName{
 				UserId:      1000,
-				NewUserName: "NewUsername",
+				NewUserName: "  NewUsername ",
 			},
 		},
 	}
 
-	// 设置数据库期望
+	// 设置数据库期望，昵称去掉首尾空白后入库
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE \"users\" SET .* WHERE id = \\$3").
 		WithArgs("NewUsername", sqlmock.AnyArg(), int64(1000)).
@@ -494,6 +495,19 @@ func TestHandleUpdateUserName(t *testing.T) {
 	assert.NotNil(t, resp)
 	assert.Equal(t, storage.StorageResult_OK, resp.Result)
 	assert.Equal(t, int64(1000), resp.TargetUserId)
+}
+
+func TestHandleUpdateUserNameRejectsInvalidName(t *testing.T) {
+	useMockDB(t)
+	handler := &StorageHandler{l1Cache: newMockCache()}
+	for _, name := range []string{"", "  \t", strings.Repeat("名", db.MaxNameLen+1), "\xff"} {
+		req := &storage.RequestMessage{TargetUserId: 1000, Payload: &storage.RequestMessage_UpdateUserName{
+			UpdateUserName: &storage.UpdateUserName{UserId: 1000, NewUserName: name},
+		}}
+		resp, err := handler.handleUpdateUserNameWithDB(handler.requestDatabase(), req, req.GetUpdateUserName(), nil)
+		assert.NoError(t, err)
+		assert.Equal(t, storage.StorageResult_INVALID_ARGUMENT, resp.GetResult(), "name %q", name)
+	}
 }
 
 func TestHandleUpdateUserNameDefersCacheInvalidationUntilCommit(t *testing.T) {

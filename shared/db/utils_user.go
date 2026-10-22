@@ -4,6 +4,8 @@ import (
 	"Betterfly2/shared/utils"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
@@ -13,6 +15,15 @@ var (
 	ErrAccountExists  = errors.New("用户账号已存在")
 	ErrUserIDConflict = errors.New("用户ID冲突")
 )
+
+// NormalizeUserName 去掉首尾空白并校验用户昵称：不能为空，最多MaxNameLen个字符（与客户端规则一致）。
+func NormalizeUserName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > MaxNameLen {
+		return "", false
+	}
+	return name, true
+}
 
 func GetUserById(id int64) (*User, error) {
 	return GetUserByIDWithDB(DB(), id)

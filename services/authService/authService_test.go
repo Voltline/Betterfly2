@@ -33,6 +33,9 @@ func TestSignupRejectsInvalidCredentialsBeforeDatabaseAccess(t *testing.T) {
 		{name: "empty password", req: &pb.SignupReq{Account: "alice"}, want: pb.AuthResult_PASSWORD_EMPTY},
 		{name: "password too short", req: &pb.SignupReq{Account: "alice", Password: "1234567"}, want: pb.AuthResult_PASSWORD_TOO_SHORT},
 		{name: "password too long", req: &pb.SignupReq{Account: "alice", Password: strings.Repeat("x", 73)}, want: pb.AuthResult_PASSWORD_TOO_LONG},
+		{name: "empty user name", req: &pb.SignupReq{Account: "alice", Password: "password"}, want: pb.AuthResult_USER_NAME_INVALID},
+		{name: "blank user name", req: &pb.SignupReq{Account: "alice", Password: "password", UserName: " \t\n "}, want: pb.AuthResult_USER_NAME_INVALID},
+		{name: "user name too long", req: &pb.SignupReq{Account: "alice", Password: "password", UserName: strings.Repeat("名", db.MaxNameLen+1)}, want: pb.AuthResult_USER_NAME_INVALID},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -418,7 +421,7 @@ func TestSignupStoresSigningKey(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
 	mock.ExpectCommit()
 
-	response, err := (&AuthService{}).Signup(context.Background(), &pb.SignupReq{Account: "alice", Password: "password", UserName: "Alice"})
+	response, err := (&AuthService{}).Signup(context.Background(), &pb.SignupReq{Account: "alice", Password: "password", UserName: "  Alice\n"})
 	if err != nil || response.GetResult() != pb.AuthResult_OK || response.GetUserId() != 9 {
 		t.Fatalf("signup failed: response=%+v err=%v", response, err)
 	}

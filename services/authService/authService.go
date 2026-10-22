@@ -125,6 +125,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 	var passwordHash, jwtKey []byte
 	var user *db.User
 	var err error
+	var ok bool
 
 	logger.Sugar().Debugf("RPC-SignupReq { account:%s }", account)
 
@@ -141,6 +142,10 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 		goto RETURN
 	}
 	if result = validateNewPassword([]byte(password)); result != pb.AuthResult_OK {
+		goto RETURN
+	}
+	if userName, ok = db.NormalizeUserName(userName); !ok {
+		result = pb.AuthResult_USER_NAME_INVALID
 		goto RETURN
 	}
 

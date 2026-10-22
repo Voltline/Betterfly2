@@ -103,6 +103,7 @@ func (h *WebSocketHandler) handleConnection(w http.ResponseWriter, r *http.Reque
 
 	// 创建新连接
 	connection := h.connManager.AddConnection(conn)
+	connection.ClientIP = clientIP(r, h.config.trustedProxies)
 	conn.SetReadLimit(h.config.maxMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(h.config.authTimeout))
 	conn.SetPongHandler(func(string) error {
@@ -260,8 +261,25 @@ func (h *WebSocketHandler) handleAuthenticatedMessage(conn *connection.Connectio
 
 // handleLogin 处理登录
 func (h *WebSocketHandler) handleLogin(conn *connection.Connection, requestMsg *pb.RequestMessage) {
+	account := requestMsg.GetLogin().GetAccount()
+	passwordLogin := requestMsg.GetJwt() == ""
+	if passwordLogin && passwordLoginBlocked(account, conn.ClientIP) {
+		logger.Sugar().Warnw("密码登录失败次数过多，暂时拒绝", "client_ip", conn.ClientIP)
+		h.sendResponse(conn, &pb.ResponseMessage{Payload: &pb.ResponseMessage_Login{Login: &pb.LoginRsp{Result: pb.LoginResult_LOGIN_SVR_ERROR}}})
+		return
+	}
 	rsp, realUserID, err := HandleLoginMessage(requestMsg)
 	logger.Sugar().Infof("登录响应: result=%s user_id=%d", rsp.GetLogin().GetResult(), realUserID)
+	if passwordLogin {
+		switch rsp.GetLogin().GetResult() {
+		case pb.LoginResult_PASSWORD_ERROR:
+			recordPasswordLoginFailure(account, conn.ClientIP, true)
+		case pb.LoginResult_ACCOUNT_NOT_EXIST:
+			recordPasswordLoginFailure(account, conn.ClientIP, false)
+		case pb.LoginResult_LOGIN_OK:
+			clearPasswordLoginFailures(account)
+		}
+	}
 
 	if err != nil {
 		logger.Sugar().Errorf("登录出现错误: %v", err)
@@ -305,6 +323,11 @@ func loginResponseAllowsBinding(response *pb.ResponseMessage, userID int64) bool
 
 // handleSignup 处理注册
 func (h *WebSocketHandler) handleSignup(conn *connection.Connection, requestMsg *pb.RequestMessage) {
+	if !signupAllowed(conn.ClientIP) {
+		logger.Sugar().Warnw("注册请求过于频繁，暂时拒绝", "client_ip", conn.ClientIP)
+		h.sendResponse(conn, &pb.ResponseMessage{Payload: &pb.ResponseMessage_Signup{Signup: &pb.SignupRsp{Result: pb.SignupResult_SIGNUP_SVR_ERROR}}})
+		return
+	}
 	rsp, err := HandleSignupMessage(requestMsg)
 	logger.Sugar().Infof("注册响应: %s", rsp.String())
 

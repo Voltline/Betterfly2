@@ -43,6 +43,8 @@ data:
   WS_READ_HEADER_TIMEOUT: 5s
   WS_IDLE_TIMEOUT: 60s
   WS_MAX_HEADER_BYTES: "1048576"
+  # Peers trusted to set X-Forwarded-For/X-Real-IP (the ingress); used for per-IP login and signup limits.
+  WS_TRUSTED_PROXY_CIDRS: "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
   WS_SESSION_LEASE_TTL: 2m
   WS_ROUTE_LEASE_TTL: 90s
   WS_LEASE_REFRESH_INTERVAL: 30s

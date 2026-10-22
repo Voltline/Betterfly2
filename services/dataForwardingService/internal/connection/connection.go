@@ -21,6 +21,7 @@ import (
 
 type Connection struct {
 	ID            string
+	ClientIP      string
 	UserID        string
 	OwnerToken    string
 	Conn          *websocket.Conn

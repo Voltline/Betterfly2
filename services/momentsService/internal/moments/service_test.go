@@ -28,6 +28,9 @@ type fakeMedia struct {
 	sealed       []byte
 	reads, signs int
 	err          error
+	deleted      []string
+	deleteErr    error
+	stagingSwept int
 }
 
 func (m *fakeMedia) Upload(context.Context, string, string, int64) (string, map[string]string, error) {
@@ -55,6 +58,20 @@ func (m *fakeMedia) Avatar(ctx context.Context, key string) (string, error) {
 	return m.Download(ctx, key)
 }
 func (m *fakeMedia) Health(context.Context) error { return m.err }
+func (m *fakeMedia) Delete(_ context.Context, keys []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	m.deleted = append(m.deleted, keys...)
+	return nil
+}
+func (m *fakeMedia) DeleteStagingBefore(context.Context, time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stagingSwept, m.deleteErr
+}
 func testService(t *testing.T) (*Service, sqlmock.Sqlmock, *fakeMedia) {
 	t.Helper()
 	sql, mock, err := sqlmock.New()
@@ -346,6 +363,7 @@ func TestCommentViewTombstoneNeverExposesDeletedContent(t *testing.T) {
 func TestPrepareAssetCanonicalConflict(t *testing.T) {
 	s, mock, _ := testService(t)
 	input := CreateAsset{ClientAssetID: "asset", Hash: strings.Repeat("a", 128), Size: 12, MIME: "image/png"}
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "moment_assets"`).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectQuery(`INSERT INTO "moment_assets"`).WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectQuery(`SELECT .*moment_assets`).WillReturnRows(sqlmock.NewRows([]string{"id", "hash", "size", "mime"}).AddRow(3, input.Hash, 13, input.MIME))
 	if _, err := s.PrepareAsset(context.Background(), 1, input); !errors.Is(err, ErrConflict) {

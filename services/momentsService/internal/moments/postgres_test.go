@@ -310,3 +310,110 @@ func TestPostgresDeletionRacesDoNotResurrectInteractions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPostgresCleanupPurgesUnattachedAndDeletedPostAssets(t *testing.T) {
+	s, database := postgresFixture(t)
+	media := s.media.(*fakeMedia)
+	ctx := context.Background()
+	old, fresh := now().Add(-UnattachedRetention-time.Minute), now()
+	asset := func(name, status string, created time.Time, post *int64) int64 {
+		t.Helper()
+		row := db.MomentAsset{OwnerUserID: 1, ClientAssetID: name, PostID: post, Hash: strings.Repeat("a", 128), Size: 1, MIME: "image/png", Status: status, StagingKey: "staging/" + name, StorageKey: "sealed/" + name, CreatedAt: created}
+		if err := database.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		return row.ID
+	}
+	post := func(name string, deleted bool) *int64 {
+		t.Helper()
+		row := db.MomentPost{AuthorUserID: 1, ClientPostID: name, RequestFingerprint: "f", Content: "x", Visibility: "friends", CreatedAt: old}
+		if deleted {
+			row.DeletedAt = &fresh
+		}
+		if err := database.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+		return &row.ID
+	}
+	asset("pending-old", "pending", old, nil)
+	asset("pending-fresh", "pending", fresh, nil)
+	verifiedOld := asset("verified-old", "verified", old, nil)
+	asset("verified-fresh", "verified", fresh, nil)
+	asset("live", "verified", old, post("live", false))
+	asset("removed", "verified", old, post("removed", true))
+	locked := asset("locked-old", "verified", old, nil)
+
+	// 发布动态正持有行锁的图片不会被这一轮清理。
+	tx := database.Begin()
+	if err := tx.Exec("SELECT id FROM moment_assets WHERE id = ? FOR UPDATE", locked).Error; err != nil {
+		t.Fatal(err)
+	}
+	media.stagingSwept = 3
+	stats, err := s.Cleanup(ctx, now())
+	tx.Rollback()
+	if err != nil || stats != (CleanupStats{Unattached: 2, DeletedPosts: 1, Staging: 3}) {
+		t.Fatal(stats, err)
+	}
+	var remaining []string
+	database.Model(&db.MomentAsset{}).Order("client_asset_id").Pluck("client_asset_id", &remaining)
+	if strings.Join(remaining, ",") != "live,locked-old,pending-fresh,verified-fresh" {
+		t.Fatal(remaining)
+	}
+	deleted := strings.Join(media.deleted, ",")
+	for _, key := range []string{"staging/pending-old", "sealed/pending-old", "sealed/verified-old", "sealed/removed"} {
+		if !strings.Contains(deleted, key) {
+			t.Fatal("object not deleted", key, deleted)
+		}
+	}
+	if strings.Contains(deleted, "live") || strings.Contains(deleted, "fresh") || strings.Contains(deleted, "locked") {
+		t.Fatal("live object deleted", deleted)
+	}
+
+	// 冻结草稿引用了被清理的图片：返回409让客户端重新上传，且不留下动态。
+	if _, err := s.Create(ctx, 1, CreatePost{ClientPostID: "late", Visibility: "friends", AssetIDs: []string{id(verifiedOld)}}); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	var lateCount int64
+	database.Model(&db.MomentPost{}).Where("client_post_id = 'late'").Count(&lateCount)
+	if lateCount != 0 {
+		t.Fatal("post created with purged asset")
+	}
+
+	// 对象删除失败时整批回滚，行保留到下次重试。
+	media.deleteErr = errors.New("storage down")
+	if _, err := s.Cleanup(ctx, now()); err == nil {
+		t.Fatal("cleanup ignored delete failure")
+	}
+	var lockedCount int64
+	database.Model(&db.MomentAsset{}).Where("id = ?", locked).Count(&lockedCount)
+	if lockedCount != 1 {
+		t.Fatal("row removed although object delete failed")
+	}
+	media.deleteErr = nil
+	if stats, err := s.Cleanup(ctx, now()); err != nil || stats.Unattached != 1 {
+		t.Fatal(stats, err)
+	}
+}
+
+func TestPostgresUnattachedAssetQuota(t *testing.T) {
+	s, database := postgresFixture(t)
+	ctx := context.Background()
+	hash := strings.Repeat("b", 128)
+	for n := 0; n < MaxUnattachedAssets; n++ {
+		if err := database.Create(&db.MomentAsset{OwnerUserID: 3, ClientAssetID: fmt.Sprintf("held%d", n), Hash: hash, Size: 1, MIME: "image/png", Status: "pending", StagingKey: fmt.Sprintf("staging/%d", n), StorageKey: fmt.Sprintf("sealed/%d", n), CreatedAt: now()}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.PrepareAsset(ctx, 3, CreateAsset{ClientAssetID: "new", Hash: hash, Size: 1, MIME: "image/png"}); !errors.Is(err, ErrQuota) {
+		t.Fatal("new upload beyond quota", err)
+	}
+	// 已有上传的重试照常返回上传地址。
+	upload, err := s.PrepareAsset(ctx, 3, CreateAsset{ClientAssetID: "held0", Hash: hash, Size: 1, MIME: "image/png"})
+	if err != nil || upload.UploadURL == "" {
+		t.Fatal(upload, err)
+	}
+	// 其他用户不受影响。
+	if _, err := s.PrepareAsset(ctx, 2, CreateAsset{ClientAssetID: "new", Hash: hash, Size: 1, MIME: "image/png"}); err != nil {
+		t.Fatal(err)
+	}
+}

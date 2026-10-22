@@ -52,12 +52,13 @@ func main() {
 	sql, _ := database.DB()
 	defer sql.Close()
 	service := moments.New(database, objects)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go service.RunCleanup(ctx)
 	if os.Getenv("METRICS_ENABLED") != "false" {
 		moments.RegisterMetrics(database)
 	}
 	server := &http.Server{Addr: ":" + env("PORT", "8087"), Handler: httpserver.New(service, httpserver.RPCAuth{Client: pb.NewAuthServiceClient(conn)}, origin).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	errorsCh := make(chan error, 1)
 	go func() {
 		logger.Sugar().Infow("MomentsService HTTP started", "address", server.Addr)

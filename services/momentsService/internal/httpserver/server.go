@@ -61,6 +61,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, 410, "DELETED", "内容已删除，请使用新的客户端 ID")
 	case errors.Is(err, errRateLimited):
 		writeError(w, 429, "RATE_LIMITED", "请稍后再尝试登录")
+	case errors.Is(err, moments.ErrQuota):
+		writeError(w, 429, "TOO_MANY_UPLOADS", "未发布的图片过多，请先发布或稍后再试")
 	case errors.Is(err, errUnauthorized):
 		writeError(w, 401, "UNAUTHORIZED", "请重新登录或检查请求凭据")
 	case isTooLarge(err):

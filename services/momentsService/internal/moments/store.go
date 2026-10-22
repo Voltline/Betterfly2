@@ -130,8 +130,9 @@ func (s *Service) Create(ctx context.Context, viewer int64, input CreatePost) (*
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ? AND owner_user_id = ?", assetIDs, viewer).Order("id").Find(&assets).Error; err != nil {
 			return err
 		}
+		// 图片不存在可能是长期未发布被清理了；按冲突处理，客户端会解锁草稿重新上传。
 		if len(assets) != len(assetIDs) {
-			return ErrInvalid
+			return ErrConflict
 		}
 		for _, asset := range assets {
 			if asset.Status != "verified" || asset.PostID != nil {

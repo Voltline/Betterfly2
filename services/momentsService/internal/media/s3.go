@@ -129,6 +129,39 @@ func (s *S3) Avatar(ctx context.Context, key string) (string, error) {
 	}
 	return result.URL, nil
 }
+
+// Delete removes objects from the private bucket; missing keys are not an error.
+func (s *S3) Delete(ctx context.Context, keys []string) error {
+	for _, key := range keys {
+		if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: aws.String(key)}); err != nil {
+			return fmt.Errorf("delete %s: %w", key, err)
+		}
+	}
+	return nil
+}
+
+// DeleteStagingBefore removes staging uploads last written before cutoff. Upload URLs
+// live for minutes, so anything older is an abandoned upload or a copy already sealed.
+func (s *S3) DeleteStagingBefore(ctx context.Context, cutoff time.Time) (int, error) {
+	deleted := 0
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: &s.bucket, Prefix: aws.String("staging/")})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return deleted, err
+		}
+		for _, object := range page.Contents {
+			if object.Key == nil || object.LastModified == nil || !object.LastModified.Before(cutoff) {
+				continue
+			}
+			if err := s.Delete(ctx, []string{*object.Key}); err != nil {
+				return deleted, err
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
+}
 func (s *S3) Health(ctx context.Context) error {
 	_, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: &s.bucket})
 	return err

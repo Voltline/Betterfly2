@@ -2,6 +2,7 @@ package moments
 
 import (
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/logger"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -26,7 +27,13 @@ type Media interface {
 	Download(context.Context, string) (string, error)
 	Avatar(context.Context, string) (string, error)
 	Health(context.Context) error
+	Delete(context.Context, []string) error
+	DeleteStagingBefore(context.Context, time.Time) (int, error)
 }
+
+// MaxUnattachedAssets 限制每个用户尚未发布的图片数（含未完成上传），够10条满图动态同时准备。
+// 超过上限前不新建上传；已有的client_asset_id重试不受影响。并发请求可能略微超出。
+const MaxUnattachedAssets = 90
 
 func randomKey() string {
 	var data [24]byte
@@ -42,12 +49,24 @@ func (s *Service) PrepareAsset(ctx context.Context, viewer int64, input CreateAs
 	}
 	row := db.MomentAsset{OwnerUserID: viewer, ClientAssetID: input.ClientAssetID, Hash: input.Hash, Size: input.Size, MIME: input.MIME, StagingKey: "staging/" + randomKey(), StorageKey: "sealed/" + randomKey(), Status: "pending", CreatedAt: now()}
 	q := s.db.WithContext(ctx)
-	result := q.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "owner_user_id"}, {Name: "client_asset_id"}}, DoNothing: true}).Create(&row)
-	if result.Error != nil {
-		return nil, result.Error
+	var unattached int64
+	if err := q.Model(&db.MomentAsset{}).Where("owner_user_id = ? AND post_id IS NULL", viewer).Count(&unattached).Error; err != nil {
+		return nil, err
 	}
-	if result.RowsAffected == 0 {
-		if err := q.Where("owner_user_id = ? AND client_asset_id = ?", viewer, input.ClientAssetID).Take(&row).Error; err != nil {
+	created := false
+	if unattached < MaxUnattachedAssets {
+		result := q.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "owner_user_id"}, {Name: "client_asset_id"}}, DoNothing: true}).Create(&row)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+		created = result.RowsAffected == 1
+	}
+	if !created {
+		err := q.Where("owner_user_id = ? AND client_asset_id = ?", viewer, input.ClientAssetID).Take(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) && unattached >= MaxUnattachedAssets {
+			return nil, ErrQuota
+		}
+		if err != nil {
 			return nil, err
 		}
 		if row.Hash != input.Hash || row.Size != input.Size || row.MIME != input.MIME {
@@ -90,6 +109,7 @@ func verifyImage(reader io.Reader, row db.MomentAsset) ([]byte, int, int, error)
 }
 func (s *Service) VerifyAsset(ctx context.Context, viewer, assetID int64) (*Upload, error) {
 	var row db.MomentAsset
+	sealed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND owner_user_id = ?", assetID, viewer).Take(&row).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -117,10 +137,17 @@ func (s *Service) VerifyAsset(ctx context.Context, viewer, assetID int64) (*Uplo
 			return err
 		}
 		row.Status, row.Width, row.Height = "verified", width, height
+		sealed = true
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if sealed {
+		// 已封存的副本才是正本；暂存对象尽力删除，失败留给定期清理。
+		if err := s.media.Delete(ctx, []string{row.StagingKey}); err != nil {
+			logger.Sugar().Warnw("删除朋友圈暂存图片失败", "asset_id", row.ID, "error", err)
+		}
 	}
 	return &Upload{Asset: assetView(row), Status: row.Status}, nil
 }

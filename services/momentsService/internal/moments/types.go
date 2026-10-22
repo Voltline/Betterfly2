@@ -17,6 +17,7 @@ var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("idempotency conflict")
 	ErrGone     = errors.New("deleted")
+	ErrQuota    = errors.New("too many unattached assets")
 )
 
 const MaxImageBytes int64 = 10 << 20

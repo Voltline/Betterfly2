@@ -6,6 +6,7 @@ import (
 	"data_forwarding_service/internal/grpcClient"
 	"errors"
 	"strings"
+	"time"
 )
 
 // SplitBrokers 解析多个 Kafka broker 地址
@@ -15,6 +16,8 @@ func SplitBrokers(broker string) []string {
 }
 
 // ValidateAndParseJWT 通过rpc验证并解析JWT
+const checkJwtTimeout = 5 * time.Second
+
 func ValidateAndParseJWT(fromID int64, jwt string) error {
 	rpcClient, err := grpcClient.GetAuthClient()
 	if err != nil {
@@ -25,7 +28,10 @@ func ValidateAndParseJWT(fromID int64, jwt string) error {
 	checkJWTReq.Jwt = jwt
 	checkJWTReq.UserId = fromID
 
-	checkJWTRsp, err := rpcClient.CheckJwt(context.Background(), checkJWTReq)
+	// 每条业务请求都会走这里，auth卡住时不能让连接的读循环一起挂住
+	ctx, cancel := context.WithTimeout(context.Background(), checkJwtTimeout)
+	defer cancel()
+	checkJWTRsp, err := rpcClient.CheckJwt(ctx, checkJWTReq)
 	if err != nil {
 		return err
 	}

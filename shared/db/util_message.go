@@ -424,10 +424,27 @@ ORDER BY m.recalled_at ASC, m.message_id ASC LIMIT ?
 	return page, nil
 }
 
+// maxSyncPageTextBytes 限制一页同步消息的文本总量。消息页与撤回页放在同一个Kafka响应里，
+// 生产者默认单条上限约1MB；按条数分页时一页500条、每条带16KiB配文会远超上限，
+// 响应发不出去，客户端会一直重试同一页。超出预算时提前结束本页并设置has_more。
+const maxSyncPageTextBytes = 384 << 10
+
+// syncMessageOverheadBytes 粗略计入每条消息的数值字段与Protobuf编码开销。
+const syncMessageOverheadBytes = 128
+
 func buildSyncMessagesPage(messages []Message, pageSize int) *SyncMessagesPage {
 	page := &SyncMessagesPage{HasMore: len(messages) > pageSize}
 	if page.HasMore {
 		messages = messages[:pageSize]
+	}
+	used := 0
+	for i, message := range messages {
+		used += syncMessageOverheadBytes + len(message.Content) + len(message.Caption) + len(message.RealFileName) + len(message.Timestamp) + len(message.RecalledAt)
+		// 至少返回一条，保证游标前进。
+		if i > 0 && used > maxSyncPageTextBytes {
+			messages, page.HasMore = messages[:i], true
+			break
+		}
 	}
 	page.Messages = messages
 	if len(messages) > 0 {

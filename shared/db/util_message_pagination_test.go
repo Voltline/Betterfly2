@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"github.com/DATA-DOG/go-sqlmock"
+	"strings"
 	"testing"
 )
 
@@ -25,6 +26,33 @@ func TestBuildSyncMessagesPageBoundaries(t *testing.T) {
 				t.Fatalf("unexpected page: %+v", page)
 			}
 		})
+	}
+}
+
+func TestBuildSyncMessagesPageStaysWithinByteBudget(t *testing.T) {
+	caption := strings.Repeat("字", 16<<10/3)
+	messages := make([]Message, 100)
+	for i := range messages {
+		messages[i] = Message{MessageID: int64(i + 1), Timestamp: "2026-10-22T10:00:00Z", MessageType: "image", Caption: caption}
+	}
+	page := buildSyncMessagesPage(messages, MaxSyncPageSize)
+	if !page.HasMore || len(page.Messages) == 0 || len(page.Messages) >= len(messages) {
+		t.Fatalf("large captions must split the page: len=%d has_more=%t", len(page.Messages), page.HasMore)
+	}
+	total := 0
+	for _, message := range page.Messages {
+		total += len(message.Caption)
+	}
+	if total > maxSyncPageTextBytes {
+		t.Fatalf("page text exceeds budget: %d", total)
+	}
+	if last := page.Messages[len(page.Messages)-1]; page.NextCursorMessageID != last.MessageID {
+		t.Fatalf("cursor must point at the last returned message: %+v", page)
+	}
+
+	huge := []Message{{MessageID: 1, Timestamp: "t1", Caption: strings.Repeat("x", maxSyncPageTextBytes+1)}, {MessageID: 2, Timestamp: "t2"}}
+	if page := buildSyncMessagesPage(huge, 10); len(page.Messages) != 1 || !page.HasMore || page.NextCursorMessageID != 1 {
+		t.Fatalf("an oversized first message must still advance the cursor: %+v", page)
 	}
 }
 

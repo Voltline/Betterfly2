@@ -643,12 +643,25 @@ message StoreMsgRsp {
 数据转发服务收到 `StoreMsgRsp` 后，会向发送方客户端返回 `PostAckRsp`：
 
 ```protobuf
+enum PostAckResult {
+  POST_ACK_OK = 0;
+  POST_ACK_INVALID_ARGUMENT = 1; // 永久失败，不要自动重发
+  POST_ACK_FORBIDDEN = 2;        // 永久失败，不要自动重发
+  POST_ACK_RATE_LIMITED = 3;     // 按 retry_after_ms 退避后可重发
+  POST_ACK_SERVICE_ERROR = 10;   // 暂时故障，可重发
+}
+
 message PostAckRsp {
   int64 message_id = 1;
   string client_message_id = 2;
   string timestamp = 3; // 服务端入库时间
+  PostAckResult result = 4;
+  string reason = 5;
+  int32 retry_after_ms = 6;
 }
 ```
+
+Post 被 DF 校验或 Storage 拒绝时，DF 返回 `message_id = 0`、`result` 非 OK 的 `PostAckRsp`，带上原 `client_message_id` 与给用户看的 `reason`，并释放该消息的幂等占位，便于用户修改后手动重试。同一次拒绝先发该回执，再发兼容旧客户端的 `Warn`，顺序固定；新客户端收到拒绝回执后可忽略紧随的 `Warn`。旧客户端只处理 `message_id > 0` 的回执，行为不变。
 
 ---
 

@@ -42,10 +42,24 @@ message Warn {
   string warning_message = 1;
 }
 
+// PostAckResult 表示一条Post的处理结果。旧服务端不填result，默认POST_ACK_OK，语义不变。
+enum PostAckResult {
+  POST_ACK_OK = 0;
+  POST_ACK_INVALID_ARGUMENT = 1; // 长度、NUL、配文或文件content格式等不合法，永久失败，不要自动重发
+  POST_ACK_FORBIDDEN = 2;        // 无群或频道发帖权限、未持有引用的文件等，永久失败，不要自动重发
+  POST_ACK_RATE_LIMITED = 3;     // 发送过于频繁，按retry_after_ms退避后可重发
+  POST_ACK_SERVICE_ERROR = 10;   // 暂时故障，可按现有策略重发
+}
+
+// PostAckRsp 是Post的回执。成功时message_id>0；被拒时message_id=0且result非OK。
+// 同一次拒绝，服务端先发本回执，再发兼容旧客户端的Warn，二者顺序固定。
 message PostAckRsp {
   int64 message_id = 1;
   string client_message_id = 2; // 与Post.client_message_id对应，客户端据此匹配乱序ACK
   string timestamp = 3; // 服务端入库时间
+  PostAckResult result = 4;
+  string reason = 5; // 被拒时给用户看的简短原因
+  int32 retry_after_ms = 6; // 仅POST_ACK_RATE_LIMITED时有值
 }
 
 message UserInfo {

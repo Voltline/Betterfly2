@@ -79,6 +79,17 @@ message RelationshipChangedEvent {
 - `GroupInfo.member_count`（6）和 `JoinedGroupInfo.member_count`（8）返回当前成员数，客户端可据此对大群减少全量拉取。
 - 旧 DF 不转发 `cursor`/`limit`，friendService 收到的始终是全量请求，可以任意顺序部署；新客户端须等 DF 部署后才能真正分页。
 
+### 列表 etag
+
+`QueryContacts`、`QueryJoinedGroups` 的 `etag`（2）和 `QueryGroupMembers` 的 `etag`（5）用于省去未变化的列表。对应响应为 `ContactListRsp`、`JoinedGroupsRsp` 的 `etag`（2）、`not_modified`（3），以及 `GroupMembersRsp` 的 `etag`（8）、`not_modified`（9）：
+
+- etag 由 DF 计算：对最终发给客户端的列表（含 Monitor 联系人等 DF 侧装饰）按 ID 排序后做确定性序列化，再取 SHA-256 前 16 字节，形如 `v1:<32 位十六进制>`。friendService 只把请求里的 etag 原样带回给 DF 比较，数据库查询照旧，节省的是到客户端的带宽与解析。
+- 请求 etag 与当前内容一致时返回 `not_modified = true`、列表为空、etag 不变（成员响应的 `total_count` 为 0），客户端保留本地数据；否则返回完整列表和新 etag。
+- 群成员只在一页即全部（`cursor` 为空且 `has_more = false`）时给 etag；分页的大群、游标无效的拒绝回包都不带 etag，也不会返回 `not_modified`。
+- etag 是不透明字符串，客户端原样保存、原样回传；为空表示不可缓存。超过 64 字节的 etag 在 DF 直接丢弃，按未携带处理。
+- etag 不跨服务端版本保证：DF 版本或映射变化后同样内容可能得到不同 etag，结果只是多回一次完整列表。
+- 旧 DF 不认识 etag、旧 friendService 不带回 etag，都只会返回完整列表（旧 DF 的 etag 为空），部署顺序不限。
+
 ## Monitor
 
 Monitor 是虚拟联系人。仅 BFID 1 可以发现并添加，添加时直接成功且不创建好友申请；其他用户查询或操作时仍表现为目标不存在。除原有 `/status`、`/connections`、`/route`、`/kick` 外，Monitor 支持 `/user <user_id>` 查看安全用户摘要、`/group <group_id>` 查看成员角色分布，以及 `/requests <user_id>` 查看待处理申请数量。

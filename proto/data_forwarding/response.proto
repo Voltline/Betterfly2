@@ -84,6 +84,8 @@ message ContactInfo {
 
 message ContactListRsp {
   repeated ContactInfo contacts = 1;
+  string etag = 2;        // 不透明字符串，空表示不可缓存；不跨服务端版本保证
+  bool not_modified = 3;  // 为true时contacts为空，保留本地数据
 }
 
 message GroupInfo {
@@ -112,6 +114,8 @@ message GroupMembersRsp {
   int32 total_count = 5;                // 仅第一页填写
   string result = 6;                    // 空表示成功；游标无效或limit为负时为INVALID_ARGUMENT
   string cursor = 7;                    // 原样带回请求的cursor，用于丢弃过期页
+  string etag = 8;                      // 仅一页即全部成员时填写
+  bool not_modified = 9;                // 为true时members为空，保留本地数据
 }
 
 message JoinedGroupInfo {
@@ -127,6 +131,8 @@ message JoinedGroupInfo {
 
 message JoinedGroupsRsp {
   repeated JoinedGroupInfo groups = 1;
+  string etag = 2;
+  bool not_modified = 3;
 }
 
 message RelationshipRequestInfo {

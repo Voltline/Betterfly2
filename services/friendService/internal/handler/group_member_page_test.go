@@ -154,6 +154,11 @@ func TestQueryGroupMembersPostgresPaginatesWholeGroup(t *testing.T) {
 		t.Fatalf("paged members = %v", got)
 	}
 
+	tagged, err := handler.handleQueryGroupMembersWithDB(database, &friend.RequestMessage{TargetUserId: 4},
+		&friend.QueryGroupMembers{RequestUserId: 4, GroupId: 3001, Etag: "v1:abc"})
+	if err != nil || tagged.GetGroupMemberListRsp().GetRequestEtag() != "v1:abc" {
+		t.Fatalf("request etag must be echoed for DF: %+v err=%v", tagged.GetGroupMemberListRsp(), err)
+	}
 	if legacy := query("", 0); len(legacy.GetMembers()) != 7 || legacy.GetHasMore() || legacy.GetTotalCount() != 7 {
 		t.Fatalf("legacy full list = %+v", legacy)
 	}

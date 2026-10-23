@@ -281,7 +281,8 @@ func buildStructuredFriendResponse(friendResp *friend.ResponseMessage) *pb.Respo
 		// 游标无效或limit为负：带group_id与result回成员响应，客户端丢弃游标从第一页重拉。
 		if friendResp.GetResult() == friend.FriendResult_INVALID_ARGUMENT && payload.GroupMemberListRsp.GetGroupId() > 0 {
 			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
-			dfResp.GetGroupMembersRsp().Result = friendResp.GetResult().String()
+			rejected := dfResp.GetGroupMembersRsp()
+			rejected.Result, rejected.Etag, rejected.NotModified = friendResp.GetResult().String(), "", false
 		}
 	}
 	return dfResp
@@ -367,7 +368,7 @@ func buildGroupMembersResponse(groupMembers *friend.GroupMemberListRsp) *pb.Resp
 		})
 	}
 
-	return &pb.ResponseMessage{
+	response := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_GroupMembersRsp{
 			GroupMembersRsp: &pb.GroupMembersRsp{
 				GroupId:    groupMembers.GetGroupId(),
@@ -379,6 +380,8 @@ func buildGroupMembersResponse(groupMembers *friend.GroupMemberListRsp) *pb.Resp
 			},
 		},
 	}
+	applyGroupMembersETag(response.GetGroupMembersRsp(), groupMembers.GetRequestEtag())
+	return response
 }
 
 func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.ResponseMessage {
@@ -396,13 +399,15 @@ func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.Respons
 		})
 	}
 
-	return &pb.ResponseMessage{
+	response := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_JoinedGroupsRsp{
 			JoinedGroupsRsp: &pb.JoinedGroupsRsp{
 				Groups: groups,
 			},
 		},
 	}
+	applyJoinedGroupsETag(response.GetJoinedGroupsRsp(), groupList.GetRequestEtag())
+	return response
 }
 
 func buildContactListResponse(friendList *friend.FriendListRsp, targetUserID int64) *pb.ResponseMessage {
@@ -419,13 +424,15 @@ func buildContactListResponse(friendList *friend.FriendListRsp, targetUserID int
 		})
 	}
 	contacts = handlers.DecorateMonitorContacts(targetUserID, contacts)
-	return &pb.ResponseMessage{
+	response := &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_ContactListRsp{
 			ContactListRsp: &pb.ContactListRsp{
 				Contacts: contacts,
 			},
 		},
 	}
+	applyContactListETag(response.GetContactListRsp(), friendList.GetRequestEtag())
+	return response
 }
 
 func buildFriendOperationResponse(operation *friend.FriendOperationRsp, fallback string) *pb.ResponseMessage {

@@ -5,6 +5,7 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	friend "Betterfly2/proto/friend"
 	storage "Betterfly2/proto/storage"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -211,7 +212,7 @@ func TestValidatePostPayloadForFileMessages(t *testing.T) {
 }
 
 func TestBuildQueryContactsFriendRequestRoutesResponseToRequester(t *testing.T) {
-	req := buildQueryContactsFriendRequest(1001, "df-pod-1")
+	req := buildQueryContactsFriendRequest(1001, "", "df-pod-1")
 
 	if req.GetFromKafkaTopic() != "df-pod-1" {
 		t.Fatalf("expected FromKafkaTopic to be df-pod-1, got %q", req.GetFromKafkaTopic())
@@ -343,7 +344,7 @@ func TestBuildUpdateGroupAvatarFriendRequestRoutesResponseToRequester(t *testing
 }
 
 func TestBuildQueryGroupMembersFriendRequestRoutesResponseToRequester(t *testing.T) {
-	req := buildQueryGroupMembersFriendRequest(1001, &pb.QueryGroupMembers{FromUserId: 9999, TargetGroupId: 3003, Cursor: "next", Limit: 200}, "df-pod-1")
+	req := buildQueryGroupMembersFriendRequest(1001, &pb.QueryGroupMembers{FromUserId: 9999, TargetGroupId: 3003, Cursor: "next", Limit: 200, Etag: "v1:abc"}, "df-pod-1")
 
 	payload, ok := req.Payload.(*friend.RequestMessage_QueryGroupMembers)
 	if !ok {
@@ -352,13 +353,13 @@ func TestBuildQueryGroupMembersFriendRequestRoutesResponseToRequester(t *testing
 	if payload.QueryGroupMembers.GetRequestUserId() != 1001 || payload.QueryGroupMembers.GetGroupId() != 3003 {
 		t.Fatalf("unexpected query group members payload user=%d group=%d", payload.QueryGroupMembers.GetRequestUserId(), payload.QueryGroupMembers.GetGroupId())
 	}
-	if payload.QueryGroupMembers.GetCursor() != "next" || payload.QueryGroupMembers.GetLimit() != 200 {
+	if payload.QueryGroupMembers.GetCursor() != "next" || payload.QueryGroupMembers.GetLimit() != 200 || payload.QueryGroupMembers.GetEtag() != "v1:abc" {
 		t.Fatalf("pagination fields were not forwarded: %+v", payload.QueryGroupMembers)
 	}
 }
 
 func TestBuildQueryJoinedGroupsFriendRequestRoutesResponseToRequester(t *testing.T) {
-	req := buildQueryJoinedGroupsFriendRequest(1001, "df-pod-1")
+	req := buildQueryJoinedGroupsFriendRequest(1001, "", "df-pod-1")
 
 	payload, ok := req.Payload.(*friend.RequestMessage_QueryJoinedGroups)
 	if !ok {
@@ -423,5 +424,17 @@ func TestBuildGroupManagementRequestsUseAuthenticatedActor(t *testing.T) {
 	transferPayload := transfer.GetTransferGroupOwner()
 	if transfer.GetTargetUserId() != 1001 || transferPayload.GetRequestUserId() != 1001 || transferPayload.GetGroupId() != 3003 || transferPayload.GetUserId() != 2002 {
 		t.Fatalf("owner transfer request bridge mismatch: %+v", transfer)
+	}
+}
+
+func TestListETagForwardedAndOversizedDropped(t *testing.T) {
+	if got := buildQueryContactsFriendRequest(1001, "v1:abc", "df-pod-1").GetQueryFriendList().GetEtag(); got != "v1:abc" {
+		t.Fatalf("contacts etag = %q", got)
+	}
+	if got := buildQueryJoinedGroupsFriendRequest(1001, "v1:def", "df-pod-1").GetQueryJoinedGroups().GetEtag(); got != "v1:def" {
+		t.Fatalf("joined groups etag = %q", got)
+	}
+	if got := buildQueryContactsFriendRequest(1001, strings.Repeat("x", 65), "df-pod-1").GetQueryFriendList().GetEtag(); got != "" {
+		t.Fatalf("oversized etag should be dropped, got %d bytes", len(got))
 	}
 }

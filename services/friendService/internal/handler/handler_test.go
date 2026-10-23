@@ -156,6 +156,7 @@ func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
 		Payload: &friend.RequestMessage_QueryJoinedGroups{
 			QueryJoinedGroups: &friend.QueryJoinedGroups{
 				UserId: 2001,
+				Etag:   "v1:def",
 			},
 		},
 	}
@@ -187,6 +188,9 @@ func TestHandleQueryJoinedGroups_ReturnsJoinedGroups(t *testing.T) {
 	}
 	if groupList.GetGroups()[0].GetGroupId() != 3001 || groupList.GetGroups()[1].GetGroupId() != 3002 {
 		t.Fatalf("返回的群列表顺序或内容不符合预期: %+v", groupList.GetGroups())
+	}
+	if groupList.GetRequestEtag() != "v1:def" {
+		t.Fatalf("期望原样带回 etag，实际为 %q", groupList.GetRequestEtag())
 	}
 }
 
@@ -370,7 +374,7 @@ func TestHandleQueryFriendListMapsDatabaseContacts(t *testing.T) {
 
 	handler := &FriendHandler{}
 	req := &friend.RequestMessage{TargetUserId: 1001}
-	resp, err := handler.handleQueryFriendListWithDB(handler.database, req, &friend.QueryFriendList{UserId: 1001})
+	resp, err := handler.handleQueryFriendListWithDB(handler.database, req, &friend.QueryFriendList{UserId: 1001, Etag: "v1:abc"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,6 +385,9 @@ func TestHandleQueryFriendListMapsDatabaseContacts(t *testing.T) {
 	contact := contacts[0]
 	if contact.GetUserId() != 1002 || contact.GetAccount() != "alice" || contact.GetAlias() != "同学" || !contact.GetIsNotify() {
 		t.Fatalf("contact mapping mismatch: %+v", contact)
+	}
+	if resp.GetFriendListRsp().GetRequestEtag() != "v1:abc" {
+		t.Fatalf("request etag must be echoed for DF, got %q", resp.GetFriendListRsp().GetRequestEtag())
 	}
 }
 

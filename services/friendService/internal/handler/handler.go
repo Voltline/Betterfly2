@@ -146,7 +146,8 @@ func (h *FriendHandler) handleQueryFriendListWithDB(database *gorm.DB, req *frie
 		TargetUserId: req.TargetUserId,
 		Payload: &friend.ResponseMessage_FriendListRsp{
 			FriendListRsp: &friend.FriendListRsp{
-				Contacts: friendContacts,
+				Contacts:    friendContacts,
+				RequestEtag: payload.GetEtag(),
 			},
 		},
 	}, nil
@@ -521,7 +522,7 @@ func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *fr
 		return nil, err
 	}
 	page, hasMore := groupMemberPage(members, limit)
-	list := &friend.GroupMemberListRsp{GroupId: payload.GetGroupId(), Members: page, HasMore: hasMore, Cursor: payload.GetCursor()}
+	list := &friend.GroupMemberListRsp{GroupId: payload.GetGroupId(), Members: page, HasMore: hasMore, Cursor: payload.GetCursor(), RequestEtag: payload.GetEtag()}
 	if hasMore {
 		list.NextCursor = encodeGroupMemberCursor(payload.GetGroupId(), page[len(page)-1].GetUserId())
 	}
@@ -577,7 +578,8 @@ func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *fr
 		TargetUserId: req.TargetUserId,
 		Payload: &friend.ResponseMessage_JoinedGroupListRsp{
 			JoinedGroupListRsp: &friend.JoinedGroupListRsp{
-				Groups: joinedGroups,
+				Groups:      joinedGroups,
+				RequestEtag: payload.GetEtag(),
 			},
 		},
 	}, nil

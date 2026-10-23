@@ -29,6 +29,7 @@ message ResolveFriendRequest {
 
 message QueryFriendList {
   int64 user_id = 1;
+  string etag = 2; // 由DF比较，friendService原样带回
 }
 
 message RemoveDirectFriend {
@@ -130,10 +131,12 @@ message QueryGroupMembers {
   int64 group_id = 2;
   string cursor = 3; // 上一页的next_cursor，空表示第一页
   int32 limit = 4;   // 0表示旧客户端：返回全量，仅超出字节预算时截断
+  string etag = 5;
 }
 
 message QueryJoinedGroups {
   int64 user_id = 1;
+  string etag = 2;
 }
 
 message RemoveGroupMember {
@@ -167,6 +170,7 @@ message FriendContact {
 
 message FriendListRsp {
   repeated FriendContact contacts = 1;
+  string request_etag = 2;
 }
 
 message FriendOperationRsp {
@@ -214,6 +218,7 @@ message GroupMemberListRsp {
   bool has_more = 4;
   int32 total_count = 5; // 仅第一页填写
   string cursor = 6;     // 原样带回请求的cursor
+  string request_etag = 7;
 }
 
 message JoinedGroupContact {
@@ -229,6 +234,7 @@ message JoinedGroupContact {
 
 message JoinedGroupListRsp {
   repeated JoinedGroupContact groups = 1;
+  string request_etag = 2;
 }
 
 message RelationshipRequestInfo {

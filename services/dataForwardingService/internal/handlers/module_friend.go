@@ -109,13 +109,14 @@ func handleInsertContact(fromID int64, message *pb.RequestMessage) error {
 }
 
 func handleQueryContacts(fromID int64, message *pb.RequestMessage) error {
-	if _, err := authenticatedPayload(fromID, message, "查询好友列表", "query_contacts", (*pb.RequestMessage).GetQueryContacts); err != nil {
+	payload, err := authenticatedPayload(fromID, message, "查询好友列表", "query_contacts", (*pb.RequestMessage).GetQueryContacts)
+	if err != nil {
 		return err
 	}
 
 	currentContainerID := currentContainerTopic()
 
-	friendReq := buildQueryContactsFriendRequest(fromID, currentContainerID)
+	friendReq := buildQueryContactsFriendRequest(fromID, payload.GetEtag(), currentContainerID)
 
 	if err := publishFriendRequest(friendReq); err != nil {
 		logger.Sugar().Errorf("发布QueryContacts请求到friend-service失败: %v", err)
@@ -126,11 +127,21 @@ func handleQueryContacts(fromID int64, message *pb.RequestMessage) error {
 	return nil
 }
 
-func buildQueryContactsFriendRequest(fromID int64, currentContainerID string) *friend.RequestMessage {
+// boundedListETag 丢弃明显不是本服务端签发的etag，避免把任意长的字符串带进Kafka；
+// 丢弃后等同于没带etag，回完整列表。
+func boundedListETag(etag string) string {
+	if len(etag) > 64 {
+		return ""
+	}
+	return etag
+}
+
+func buildQueryContactsFriendRequest(fromID int64, etag, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_QueryFriendList{
 		QueryFriendList: &friend.QueryFriendList{
 			UserId: fromID,
+			Etag:   boundedListETag(etag),
 		},
 	}
 	return req
@@ -253,13 +264,14 @@ func handleQueryGroupMembers(fromID int64, message *pb.RequestMessage) error {
 }
 
 func handleQueryJoinedGroups(fromID int64, message *pb.RequestMessage) error {
-	if _, err := authenticatedPayload(fromID, message, "查询已加入群列表", "query_joined_groups", (*pb.RequestMessage).GetQueryJoinedGroups); err != nil {
+	payload, err := authenticatedPayload(fromID, message, "查询已加入群列表", "query_joined_groups", (*pb.RequestMessage).GetQueryJoinedGroups)
+	if err != nil {
 		return err
 	}
 
 	currentContainerID := currentContainerTopic()
 
-	if err := publishFriendRequest(buildQueryJoinedGroupsFriendRequest(fromID, currentContainerID)); err != nil {
+	if err := publishFriendRequest(buildQueryJoinedGroupsFriendRequest(fromID, payload.GetEtag(), currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布QueryJoinedGroups请求到friend-service失败: %v", err)
 		return err
 	}
@@ -268,11 +280,12 @@ func handleQueryJoinedGroups(fromID int64, message *pb.RequestMessage) error {
 	return nil
 }
 
-func buildQueryJoinedGroupsFriendRequest(fromID int64, currentContainerID string) *friend.RequestMessage {
+func buildQueryJoinedGroupsFriendRequest(fromID int64, etag, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_QueryJoinedGroups{
 		QueryJoinedGroups: &friend.QueryJoinedGroups{
 			UserId: fromID,
+			Etag:   boundedListETag(etag),
 		},
 	}
 	return req
@@ -286,6 +299,7 @@ func buildQueryGroupMembersFriendRequest(fromID int64, payload *pb.QueryGroupMem
 			GroupId:       payload.GetTargetGroupId(),
 			Cursor:        payload.GetCursor(),
 			Limit:         payload.GetLimit(),
+			Etag:          boundedListETag(payload.GetEtag()),
 		},
 	}
 	return req

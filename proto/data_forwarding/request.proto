@@ -48,6 +48,7 @@ message ResolveFriendRequest {
 
 message QueryContacts {
   int64 from_user_id = 1;
+  string etag = 2; // 上次完整回包的etag，内容未变时只回not_modified
 }
 
 message DeleteContact {
@@ -152,10 +153,12 @@ message QueryGroupMembers {
   int64 target_group_id = 2;
   string cursor = 3; // 上一页的next_cursor，空表示第一页
   int32 limit = 4;   // 每页条数，最大500；0表示返回全量（超过字节预算时截断并has_more=true）
+  string etag = 5;   // 仅cursor为空时生效
 }
 
 message QueryJoinedGroups {
   int64 from_user_id = 1;
+  string etag = 2;
 }
 
 message DeleteGroupUser { // 又名：退出群组

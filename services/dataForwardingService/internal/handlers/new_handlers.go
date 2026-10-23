@@ -253,6 +253,9 @@ func (h *WebSocketHandler) handleAuthenticatedMessage(conn *connection.Connectio
 	if res.response != nil {
 		h.sendResponse(conn, res.response)
 	}
+	if res.followUp != nil {
+		h.sendResponse(conn, res.followUp)
+	}
 
 	if res.code == 1 {
 		// 收到logout报文，需要断开连接

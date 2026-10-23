@@ -24,6 +24,8 @@ type dfRequestContext struct {
 type dfRequestResult struct {
 	code     int
 	response *pb.ResponseMessage
+	// followUp 紧随response发送，用于Post拒绝回执后兼容旧客户端的Warn。
+	followUp *pb.ResponseMessage
 }
 
 type dfRequestModule func(*dispatch.OneofRouter[dfRequestContext, dfRequestResult])

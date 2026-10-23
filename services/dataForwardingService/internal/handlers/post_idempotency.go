@@ -68,6 +68,11 @@ func claimPost(ctx context.Context, senderUserID int64, clientMessageID string) 
 	return postClaim{messageID: messageID}, nil
 }
 
+// ReleasePostClaim 在storage拒绝Post后释放占位，客户端修正后可用同一client_message_id重发。
+func ReleasePostClaim(ctx context.Context, senderUserID int64, clientMessageID string) {
+	releasePostClaim(ctx, senderUserID, clientMessageID)
+}
+
 func releasePostClaim(ctx context.Context, senderUserID int64, clientMessageID string) {
 	if redisClient.Rdb == nil {
 		return

@@ -30,17 +30,55 @@ func init() {
 	registerDFRequestModule(registerPostModule)
 }
 
-var errPostForbidden = errors.New("当前用户无群或频道发帖权限")
+var (
+	errPostForbidden     = errors.New("当前用户无群或频道发帖权限")
+	errInvalidPostFields = errors.New("消息内容、类型或文件名不合法")
+)
 
 func registerPostModule(router *dispatch.OneofRouter[dfRequestContext, dfRequestResult]) {
 	dispatch.Register(router, func(ctx dfRequestContext, payload *pb.RequestMessage_Post) (dfRequestResult, error) {
 		logger.Sugar().Debugf("收到 Post 消息: from=%d to=%d", payload.Post.GetFromId(), payload.Post.GetToId())
-		err := handlePostMessage(ctx.fromID, ctx.message)
-		if errors.Is(err, errPostForbidden) || errors.Is(err, utils.ErrInvalidCaption) {
-			return dfRequestResult{response: &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: err.Error()}}}}, nil
-		}
-		return dfRequestResult{}, err
+		return postRequestResult(ctx.fromID, handlePostMessage(ctx.fromID, ctx.message))
 	})
+}
+
+func postRequestResult(fromID int64, err error) (dfRequestResult, error) {
+	var rejected *postRejectedError
+	if errors.As(err, &rejected) {
+		logger.Sugar().Infow("拒绝Post", "from", fromID, "client_message_id", rejected.clientMessageID, "result", rejected.result, "reason", rejected.Error())
+		return postRejectedResult(rejected), nil
+	}
+	return dfRequestResult{}, err
+}
+
+// postRejectedError 表示Post被永久拒绝，需要给发送方回带client_message_id的拒绝回执。
+type postRejectedError struct {
+	result          pb.PostAckResult
+	clientMessageID string
+	err             error
+}
+
+func (e *postRejectedError) Error() string { return e.err.Error() }
+func (e *postRejectedError) Unwrap() error { return e.err }
+
+func rejectPost(result pb.PostAckResult, payload *pb.Post, err error) error {
+	return &postRejectedError{result: result, clientMessageID: strings.TrimSpace(payload.GetClientMessageId()), err: err}
+}
+
+// NewPostRejectedAck 构建拒绝回执；message_id为0，旧客户端只处理message_id>0的回执，会忽略它。
+func NewPostRejectedAck(result pb.PostAckResult, clientMessageID, reason string) *pb.ResponseMessage {
+	return &pb.ResponseMessage{Payload: &pb.ResponseMessage_PostAckRsp{PostAckRsp: &pb.PostAckRsp{
+		ClientMessageId: clientMessageID, Result: result, Reason: reason,
+	}}}
+}
+
+// postRejectedResult 先发拒绝回执；原先就会发Warn的两类拒绝继续紧随一条Warn，兼容旧客户端。
+func postRejectedResult(rejected *postRejectedError) dfRequestResult {
+	result := dfRequestResult{response: NewPostRejectedAck(rejected.result, rejected.clientMessageID, rejected.Error())}
+	if errors.Is(rejected, errPostForbidden) || errors.Is(rejected, utils.ErrInvalidCaption) {
+		result.followUp = &pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: rejected.Error()}}}
+	}
+	return result
 }
 
 // sendMessageToStorage 发送消息到storageService进行存储
@@ -80,17 +118,26 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 	if err != nil {
 		return err
 	}
+	return handleAuthenticatedPost(fromID, payload)
+}
+
+func handleAuthenticatedPost(fromID int64, payload *pb.Post) error {
 	payload.FromId = fromID
 	payload.MessageId = 0
 	if payload.GetSourceChannelMessageId() != 0 {
-		return errPostForbidden
+		return rejectPost(pb.PostAckResult_POST_ACK_FORBIDDEN, payload, errPostForbidden)
 	}
 	if err := validatePostPayload(payload); err != nil {
-		return err
+		return rejectPost(pb.PostAckResult_POST_ACK_INVALID_ARGUMENT, payload, err)
 	}
 	clientMessageID := ensurePostClientMessageID(payload)
 	if monitor.IsMonitorID(payload.GetToId()) {
 		return handleMonitorPost(fromID, payload)
+	}
+	// 与storage入库前的校验一致，提前拒绝可以不占幂等键、不走一趟Kafka。
+	// 不放进validatePostPayload：跨Pod转发的Monitor回复也走那里，正文可能超过入库上限。
+	if !sharedDB.ValidMessageFields(payload.GetMsg(), payload.GetMsgType(), payload.GetRealFileName(), "") {
+		return rejectPost(pb.PostAckResult_POST_ACK_INVALID_ARGUMENT, payload, errInvalidPostFields)
 	}
 
 	if payload.GetIsGroup() {
@@ -99,7 +146,7 @@ func handlePostMessage(fromID int64, message *pb.RequestMessage) error {
 			return err
 		}
 		if !isMember {
-			return errPostForbidden
+			return rejectPost(pb.PostAckResult_POST_ACK_FORBIDDEN, payload, errPostForbidden)
 		}
 	}
 
@@ -223,7 +270,7 @@ func validatePostPayload(payload *pb.Post) error {
 	msgType := strings.TrimSpace(payload.GetMsgType())
 	msg := strings.TrimSpace(payload.GetMsg())
 	realFileName := strings.TrimSpace(payload.GetRealFileName())
-	if len(strings.TrimSpace(payload.GetClientMessageId())) > 128 {
+	if len(strings.TrimSpace(payload.GetClientMessageId())) > sharedDB.MaxClientMessageIDLen {
 		return errors.New("client_message_id长度超过限制")
 	}
 

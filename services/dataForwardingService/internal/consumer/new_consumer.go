@@ -662,6 +662,18 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 	switch payload := storageResp.Payload.(type) {
 	case *storage.ResponseMessage_StoreMsgRsp:
 		storeRsp := payload.StoreMsgRsp
+		if storageResp.GetResult() != storage.StorageResult_OK {
+			targetUserID := storageResp.GetTargetUserId()
+			return processRejectedPostResponse(storageResp.GetResult(), storeRsp, func() {
+				handlers.ReleasePostClaim(context.Background(), targetUserID, storeRsp.GetClientMessageId())
+			}, func(response *pb.ResponseMessage) error {
+				encoded, err := proto.Marshal(response)
+				if err != nil {
+					return err
+				}
+				return h.wsHandler.SendMessage(strconv.FormatInt(targetUserID, 10), encoded)
+			})
+		}
 		sugar.Debugf("收到消息存储响应: message_id=%d client_message_id=%s created=%t", storeRsp.GetMessageId(), storeRsp.GetClientMessageId(), storeRsp.GetCreated())
 		return processStoredPostResponse(storeRsp, func() error {
 			return handlers.CompletePostIdempotency(context.Background(), storeRsp.GetFromUserId(), storeRsp.GetClientMessageId(), storeRsp.GetMessageId())
@@ -808,6 +820,31 @@ func buildPostAckResponse(storeMsgRsp *storage.StoreMsgRsp) *pb.ResponseMessage 
 			},
 		},
 	}
+}
+
+// processRejectedPostResponse 处理storage拒绝的Post：释放幂等占位，先发拒绝回执，再发兼容旧客户端的Warn。
+func processRejectedPostResponse(result storage.StorageResult, stored *storage.StoreMsgRsp, release func(), send func(*pb.ResponseMessage) error) error {
+	ackResult, reason := pb.PostAckResult_POST_ACK_SERVICE_ERROR, fmt.Sprintf("操作失败: %v", result)
+	switch result {
+	case storage.StorageResult_INVALID_ARGUMENT:
+		ackResult, reason = pb.PostAckResult_POST_ACK_INVALID_ARGUMENT, "消息参数不合法"
+	case storage.StorageResult_FORBIDDEN:
+		ackResult, reason = pb.PostAckResult_POST_ACK_FORBIDDEN, "无权访问该资源"
+	}
+	if stored.GetClientMessageId() != "" {
+		release()
+	}
+	// 发送方已离线时拒绝通知没有接收者，重试只会进死信；客户端超时后重发会再次收到拒绝。
+	if err := send(handlers.NewPostRejectedAck(ackResult, stored.GetClientMessageId(), reason)); err != nil {
+		if errors.Is(err, router.ErrUserOffline) {
+			return nil
+		}
+		return fmt.Errorf("发送Post拒绝回执失败: %w", err)
+	}
+	if err := send(&pb.ResponseMessage{Payload: &pb.ResponseMessage_Warn{Warn: &pb.Warn{WarningMessage: reason}}}); err != nil && !errors.Is(err, router.ErrUserOffline) {
+		return err
+	}
+	return nil
 }
 
 // ACK confirms persistence, not delivery. Return delivery/cache/ACK failures to

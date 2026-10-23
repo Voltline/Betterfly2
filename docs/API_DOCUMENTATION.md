@@ -661,7 +661,22 @@ message PostAckRsp {
 }
 ```
 
-Post 被 DF 校验或 Storage 拒绝时，DF 返回 `message_id = 0`、`result` 非 OK 的 `PostAckRsp`，带上原 `client_message_id` 与给用户看的 `reason`，并释放该消息的幂等占位，便于用户修改后手动重试。同一次拒绝先发该回执，再发兼容旧客户端的 `Warn`，顺序固定；新客户端收到拒绝回执后可忽略紧随的 `Warn`。旧客户端只处理 `message_id > 0` 的回执，行为不变。
+Post 被 DF 校验或 Storage 拒绝时，DF 返回 `message_id = 0`、`result` 非 OK 的 `PostAckRsp`，带上原 `client_message_id`（去掉首尾空白）与 `reason`。DF 校验阶段的拒绝发生在占用幂等键之前；Storage 拒绝时 DF 会释放该消息的幂等占位。两种情况下，用户修改后都可以用同一 `client_message_id` 手动重发。下表中“紧随 Warn”为“是”的情况，先发回执，再发内容与 `reason` 相同、兼容旧客户端的 `Warn`，顺序固定；新客户端收到拒绝回执后可忽略这条 `Warn`。为“否”的情况原先什么都不回，现在只发回执。旧客户端只处理 `message_id > 0` 的回执，行为不变。
+
+| 阶段 | 情况 | result | reason | 紧随 Warn |
+|------|------|--------|--------|-----------|
+| DF | 客户端填了 `source_channel_message_id` | FORBIDDEN | 当前用户无群或频道发帖权限 | 是 |
+| DF | 群或频道无发帖权限 | FORBIDDEN | 当前用户无群或频道发帖权限 | 是 |
+| DF | 配文不合法 | INVALID_ARGUMENT | 图片配文无效：仅image支持配文，须为有效UTF-8、不含NUL且不超过4096字符及16KiB | 是 |
+| DF | 引用或讨论根消息 ID 为负，或私聊带讨论根 | INVALID_ARGUMENT | 引用消息ID非法 | 否 |
+| DF | `client_message_id` 去空白后超过 128 字节 | INVALID_ARGUMENT | client_message_id长度超过限制 | 否 |
+| DF | file 消息缺少 `msg`（file_hash） | INVALID_ARGUMENT | 文件消息缺少file_hash | 否 |
+| DF | file 消息缺少 `real_file_name` | INVALID_ARGUMENT | 文件消息缺少real_file_name | 否 |
+| DF | 正文超过 700、类型超过 10、文件名超过 255 个字符，含 NUL 或非法 UTF-8 | INVALID_ARGUMENT | 消息内容、类型或文件名不合法 | 否 |
+| Storage | 参数不合法（同上各项、file 消息 content 格式不对、引用的消息不存在等） | INVALID_ARGUMENT | 消息参数不合法 | 是 |
+| Storage | 无权限（群或频道无发帖权限、未持有引用的文件） | FORBIDDEN | 无权访问该资源 | 是 |
+
+发给 Monitor 的指令不走上表，仍按原方式回复。JWT 校验失败、数据库或 Redis 暂时故障时不发回执，客户端按超时重试。部署时需先升级 DF 再升级 Storage：旧 DF 遇到带 payload 的 Storage 拒绝响应会丢弃，发送方收不到任何提示。
 
 ---
 

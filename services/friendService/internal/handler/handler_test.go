@@ -115,6 +115,8 @@ func TestHandleQueryGroup_AllowsNonMemberLookup(t *testing.T) {
 			"group_id", "name", "avatar", "owner_user_id", "is_delete", "update_time",
 		}).AddRow(3001, "test-group", "group-avatar", 1001, false, "2026-04-16 12:00:00"))
 	expectOrdinaryGroup(t, mock, 3001)
+	mock.ExpectQuery(`SELECT count\(\*\) FROM "group_members" JOIN users ON users\.id = group_members\.user_id WHERE group_members\.group_id = \$1`).
+		WithArgs(int64(3001)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(42))
 
 	resp, err := handler.handleQueryGroupWithDB(handler.database, req, req.GetQueryGroup())
 	if err != nil {
@@ -139,6 +141,9 @@ func TestHandleQueryGroup_AllowsNonMemberLookup(t *testing.T) {
 	}
 	if !groupInfo.GetClientNeedSave() {
 		t.Fatal("期望 client_need_save 被透传为 true")
+	}
+	if groupInfo.GetMemberCount() != 42 {
+		t.Fatalf("期望 member_count=42，实际为 %d", groupInfo.GetMemberCount())
 	}
 }
 
@@ -385,8 +390,8 @@ func TestHandleQueryGroupMembersMapsActiveMembers(t *testing.T) {
 		WithArgs(int64(3001), int64(1001)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	expectOrdinaryGroup(t, mock, 3001)
-	mock.ExpectQuery(`SELECT group_members\.user_id, users\.account, users\.name, users\.avatar, group_members\.role, group_members\.update_time FROM "group_members" JOIN users ON users\.id = group_members\.user_id WHERE group_members\.group_id = \$1 ORDER BY group_members\.user_id ASC`).
-		WithArgs(int64(3001)).
+	mock.ExpectQuery(`SELECT group_members\.user_id, users\.account, users\.name, users\.avatar, group_members\.role, group_members\.update_time FROM "group_members" JOIN users ON users\.id = group_members\.user_id WHERE group_members\.group_id = \$1 AND group_members\.user_id > \$2 ORDER BY group_members\.user_id ASC`).
+		WithArgs(int64(3001), int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "account", "name", "avatar", "role", "update_time"}).
 			AddRow(int64(1001), "alice", "Alice", "avatar-a", "owner", "2026-07-12T10:00:00Z").
 			AddRow(int64(1002), "bob", "Bob", "avatar-b", "member", "2026-07-12T10:01:00Z"))
@@ -404,6 +409,9 @@ func TestHandleQueryGroupMembersMapsActiveMembers(t *testing.T) {
 	}
 	if members[0].GetUserId() != 1001 || members[0].GetRole() != "owner" || members[1].GetName() != "Bob" || members[1].GetAvatar() != "avatar-b" {
 		t.Fatalf("group members were mapped incorrectly: %+v", members)
+	}
+	if list := response.GetGroupMemberListRsp(); list.GetHasMore() || list.GetNextCursor() != "" || list.GetTotalCount() != 2 {
+		t.Fatalf("legacy full list should be complete with total_count from the page: %+v", list)
 	}
 }
 

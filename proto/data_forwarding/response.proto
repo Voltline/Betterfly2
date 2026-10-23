@@ -92,6 +92,7 @@ message GroupInfo {
   string query_group_name = 3;
   string avatar = 4;
   bool is_channel = 5;
+  int32 member_count = 6;
 }
 
 message GroupMemberInfo {
@@ -105,7 +106,12 @@ message GroupMemberInfo {
 
 message GroupMembersRsp {
   int64 group_id = 1;
-  repeated GroupMemberInfo members = 2;
+  repeated GroupMemberInfo members = 2; // 按user_id升序
+  string next_cursor = 3;               // 不透明游标，原样回传以获取下一页
+  bool has_more = 4;
+  int32 total_count = 5;                // 仅第一页填写
+  string result = 6;                    // 空表示成功；游标无效或limit为负时为INVALID_ARGUMENT
+  string cursor = 7;                    // 原样带回请求的cursor，用于丢弃过期页
 }
 
 message JoinedGroupInfo {
@@ -116,6 +122,7 @@ message JoinedGroupInfo {
   string update_time = 5;
   bool is_channel = 6;
   bool notifications_muted = 7;
+  int32 member_count = 8;
 }
 
 message JoinedGroupsRsp {

@@ -243,7 +243,7 @@ func handleQueryGroupMembers(fromID int64, message *pb.RequestMessage) error {
 
 	currentContainerID := currentContainerTopic()
 
-	if err := publishFriendRequest(buildQueryGroupMembersFriendRequest(fromID, payload.GetTargetGroupId(), currentContainerID)); err != nil {
+	if err := publishFriendRequest(buildQueryGroupMembersFriendRequest(fromID, payload, currentContainerID)); err != nil {
 		logger.Sugar().Errorf("发布QueryGroupMembers请求到friend-service失败: %v", err)
 		return err
 	}
@@ -278,12 +278,14 @@ func buildQueryJoinedGroupsFriendRequest(fromID int64, currentContainerID string
 	return req
 }
 
-func buildQueryGroupMembersFriendRequest(fromID, groupID int64, currentContainerID string) *friend.RequestMessage {
+func buildQueryGroupMembersFriendRequest(fromID int64, payload *pb.QueryGroupMembers, currentContainerID string) *friend.RequestMessage {
 	req := newFriendRequest(currentContainerID, fromID)
 	req.Payload = &friend.RequestMessage_QueryGroupMembers{
 		QueryGroupMembers: &friend.QueryGroupMembers{
 			RequestUserId: fromID,
-			GroupId:       groupID,
+			GroupId:       payload.GetTargetGroupId(),
+			Cursor:        payload.GetCursor(),
+			Limit:         payload.GetLimit(),
 		},
 	}
 	return req

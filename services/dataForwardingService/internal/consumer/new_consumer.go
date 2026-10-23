@@ -103,19 +103,7 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		return forwardRelationshipChangedEvent(friendResp.GetTargetUserId(), event, h.wsHandler.SendMessage)
 	}
 
-	var dfResp *pb.ResponseMessage
-	switch payload := friendResp.Payload.(type) {
-	case *friend.ResponseMessage_ChannelResponse:
-		dfResp = &pb.ResponseMessage{Payload: &pb.ResponseMessage_ChannelResponse{ChannelResponse: payload.ChannelResponse}}
-	case *friend.ResponseMessage_RelationshipRequestListRsp:
-		dfResp = buildRelationshipRequestListResponse(payload.RelationshipRequestListRsp)
-	case *friend.ResponseMessage_RelationshipOperationRsp:
-		dfResp = buildRelationshipOperationResponse(payload.RelationshipOperationRsp, friendResp.GetResult())
-	case *friend.ResponseMessage_GroupOperationRsp:
-		if isStructuredGroupOperation(payload.GroupOperationRsp.GetOperation()) {
-			dfResp = buildGroupMemberOperationResponse(payload.GroupOperationRsp, friendResp.GetResult())
-		}
-	}
+	dfResp := buildStructuredFriendResponse(friendResp)
 	if dfResp != nil {
 		goto marshalFriendResponse
 	}
@@ -275,6 +263,30 @@ func forwardRelationshipChangedEvent(targetUserID int64, event *friend.Relations
 	return nil
 }
 
+// buildStructuredFriendResponse 处理带结构化结果的好友响应；返回nil时按旧的Result映射处理。
+func buildStructuredFriendResponse(friendResp *friend.ResponseMessage) *pb.ResponseMessage {
+	var dfResp *pb.ResponseMessage
+	switch payload := friendResp.Payload.(type) {
+	case *friend.ResponseMessage_ChannelResponse:
+		dfResp = &pb.ResponseMessage{Payload: &pb.ResponseMessage_ChannelResponse{ChannelResponse: payload.ChannelResponse}}
+	case *friend.ResponseMessage_RelationshipRequestListRsp:
+		dfResp = buildRelationshipRequestListResponse(payload.RelationshipRequestListRsp)
+	case *friend.ResponseMessage_RelationshipOperationRsp:
+		dfResp = buildRelationshipOperationResponse(payload.RelationshipOperationRsp, friendResp.GetResult())
+	case *friend.ResponseMessage_GroupOperationRsp:
+		if isStructuredGroupOperation(payload.GroupOperationRsp.GetOperation()) {
+			dfResp = buildGroupMemberOperationResponse(payload.GroupOperationRsp, friendResp.GetResult())
+		}
+	case *friend.ResponseMessage_GroupMemberListRsp:
+		// 游标无效或limit为负：带group_id与result回成员响应，客户端丢弃游标从第一页重拉。
+		if friendResp.GetResult() == friend.FriendResult_INVALID_ARGUMENT && payload.GroupMemberListRsp.GetGroupId() > 0 {
+			dfResp = buildGroupMembersResponse(payload.GroupMemberListRsp)
+			dfResp.GetGroupMembersRsp().Result = friendResp.GetResult().String()
+		}
+	}
+	return dfResp
+}
+
 func buildRelationshipRequestListResponse(list *friend.RelationshipRequestListRsp) *pb.ResponseMessage {
 	requests := make([]*pb.RelationshipRequestInfo, 0, len(list.GetRequests()))
 	for _, request := range list.GetRequests() {
@@ -336,6 +348,7 @@ func buildGroupInfoResponse(groupInfo *friend.GroupInfoRsp) *pb.ResponseMessage 
 				QueryGroupName: groupInfo.GetGroupName(),
 				IsChannel:      groupInfo.GetIsChannel(),
 				Avatar:         groupInfo.GetAvatar(),
+				MemberCount:    groupInfo.GetMemberCount(),
 			},
 		},
 	}
@@ -357,8 +370,12 @@ func buildGroupMembersResponse(groupMembers *friend.GroupMemberListRsp) *pb.Resp
 	return &pb.ResponseMessage{
 		Payload: &pb.ResponseMessage_GroupMembersRsp{
 			GroupMembersRsp: &pb.GroupMembersRsp{
-				GroupId: groupMembers.GetGroupId(),
-				Members: members,
+				GroupId:    groupMembers.GetGroupId(),
+				Members:    members,
+				NextCursor: groupMembers.GetNextCursor(),
+				HasMore:    groupMembers.GetHasMore(),
+				TotalCount: groupMembers.GetTotalCount(),
+				Cursor:     groupMembers.GetCursor(),
 			},
 		},
 	}
@@ -375,6 +392,7 @@ func buildJoinedGroupsResponse(groupList *friend.JoinedGroupListRsp) *pb.Respons
 			UpdateTime:         group.GetUpdateTime(),
 			IsChannel:          group.GetIsChannel(),
 			NotificationsMuted: group.GetNotificationsMuted(),
+			MemberCount:        group.GetMemberCount(),
 		})
 	}
 

@@ -68,6 +68,17 @@ message RelationshipChangedEvent {
 - 事件与业务写入在同一事务内写入 outbox，由发起请求的 DF 按接收者路由（可跨 Pod）。接收者离线时直接丢弃，不重试、不进死信。客户端应保留低频轮询兜底，并在重连认证成功、回到前台时全量刷新。
 - 旧客户端会忽略未知的字段 24，不需要开关。部署 friendService 之前须先部署能识别该事件的 DF：旧 DF 会把它当作未知好友响应，向接收者发一条“添加好友成功”。
 
+### 群成员分页
+
+`QueryGroupMembers` 支持 `cursor`（3）和 `limit`（4），`GroupMembersRsp` 返回 `next_cursor`（3）、`has_more`（4）、`total_count`（5）、`result`（6）和原样带回的 `cursor`（7）：
+
+- 成员按 `user_id` 升序。`next_cursor` 是不透明字符串，客户端原样回传即可取下一页；翻页期间有人进群或退群不会导致重复或游标失效。
+- `limit` 大于 0 时每页最多 `limit` 条，超过 500 按 500 处理；`limit = 0`（旧客户端）返回全量。两种情况都按约 768KiB 的字节预算截断，截断时 `has_more = true` 并带 `next_cursor`，至少返回一条。
+- `total_count` 只在第一页（`cursor` 为空）填写。
+- 游标格式错误、属于其他群或 `limit` 为负时，返回带原 `group_id`、`cursor` 且 `result = "INVALID_ARGUMENT"` 的空 `GroupMembersRsp`，客户端应丢弃游标从第一页重拉。成功时 `result` 为空。不在群内、频道非管理员等其他错误仍返回原来的 `Warn`。
+- `GroupInfo.member_count`（6）和 `JoinedGroupInfo.member_count`（8）返回当前成员数，客户端可据此对大群减少全量拉取。
+- 旧 DF 不转发 `cursor`/`limit`，friendService 收到的始终是全量请求，可以任意顺序部署；新客户端须等 DF 部署后才能真正分页。
+
 ## Monitor
 
 Monitor 是虚拟联系人。仅 BFID 1 可以发现并添加，添加时直接成功且不创建好友申请；其他用户查询或操作时仍表现为目标不存在。除原有 `/status`、`/connections`、`/route`、`/kick` 外，Monitor 支持 `/user <user_id>` 查看安全用户摘要、`/group <group_id>` 查看成员角色分布，以及 `/requests <user_id>` 查看待处理申请数量。

@@ -364,6 +364,10 @@ func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.Re
 			return &friend.ResponseMessage{Result: friend.FriendResult_RECORD_NOT_EXIST, TargetUserId: req.TargetUserId}, nil
 		}
 	}
+	memberCount, err := db.CountGroupMembersWithDB(database, group.GroupID)
+	if err != nil {
+		return nil, err
+	}
 	return &friend.ResponseMessage{
 		Result:       friend.FriendResult_FRIEND_OK,
 		TargetUserId: req.TargetUserId,
@@ -376,6 +380,7 @@ func (h *FriendHandler) handleQueryGroupWithDB(database *gorm.DB, req *friend.Re
 				UpdateTime:     group.UpdateTime,
 				ClientNeedSave: payload.GetClientNeedSave(),
 				IsChannel:      settings != nil,
+				MemberCount:    int32(memberCount),
 			},
 		},
 	}, nil
@@ -465,6 +470,17 @@ func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *fr
 			TargetUserId: req.TargetUserId,
 		}, nil
 	}
+	afterUserID, cursorValid := decodeGroupMemberCursor(payload.GetCursor(), payload.GetGroupId())
+	if !cursorValid || payload.GetLimit() < 0 {
+		// 带回group_id，客户端据此丢弃游标并从第一页重拉。
+		return &friend.ResponseMessage{
+			Result:       friend.FriendResult_INVALID_ARGUMENT,
+			TargetUserId: req.TargetUserId,
+			Payload: &friend.ResponseMessage_GroupMemberListRsp{
+				GroupMemberListRsp: &friend.GroupMemberListRsp{GroupId: payload.GetGroupId(), Cursor: payload.GetCursor()},
+			},
+		}, nil
+	}
 	database = h.resolveDatabase(database)
 
 	isMember, err := db.IsActiveGroupMemberWithDB(database, payload.GetGroupId(), payload.GetRequestUserId())
@@ -491,32 +507,40 @@ func (h *FriendHandler) handleQueryGroupMembersWithDB(database *gorm.DB, req *fr
 			return &friend.ResponseMessage{Result: friend.FriendResult_FORBIDDEN, TargetUserId: req.TargetUserId}, nil
 		}
 	}
-	members, err := db.GetGroupMembersWithDB(database, payload.GetGroupId())
+
+	limit := int(payload.GetLimit())
+	if limit > maxGroupMemberPageSize {
+		limit = maxGroupMemberPageSize
+	}
+	fetch := 0
+	if limit > 0 {
+		fetch = limit + 1
+	}
+	members, err := db.GetGroupMembersPageWithDB(database, payload.GetGroupId(), afterUserID, fetch)
 	if err != nil {
 		return nil, err
 	}
-
-	var friendMembers []*friend.GroupMemberContact
-	for _, member := range members {
-		friendMembers = append(friendMembers, &friend.GroupMemberContact{
-			UserId:     member.UserID,
-			Account:    member.Account,
-			Name:       member.Name,
-			Avatar:     member.Avatar,
-			Role:       member.Role,
-			UpdateTime: member.UpdateTime,
-		})
+	page, hasMore := groupMemberPage(members, limit)
+	list := &friend.GroupMemberListRsp{GroupId: payload.GetGroupId(), Members: page, HasMore: hasMore, Cursor: payload.GetCursor()}
+	if hasMore {
+		list.NextCursor = encodeGroupMemberCursor(payload.GetGroupId(), page[len(page)-1].GetUserId())
+	}
+	if payload.GetCursor() == "" {
+		if hasMore {
+			total, err := db.CountGroupMembersWithDB(database, payload.GetGroupId())
+			if err != nil {
+				return nil, err
+			}
+			list.TotalCount = int32(total)
+		} else {
+			list.TotalCount = int32(len(page))
+		}
 	}
 
 	return &friend.ResponseMessage{
 		Result:       friend.FriendResult_FRIEND_OK,
 		TargetUserId: req.TargetUserId,
-		Payload: &friend.ResponseMessage_GroupMemberListRsp{
-			GroupMemberListRsp: &friend.GroupMemberListRsp{
-				GroupId: payload.GetGroupId(),
-				Members: friendMembers,
-			},
-		},
+		Payload:      &friend.ResponseMessage_GroupMemberListRsp{GroupMemberListRsp: list},
 	}, nil
 }
 
@@ -544,6 +568,7 @@ func (h *FriendHandler) handleQueryJoinedGroupsWithDB(database *gorm.DB, req *fr
 			UpdateTime:         group.UpdateTime,
 			IsChannel:          group.IsChannel,
 			NotificationsMuted: group.NotificationsMuted,
+			MemberCount:        int32(group.MemberCount),
 		})
 	}
 

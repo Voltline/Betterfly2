@@ -343,7 +343,7 @@ func TestBuildUpdateGroupAvatarFriendRequestRoutesResponseToRequester(t *testing
 }
 
 func TestBuildQueryGroupMembersFriendRequestRoutesResponseToRequester(t *testing.T) {
-	req := buildQueryGroupMembersFriendRequest(1001, 3003, "df-pod-1")
+	req := buildQueryGroupMembersFriendRequest(1001, &pb.QueryGroupMembers{FromUserId: 9999, TargetGroupId: 3003, Cursor: "next", Limit: 200}, "df-pod-1")
 
 	payload, ok := req.Payload.(*friend.RequestMessage_QueryGroupMembers)
 	if !ok {
@@ -351,6 +351,9 @@ func TestBuildQueryGroupMembersFriendRequestRoutesResponseToRequester(t *testing
 	}
 	if payload.QueryGroupMembers.GetRequestUserId() != 1001 || payload.QueryGroupMembers.GetGroupId() != 3003 {
 		t.Fatalf("unexpected query group members payload user=%d group=%d", payload.QueryGroupMembers.GetRequestUserId(), payload.QueryGroupMembers.GetGroupId())
+	}
+	if payload.QueryGroupMembers.GetCursor() != "next" || payload.QueryGroupMembers.GetLimit() != 200 {
+		t.Fatalf("pagination fields were not forwarded: %+v", payload.QueryGroupMembers)
 	}
 }
 

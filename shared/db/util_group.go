@@ -26,6 +26,7 @@ type JoinedGroupContact struct {
 	UpdateTime         string `gorm:"column:update_time"`
 	IsChannel          bool   `gorm:"column:is_channel"`
 	NotificationsMuted bool   `gorm:"column:notifications_muted"`
+	MemberCount        int64  `gorm:"column:member_count"`
 }
 
 func newGroupMember(groupID, userID int64, role, joinedAt string) *GroupMember {
@@ -161,15 +162,34 @@ func GetGroupMembers(groupID int64) ([]GroupMemberContact, error) {
 }
 
 func GetGroupMembersWithDB(database *gorm.DB, groupID int64) ([]GroupMemberContact, error) {
+	return GetGroupMembersPageWithDB(database, groupID, 0, 0)
+}
+
+// GetGroupMembersPageWithDB 按user_id升序返回afterUserID之后的成员，limit<=0表示不限条数。
+func GetGroupMembersPageWithDB(database *gorm.DB, groupID, afterUserID int64, limit int) ([]GroupMemberContact, error) {
 	var members []GroupMemberContact
-	err := database.
-		Table("group_members").
+	query := groupMembersQuery(database, groupID).
 		Select("group_members.user_id, users.account, users.name, users.avatar, group_members.role, group_members.update_time").
-		Joins("JOIN users ON users.id = group_members.user_id").
-		Where("group_members.group_id = ?", groupID).
-		Order("group_members.user_id ASC").
-		Scan(&members).Error
+		Where("group_members.user_id > ?", afterUserID).
+		Order("group_members.user_id ASC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	err := query.Scan(&members).Error
 	return members, err
+}
+
+// CountGroupMembersWithDB 与成员列表口径一致（只计关联到用户的成员）。
+func CountGroupMembersWithDB(database *gorm.DB, groupID int64) (int64, error) {
+	var count int64
+	err := groupMembersQuery(database, groupID).Count(&count).Error
+	return count, err
+}
+
+func groupMembersQuery(database *gorm.DB, groupID int64) *gorm.DB {
+	return database.Table("group_members").
+		Joins("JOIN users ON users.id = group_members.user_id").
+		Where("group_members.group_id = ?", groupID)
 }
 
 func GetJoinedGroups(userID int64) ([]JoinedGroupContact, error) {
@@ -180,7 +200,8 @@ func GetJoinedGroupsWithDB(database *gorm.DB, userID int64) ([]JoinedGroupContac
 	var groups []JoinedGroupContact
 	err := database.
 		Table("group_members").
-		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time, (channel_settings.group_id IS NOT NULL) AS is_channel, group_members.notifications_muted").
+		Select("groups.group_id, groups.name AS group_name, groups.avatar, groups.owner_user_id, groups.update_time, (channel_settings.group_id IS NOT NULL) AS is_channel, group_members.notifications_muted, "+
+			"(SELECT COUNT(*) FROM group_members AS gm JOIN users ON users.id = gm.user_id WHERE gm.group_id = groups.group_id) AS member_count").
 		Joins("JOIN groups ON groups.group_id = group_members.group_id").
 		Joins("LEFT JOIN channel_settings ON channel_settings.group_id = groups.group_id").
 		Where("group_members.user_id = ? AND groups.is_delete = ?", userID, false).

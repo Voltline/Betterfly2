@@ -99,6 +99,10 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		return fmt.Errorf("WebSocket处理器未设置，无法转发好友响应")
 	}
 
+	if event := friendResp.GetRelationshipChangedEvent(); event != nil {
+		return forwardRelationshipChangedEvent(friendResp.GetTargetUserId(), event, h.wsHandler.SendMessage)
+	}
+
 	var dfResp *pb.ResponseMessage
 	switch payload := friendResp.Payload.(type) {
 	case *friend.ResponseMessage_ChannelResponse:
@@ -246,6 +250,27 @@ marshalFriendResponse:
 	targetUserID := strconv.FormatInt(friendResp.TargetUserId, 10)
 	if err := h.wsHandler.SendMessage(targetUserID, respBytes); err != nil {
 		return fmt.Errorf("发送好友响应给用户 %s 失败: %v", targetUserID, err)
+	}
+	return nil
+}
+
+// forwardRelationshipChangedEvent 尽力投递申请/邀请状态变化事件：接收者离线直接丢弃，
+// 客户端重连后会全量刷新，不重试也不进死信。
+func forwardRelationshipChangedEvent(targetUserID int64, event *friend.RelationshipChangedEvent, send func(string, []byte) error) error {
+	if targetUserID <= 0 || event.GetRequest() == nil {
+		logger.Sugar().Warnw("丢弃无效的关系变化事件", "target_user_id", targetUserID)
+		return nil
+	}
+	payload, err := proto.Marshal(&pb.ResponseMessage{Payload: &pb.ResponseMessage_RelationshipChangedEvent{
+		RelationshipChangedEvent: &pb.RelationshipChangedEvent{
+			Request: buildRelationshipRequestInfo(event.GetRequest()), Operation: event.GetOperation(), ChangedAt: event.GetChangedAt(),
+		},
+	}})
+	if err != nil {
+		return fmt.Errorf("序列化关系变化事件失败: %w", err)
+	}
+	if err := send(strconv.FormatInt(targetUserID, 10), payload); err != nil && !errors.Is(err, router.ErrUserOffline) {
+		return fmt.Errorf("发送关系变化事件给用户 %d 失败: %w", targetUserID, err)
 	}
 	return nil
 }

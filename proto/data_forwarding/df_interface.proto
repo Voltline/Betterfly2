@@ -84,5 +84,6 @@ message ResponseMessage {
     AccountSecurityRsp account_security_rsp = 21;
     MessageRecallEvent message_recall_event = 22;
     channel_interface.ChannelResponse channel_response = 23;
+    RelationshipChangedEvent relationship_changed_event = 24;
   }
 }

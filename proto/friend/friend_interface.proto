@@ -252,6 +252,13 @@ message RelationshipOperationRsp {
   RelationshipRequestInfo request = 2;
 }
 
+// 申请或邀请状态变化后推给相关的另一方，target_user_id为接收者。
+message RelationshipChangedEvent {
+  RelationshipRequestInfo request = 1;
+  string operation = 2; // created/resolved/cancelled
+  string changed_at = 3;
+}
+
 enum FriendResult {
   FRIEND_OK = 0;
   RECORD_NOT_EXIST = 1;
@@ -313,5 +320,6 @@ message ResponseMessage {
     RelationshipRequestListRsp relationship_request_list_rsp = 10;
     RelationshipOperationRsp relationship_operation_rsp = 11;
     channel_interface.ChannelResponse channel_response = 12;
+    RelationshipChangedEvent relationship_changed_event = 13;
   }
 }

@@ -102,10 +102,14 @@ func (h *FriendHandler) HandleMessage(ctx context.Context, message []byte) error
 		if marshalErr != nil {
 			return nil, nil, marshalErr
 		}
-		return encoded, []db.PendingOutboxEvent{{
+		changedEvents, eventErr := relationshipEventOutbox(tx, operationKey, req, resp)
+		if eventErr != nil {
+			return nil, nil, eventErr
+		}
+		return encoded, append([]db.PendingOutboxEvent{{
 			EventID: db.StableEventID("friend", operationKey, "response"),
 			Topic:   req.GetFromKafkaTopic(), Payload: envelopePayload,
-		}}, nil
+		}}, changedEvents...), nil
 	})
 	return err
 }

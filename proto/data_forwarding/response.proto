@@ -152,6 +152,13 @@ message RelationshipOperationRsp {
   RelationshipRequestInfo request = 3;
 }
 
+// 服务端主动推送，不对应任何请求；request为变化后的完整状态，按request_id覆盖本地记录。
+message RelationshipChangedEvent {
+  RelationshipRequestInfo request = 1;
+  string operation = 2; // created/resolved/cancelled
+  string changed_at = 3;
+}
+
 message GroupMemberOperationRsp {
   string operation = 1;
   string result = 2;

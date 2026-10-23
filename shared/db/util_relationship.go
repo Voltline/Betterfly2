@@ -542,3 +542,12 @@ func UpdateGroupMemberRoleByWithDB(database *gorm.DB, actorID, groupID, targetID
 	})
 	return now, err
 }
+
+// ListGroupManagerIDsWithDB 返回群主和管理员的用户ID，按ID升序。
+func ListGroupManagerIDsWithDB(database *gorm.DB, groupID int64) ([]int64, error) {
+	var userIDs []int64
+	err := database.Model(&GroupMember{}).
+		Where("group_id = ? AND role IN ?", groupID, []string{GroupRoleOwner, GroupRoleAdmin}).
+		Order("user_id").Pluck("user_id", &userIDs).Error
+	return userIDs, err
+}

@@ -220,13 +220,13 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	sugar := logger.Sugar()
 	if err := utils.ValidateImageCaption(msg.GetMessageType(), msg.GetCaption()); err != nil ||
 		!db.ValidMessageFields(msg.GetContent(), msg.GetMessageType(), msg.GetRealFileName(), msg.GetClientMessageId()) {
-		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+		return rejectedStoreMessage(req, msg, storage.StorageResult_INVALID_ARGUMENT), nil
 	}
 	if msg.GetReplyToMessageId() < 0 || msg.GetDiscussionRootMessageId() < 0 || (msg.GetDiscussionRootMessageId() > 0 && !msg.GetIsGroup()) {
-		return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+		return rejectedStoreMessage(req, msg, storage.StorageResult_INVALID_ARGUMENT), nil
 	}
 	if (msg.GetReplyToMessageId() > 0 || msg.GetDiscussionRootMessageId() > 0) && (req.GetTargetUserId() <= 0 || req.GetTargetUserId() != msg.GetFromUserId()) {
-		return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+		return rejectedStoreMessage(req, msg, storage.StorageResult_FORBIDDEN), nil
 	}
 	if msg.GetIsGroup() {
 		allowed := false
@@ -239,14 +239,14 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		}
 		if !allowed {
 			sugar.Warnw("拒绝未授权群或频道发帖", "requester_id", req.GetTargetUserId(), "conversation_id", msg.GetToUserId())
-			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+			return rejectedStoreMessage(req, msg, storage.StorageResult_FORBIDDEN), nil
 		}
 	}
 	if db.IsFileMessageType(msg.GetMessageType()) {
 		// 文件消息只能引用发送者已证明持有的文件，否则知道哈希就能借消息拿到下载权限。
 		fileHash, ok := db.FileHashFromContent(msg.GetContent())
 		if !ok {
-			return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+			return rejectedStoreMessage(req, msg, storage.StorageResult_INVALID_ARGUMENT), nil
 		}
 		allowed := false
 		if req.GetTargetUserId() > 0 && req.GetTargetUserId() == msg.GetFromUserId() {
@@ -257,7 +257,7 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 		}
 		if !allowed {
 			sugar.Warnw("拒绝引用未持有文件的消息", "requester_id", req.GetTargetUserId(), "file_hash", fileHash)
-			return &storage.ResponseMessage{Result: storage.StorageResult_FORBIDDEN, TargetUserId: req.GetTargetUserId()}, nil
+			return rejectedStoreMessage(req, msg, storage.StorageResult_FORBIDDEN), nil
 		}
 	}
 
@@ -278,7 +278,7 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	metrics.RecordDatabaseQuery("insert", start)
 	if err != nil {
 		if errors.Is(err, db.ErrInvalidReply) {
-			return &storage.ResponseMessage{Result: storage.StorageResult_INVALID_ARGUMENT, TargetUserId: req.GetTargetUserId()}, nil
+			return rejectedStoreMessage(req, msg, storage.StorageResult_INVALID_ARGUMENT), nil
 		}
 		if msg.GetCaption() != "" {
 			err = captionStorageError{cause: err}
@@ -332,6 +332,15 @@ func (h *StorageHandler) handleStoreNewMessageWithDB(database *gorm.DB, req *sto
 	}
 
 	return resp, nil
+}
+
+// rejectedStoreMessage 带回client_message_id，DF据此给发送方发拒绝回执并释放幂等占位。
+// 只回带标识字段，不回带正文。旧DF会把带payload的响应当作已存储消息并因message_id为0丢弃，
+// 发送方收不到任何提示，因此需先部署DF再部署storage。
+func rejectedStoreMessage(req *storage.RequestMessage, msg *storage.StoreNewMessage, result storage.StorageResult) *storage.ResponseMessage {
+	return &storage.ResponseMessage{Result: result, TargetUserId: req.GetTargetUserId(), Payload: &storage.ResponseMessage_StoreMsgRsp{
+		StoreMsgRsp: &storage.StoreMsgRsp{ClientMessageId: msg.GetClientMessageId(), FromUserId: msg.GetFromUserId(), ToUserId: msg.GetToUserId(), IsGroup: msg.GetIsGroup()},
+	}}
 }
 
 func (h *StorageHandler) handleRecallMessageWithDB(database *gorm.DB, req *storage.RequestMessage, recall *storage.RecallMessage, cacheKeys *[]string) (*storage.ResponseMessage, error) {

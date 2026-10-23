@@ -101,12 +101,22 @@ message MessageRecallPushRequest {
   string recalled_at = 6;
 }
 
+// RevokeUserTokens is emitted by dataForwardingService after a password change
+// or revoke-all succeeds. Only tokens last registered before revoked_before are
+// deleted, so a device that re-registers right after revocation keeps its token.
+message RevokeUserTokens {
+  int64 user_id = 1;
+  string revoked_before = 2; // UTC, layout 2006-01-02T15:04:05.000000Z
+  string reason = 3;         // change_password or revoke_sessions, for logs
+}
+
 message RequestMessage {
   oneof payload {
     ClientCommand client_command = 1;
     VoIPCallRequest voip_call = 2;
     MessagePushRequest message_push = 3;
     MessageRecallPushRequest message_recall = 4;
+    RevokeUserTokens revoke_user_tokens = 5;
   }
 }
 

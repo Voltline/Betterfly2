@@ -13,6 +13,7 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	pushpb "Betterfly2/proto/push"
 	"Betterfly2/shared/db"
+	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
@@ -76,6 +77,8 @@ func (s *GormStore) EnqueueRequest(ctx context.Context, operationKey string, req
 			return s.persistMessageRecallJob(tx, operationKey, request, payload.MessageRecall)
 		case *pushpb.RequestMessage_VoipCall:
 			return s.persistVoIPJob(tx, operationKey, request, payload.VoipCall)
+		case *pushpb.RequestMessage_RevokeUserTokens:
+			return nil, nil, revokeUserTokensWithDB(tx, payload.RevokeUserTokens)
 		default:
 			return nil, nil, ErrInvalidRequest
 		}
@@ -150,6 +153,21 @@ func persistUnregisterToken(tx *gorm.DB, userID int64, rawDeviceID string, envir
 		return clientEvent(operation, pushpb.PushResult_TOKEN_NOT_FOUND, deviceID, environment, ErrTokenNotFound.Error(), now)
 	}
 	return clientEvent(operation, pushpb.PushResult_PUSH_OK, deviceID, environment, "unregistered", now)
+}
+
+// revokeUserTokensWithDB 删除该用户在撤销时间之前注册或刷新的全部token。
+// 撤销后重新注册的设备updated_at更晚，不会被延迟到达的撤销请求误删；已排队的投递会因token不存在而跳过。
+func revokeUserTokensWithDB(tx *gorm.DB, revocation *pushpb.RevokeUserTokens) error {
+	revokedBefore, err := time.Parse(db.ReliabilityTimeLayout, revocation.GetRevokedBefore())
+	if revocation.GetUserId() <= 0 || err != nil {
+		return ErrInvalidRequest
+	}
+	result := tx.Where("user_id = ? AND updated_at < ?", revocation.GetUserId(), db.FormatReliabilityTime(revokedBefore)).Delete(&db.PushDeviceToken{})
+	if result.Error != nil {
+		return result.Error
+	}
+	logger.Sugar().Infow("已撤销用户推送token", "user_id", revocation.GetUserId(), "reason", revocation.GetReason(), "revoked_before", revocation.GetRevokedBefore(), "deleted", result.RowsAffected)
+	return nil
 }
 
 func registerTokenWithDB(tx *gorm.DB, userID int64, deviceID, token, environment, pushType, bundleID string, now time.Time) error {

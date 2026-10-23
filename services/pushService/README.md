@@ -71,6 +71,8 @@ APNS_PRIVATE_KEY_BASE64=<上一步的输出>
 - `register_voip_token` / `unregister_voip_token`: PushKit token。
 - `register_apns_token` / `unregister_apns_token`: `didRegisterForRemoteNotificationsWithDeviceToken` 返回的普通 APNs token。
 
+修改密码或撤销全部会话成功后，DataForwardingService 可以发送内部请求 `RevokeUserTokens`，由 `PUSH_REVOKE_TOKENS_ON_SESSION_REVOKE` 控制，默认关闭。PushService 收到后删除该用户 `updated_at` 早于 `revoked_before` 的全部 token；已排队的投递会因 token 不存在而跳过。撤销之后重新注册的设备不会被误删。旧版 PushService 不认识这个请求，所以要先部署 PushService，再打开开关。
+
 PushService 分别请求 `api.sandbox.push.apple.com` 和 `api.push.apple.com`。VoIP 使用 topic `com.Voltline.Betterfly2.voip` 与 `apns-push-type: voip`；消息通知使用 topic `com.Voltline.Betterfly2` 与 `apns-push-type: alert`。两者优先级均为 10，同一枚 `.p8` provider key 可用于两个 endpoint。
 
 ## 健康检查

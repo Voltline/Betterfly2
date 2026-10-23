@@ -51,6 +51,7 @@ func changePassword(ctx dfRequestContext, request *pb.ChangePassword) *pb.Accoun
 	case auth.AuthResult_OK:
 		response.Result = pb.AccountSecurityResult_ACCOUNT_SECURITY_OK
 		response.Jwt = authResponse.GetJwt()
+		revokePushTokens(ctx.fromID, "change_password", time.Now())
 	case auth.AuthResult_PASSWORD_ERROR:
 		response.Result = pb.AccountSecurityResult_ACCOUNT_SECURITY_OLD_PASSWORD_ERROR
 	case auth.AuthResult_JWT_ERROR:

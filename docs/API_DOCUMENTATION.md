@@ -28,6 +28,8 @@ PushService 通过现有 `/ws` Protobuf 连接管理普通 APNs 和 PushKit VoIP
 
 普通远程通知使用 `register_apns_token` 和 `unregister_apns_token`，token 来自 `didRegisterForRemoteNotificationsWithDeviceToken`。普通 APNs token 与 PushKit token 独立保存，不能混用。
 
+DataForwardingService 配置 `PUSH_REVOKE_TOKENS_ON_SESSION_REVOKE=true` 后，修改密码或 `ALL_SESSIONS` 登出成功时，会删除该用户在撤销时刻之前注册或刷新的全部普通 APNs 和 VoIP token，被踢下线的设备从此不再收到推送。撤销之后重新注册的 token 不受影响。客户端每次认证成功（包括改密码后用新 JWT 重新认证）都必须重新注册两种 token，即使 token 没变也要注册，否则当前设备也会失去推送。该开关默认关闭，按以下顺序打开：先铺开会重新注册 token 的客户端，再部署支持 `RevokeUserTokens` 的 PushService，最后打开开关。
+
 ### PushKit 与 CallKit 恢复流程
 
 VoIP Push payload 示例:

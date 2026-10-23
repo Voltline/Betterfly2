@@ -45,6 +45,7 @@ func registerSessionRequestModule(router *dispatch.OneofRouter[dfRequestContext,
 			return logoutWarning(message), nil
 		}
 		logger.Sugar().Infof("用户撤销全部会话并登出当前连接: user_id=%d", ctx.fromID)
+		revokePushTokens(ctx.fromID, "revoke_sessions", time.Now())
 		return dfRequestResult{code: 1}, nil
 	})
 	dispatch.Register(router, func(_ dfRequestContext, payload *pb.RequestMessage_Login) (dfRequestResult, error) {

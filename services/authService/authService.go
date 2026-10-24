@@ -30,8 +30,9 @@ func (s *AuthService) Login(ctx context.Context, req *pb.LoginReq) (*pb.LoginRsp
 	user := &db.User{}
 	err := error(nil)
 
-	user, err = db.GetUserByAccount(account)
+	user, err = db.GetUserByAccountWithDB(db.DB().WithContext(ctx), account)
 	if err != nil {
+		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
 		goto RETURN
 	}
@@ -142,7 +143,7 @@ func (*AuthService) Signup(ctx context.Context, rsp *pb.SignupReq) (*pb.SignupRs
 		goto RETURN
 	}
 
-	user, err = db.GetUserByAccount(account)
+	user, err = db.GetUserByAccountWithDB(db.DB().WithContext(ctx), account)
 	if err != nil {
 		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
@@ -203,8 +204,8 @@ func (*AuthService) CheckJwt(ctx context.Context, rsp *pb.CheckJwtReq) (*pb.Chec
 
 	logger.Sugar().Debugf("RPC-CheckJwtReq { userID:%d, has_jwt:%t }", userID, jwt != "")
 
-	// 获取用户
-	user, err := db.GetUserById(userID)
+	// 获取用户；每条业务请求都会走这里，查库随调用方超时放弃，数据库不可达时不能一直占着连接
+	user, err := db.GetUserByIDWithDB(db.DB().WithContext(ctx), userID)
 	if err != nil {
 		logger.Sugar().Errorln("fail to get user:", err)
 		result = pb.AuthResult_SERVICE_ERROR
@@ -238,8 +239,8 @@ RETURN:
 
 }
 
-func (s *AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
-	user, result := authenticateUser(req.GetUserId(), req.GetJwt())
+func (s *AuthService) ChangePassword(ctx context.Context, req *pb.ChangePasswordReq) (*pb.ChangePasswordRsp, error) {
+	user, result := authenticateUser(ctx, req.GetUserId(), req.GetJwt())
 	if result != pb.AuthResult_OK {
 		return &pb.ChangePasswordRsp{Result: result}, nil
 	}
@@ -288,8 +289,8 @@ func (s *AuthService) ChangePassword(_ context.Context, req *pb.ChangePasswordRe
 	return &pb.ChangePasswordRsp{Result: pb.AuthResult_OK, Jwt: newJWT}, nil
 }
 
-func (*AuthService) RevokeSessions(_ context.Context, req *pb.RevokeSessionsReq) (*pb.RevokeSessionsRsp, error) {
-	user, result := authenticateUser(req.GetUserId(), req.GetJwt())
+func (*AuthService) RevokeSessions(ctx context.Context, req *pb.RevokeSessionsReq) (*pb.RevokeSessionsRsp, error) {
+	user, result := authenticateUser(ctx, req.GetUserId(), req.GetJwt())
 	if result != pb.AuthResult_OK {
 		return &pb.RevokeSessionsRsp{Result: result}, nil
 	}
@@ -328,11 +329,11 @@ func validateNewPassword(password []byte) pb.AuthResult {
 	return pb.AuthResult_OK
 }
 
-func authenticateUser(userID int64, jwt string) (*db.User, pb.AuthResult) {
+func authenticateUser(ctx context.Context, userID int64, jwt string) (*db.User, pb.AuthResult) {
 	if userID <= 0 || jwt == "" {
 		return nil, pb.AuthResult_JWT_ERROR
 	}
-	user, err := db.GetUserById(userID)
+	user, err := db.GetUserByIDWithDB(db.DB().WithContext(ctx), userID)
 	if err != nil {
 		logger.Sugar().Errorw("账号安全操作读取用户失败", "user_id", userID, "error", err)
 		return nil, pb.AuthResult_SERVICE_ERROR

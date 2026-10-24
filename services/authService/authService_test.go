@@ -564,3 +564,22 @@ func TestChangePasswordSharesAccountLimit(t *testing.T) {
 		t.Fatalf("limited change password: %+v %v", resp, err)
 	}
 }
+
+func TestCheckJwtGivesUpWithCallerDeadline(t *testing.T) {
+	mock := useAuthMockDB(t)
+	mock.ExpectQuery(`SELECT \* FROM "users" WHERE "users"\."id" = \$1 ORDER BY "users"\."id" LIMIT \$2`).
+		WithArgs(int64(9), 1).
+		WillDelayFor(5 * time.Second).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "account", "password_hash", "jwt_key"}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	response, err := (&AuthService{}).CheckJwt(ctx, &pb.CheckJwtReq{UserId: 9, Jwt: "token"})
+	if err != nil || response.GetResult() != pb.AuthResult_SERVICE_ERROR {
+		t.Fatalf("stalled database should report service error: response=%+v err=%v", response, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("CheckJwt waited %s for a stalled database past the caller deadline", elapsed)
+	}
+}

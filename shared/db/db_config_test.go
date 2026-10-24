@@ -2,6 +2,7 @@ package db
 
 import (
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgx/v5/pgconn"
 	"testing"
 	"time"
 )
@@ -59,5 +60,40 @@ func TestLoadPoolConfigUsesEnvironmentAndValidatesRelationships(t *testing.T) {
 	t.Setenv("DB_CONN_MAX_IDLE_TIME", "1h")
 	if _, err := LoadPoolConfig(); err == nil {
 		t.Fatal("idle lifetime above maximum lifetime was accepted")
+	}
+}
+
+func TestWithConnectTimeoutAddsDefaultOnlyWhenUnset(t *testing.T) {
+	t.Setenv("PGCONNECT_TIMEOUT", "")
+	for _, dsn := range []string{
+		"host=127.0.0.1 user=betterfly dbname=Betterfly2 sslmode=disable",
+		"postgres://betterfly@127.0.0.1:5432/Betterfly2?sslmode=disable",
+	} {
+		withTimeout, err := withConnectTimeout(dsn, 4500*time.Millisecond)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := pgconn.ParseConfig(withTimeout)
+		if err != nil {
+			t.Fatalf("parse %q: %v", withTimeout, err)
+		}
+		if parsed.ConnectTimeout != 5*time.Second || parsed.Database != "Betterfly2" {
+			t.Fatalf("connect timeout not applied to %q: timeout=%s database=%s", withTimeout, parsed.ConnectTimeout, parsed.Database)
+		}
+	}
+
+	explicit := "host=127.0.0.1 dbname=Betterfly2 connect_timeout=2"
+	if got, err := withConnectTimeout(explicit, 5*time.Second); err != nil || got != explicit {
+		t.Fatalf("explicit connect_timeout overridden: %q err=%v", got, err)
+	}
+	if got, err := withConnectTimeout("host=127.0.0.1", 0); err != nil || got != "host=127.0.0.1" {
+		t.Fatalf("zero timeout should leave DSN unchanged: %q err=%v", got, err)
+	}
+	if _, err := withConnectTimeout("host=127.0.0.1", -1); err == nil {
+		t.Fatal("invalid DB_CONNECT_TIMEOUT accepted")
+	}
+	t.Setenv("PGCONNECT_TIMEOUT", "3")
+	if got, err := withConnectTimeout("host=127.0.0.1", 5*time.Second); err != nil || got != "host=127.0.0.1" {
+		t.Fatalf("PGCONNECT_TIMEOUT should take precedence: %q err=%v", got, err)
 	}
 }

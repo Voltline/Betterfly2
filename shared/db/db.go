@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -59,6 +60,10 @@ func Open() (*gorm.DB, error) {
 		logger.Sugar().Warnln("未获取到环境变量PGSQL_DSN，将使用默认dsn连接pgsql")
 		dsn = config.DefaultDsn
 	}
+	dsn, err := withConnectTimeout(dsn, envDuration("DB_CONNECT_TIMEOUT", defaultConnectTimeout))
+	if err != nil {
+		return nil, err
+	}
 	database, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gologger.Default.LogMode(gologger.Silent)})
 	if err != nil {
 		return nil, err
@@ -82,6 +87,34 @@ func Open() (*gorm.DB, error) {
 		"conn_max_idle_time", pool.ConnMaxIdleTime,
 	)
 	return database, nil
+}
+
+// defaultConnectTimeout 限制建立一条数据库连接的耗时。pgx默认不限，数据库不可达时
+// 不带ctx的查询会卡在建连上，连接池被占满后所有请求都在池里排队。
+const defaultConnectTimeout = 5 * time.Second
+
+// withConnectTimeout 在DSN和PGCONNECT_TIMEOUT都没有指定connect_timeout时补上默认值；
+// timeout为0表示不限制。
+func withConnectTimeout(dsn string, timeout time.Duration) (string, error) {
+	if timeout < 0 {
+		return "", errors.New("DB_CONNECT_TIMEOUT must be a non-negative duration")
+	}
+	if timeout == 0 || strings.Contains(dsn, "connect_timeout") || strings.TrimSpace(os.Getenv("PGCONNECT_TIMEOUT")) != "" {
+		return dsn, nil
+	}
+	// connect_timeout只接受整秒，不足一秒按一秒算
+	seconds := strconv.FormatInt(int64((timeout+time.Second-1)/time.Second), 10)
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			return "", fmt.Errorf("parse PGSQL_DSN: %w", err)
+		}
+		query := parsed.Query()
+		query.Set("connect_timeout", seconds)
+		parsed.RawQuery = query.Encode()
+		return parsed.String(), nil
+	}
+	return dsn + " connect_timeout=" + seconds, nil
 }
 
 func LoadPoolConfig() (PoolConfig, error) {

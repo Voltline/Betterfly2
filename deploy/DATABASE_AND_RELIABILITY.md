@@ -75,6 +75,10 @@ development, while Kubernetes overrides `DB_MAX_OPEN_CONNS` per Deployment:
 - `DB_MAX_IDLE_CONNS` defaults to `10` and cannot exceed max open.
 - `DB_CONN_MAX_LIFETIME` defaults to `1h`.
 - `DB_CONN_MAX_IDLE_TIME` defaults to `10m` and cannot exceed max lifetime.
+- `DB_CONNECT_TIMEOUT` defaults to `5s` (rounded up to whole seconds, `0`
+  disables it) and is added as `connect_timeout` only when neither
+  `PGSQL_DSN` nor `PGCONNECT_TIMEOUT` sets one. Without it an unreachable
+  database stalls queries that carry no deadline until the pool is exhausted.
 
 Budget PostgreSQL connections before scaling:
 

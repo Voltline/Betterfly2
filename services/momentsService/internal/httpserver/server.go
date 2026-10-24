@@ -49,27 +49,40 @@ func write(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	write(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }
+
+// unavailableRetryAfter 是503时建议客户端等待的秒数；auth或数据库瞬断通常几秒内恢复。
+const unavailableRetryAfter = "2"
+
 func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	status, code, message := failure(err)
+	if status == 503 {
+		logger.Sugar().Warnw("Moments request temporarily unavailable", "method", r.Method, "route", r.Pattern, "error", err)
+		w.Header().Set("Retry-After", unavailableRetryAfter)
+	} else {
+		logger.Sugar().Infow("Moments request rejected", "method", r.Method, "route", r.Pattern, "status", status, "code", code, "error", err)
+	}
+	writeError(w, status, code, message)
+}
+func failure(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, moments.ErrInvalid):
-		writeError(w, 400, "INVALID_REQUEST", "参数或图片格式不正确")
+		return 400, "INVALID_REQUEST", "参数或图片格式不正确"
 	case errors.Is(err, moments.ErrNotFound):
-		writeError(w, 404, "NOT_FOUND", "内容不存在或不可访问")
+		return 404, "NOT_FOUND", "内容不存在或不可访问"
 	case errors.Is(err, moments.ErrConflict):
-		writeError(w, 409, "CONFLICT", "幂等请求内容不同，或图片已被使用")
+		return 409, "CONFLICT", "幂等请求内容不同，或图片已被使用"
 	case errors.Is(err, moments.ErrGone):
-		writeError(w, 410, "DELETED", "内容已删除，请使用新的客户端 ID")
+		return 410, "DELETED", "内容已删除，请使用新的客户端 ID"
 	case errors.Is(err, errRateLimited):
-		writeError(w, 429, "RATE_LIMITED", "请稍后再尝试登录")
+		return 429, "RATE_LIMITED", "请稍后再尝试登录"
 	case errors.Is(err, moments.ErrQuota):
-		writeError(w, 429, "TOO_MANY_UPLOADS", "未发布的图片过多，请先发布或稍后再试")
+		return 429, "TOO_MANY_UPLOADS", "未发布的图片过多，请先发布或稍后再试"
 	case errors.Is(err, errUnauthorized):
-		writeError(w, 401, "UNAUTHORIZED", "请重新登录或检查请求凭据")
+		return 401, "UNAUTHORIZED", "请重新登录或检查请求凭据"
 	case isTooLarge(err):
-		writeError(w, 413, "TOO_LARGE", "请求体过大")
+		return 413, "TOO_LARGE", "请求体过大"
 	default:
-		logger.Sugar().Warnw("Moments request temporarily unavailable", "method", r.Method, "route", r.Pattern)
-		writeError(w, 503, "UNAVAILABLE", "服务暂时不可用，请保留原请求 ID 重试")
+		return 503, "UNAVAILABLE", "服务暂时不可用，请保留原请求 ID 重试"
 	}
 }
 func isTooLarge(err error) bool { var large *http.MaxBytesError; return errors.As(err, &large) }

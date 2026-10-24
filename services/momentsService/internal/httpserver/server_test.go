@@ -154,6 +154,10 @@ func TestLoginFailureOrAuthOutageNeverSetsCookies(t *testing.T) {
 		if w.Code != want || len(w.Result().Cookies()) != 0 {
 			t.Fatal(w.Code, w.Result().Cookies())
 		}
+		// 只有暂时不可用才让客户端按Retry-After退避，凭据错误和限流不带
+		if retry := w.Header().Get("Retry-After"); (want == 503) != (retry == unavailableRetryAfter) {
+			t.Fatalf("status %d Retry-After=%q", w.Code, retry)
+		}
 	}
 }
 func TestEmbeddedBearerSessionAndMutuallyExclusivePasswordMode(t *testing.T) {

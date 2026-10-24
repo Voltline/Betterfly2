@@ -21,8 +21,33 @@ import (
 
 type S3 struct {
 	client *s3.Client
+	// signer 只在配置了RUSTFS_EXTERNAL_ENDPOINT_URL时固定使用；否则按请求推导的地址签名，见WithPublicEndpoint。
 	signer *s3.PresignClient
 	bucket string
+}
+
+type publicEndpointKey struct{}
+
+// WithPublicEndpoint 记下本次请求里客户端访问对象存储应使用的地址。
+// 没有配置RUSTFS_EXTERNAL_ENDPOINT_URL时，预签名URL按它生成，真机拿到的是服务器地址而不是localhost；
+// 配置了则忽略。ctx里没有时回退到http://localhost:9000。
+func WithPublicEndpoint(ctx context.Context, endpoint string) context.Context {
+	return context.WithValue(ctx, publicEndpointKey{}, endpoint)
+}
+func (s *S3) presigner(ctx context.Context) (*s3.PresignClient, error) {
+	if s.signer != nil {
+		return s.signer, nil
+	}
+	endpoint, _ := ctx.Value(publicEndpointKey{}).(string)
+	if endpoint == "" {
+		endpoint = "http://localhost:9000"
+	}
+	// 推导的主机名来自请求，按次构造，不缓存，避免被任意Host撑大
+	c, err := client(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	return s3.NewPresignClient(c), nil
 }
 
 func env(key, fallback string) string {
@@ -50,15 +75,18 @@ func New(ctx context.Context, origin string) (*S3, error) {
 	if err != nil {
 		return nil, err
 	}
-	publicEndpoint := env("RUSTFS_EXTERNAL_ENDPOINT_URL", "http://localhost:9000")
+	store := &S3{client: c, bucket: env("MOMENTS_BUCKET", "betterfly-moments")}
+	publicEndpoint := os.Getenv("RUSTFS_EXTERNAL_ENDPOINT_URL")
 	if strings.HasPrefix(origin, "https://") && !strings.HasPrefix(publicEndpoint, "https://") {
-		return nil, fmt.Errorf("HTTPS Moments requires an HTTPS public S3 endpoint")
+		return nil, fmt.Errorf("HTTPS Moments requires an HTTPS RUSTFS_EXTERNAL_ENDPOINT_URL")
 	}
-	public, err := client(publicEndpoint)
-	if err != nil {
-		return nil, err
+	if publicEndpoint != "" {
+		public, err := client(publicEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		store.signer = s3.NewPresignClient(public)
 	}
-	store := &S3{client: c, signer: s3.NewPresignClient(public), bucket: env("MOMENTS_BUCKET", "betterfly-moments")}
 	if store.bucket == env("RUSTFS_BUCKET", "betterfly-files") {
 		return nil, fmt.Errorf("Moments requires a separate private bucket")
 	}
@@ -97,7 +125,11 @@ func New(ctx context.Context, origin string) (*S3, error) {
 	return store, nil
 }
 func (s *S3) Upload(ctx context.Context, key, mime string, size int64) (string, map[string]string, error) {
-	result, err := s.signer.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &s.bucket, Key: &key, ContentType: &mime, ContentLength: &size}, func(o *s3.PresignOptions) { o.Expires = 10 * time.Minute })
+	signer, err := s.presigner(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	result, err := signer.PresignPutObject(ctx, &s3.PutObjectInput{Bucket: &s.bucket, Key: &key, ContentType: &mime, ContentLength: &size}, func(o *s3.PresignOptions) { o.Expires = 10 * time.Minute })
 	if err != nil {
 		return "", nil, err
 	}
@@ -115,7 +147,11 @@ func (s *S3) Seal(ctx context.Context, key string, data []byte, mime string) err
 	return err
 }
 func (s *S3) Download(ctx context.Context, key string) (string, error) {
-	result, err := s.signer.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key, ResponseCacheControl: aws.String("private, no-store")}, func(o *s3.PresignOptions) { o.Expires = time.Minute })
+	signer, err := s.presigner(ctx)
+	if err != nil {
+		return "", err
+	}
+	result, err := signer.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &s.bucket, Key: &key, ResponseCacheControl: aws.String("private, no-store")}, func(o *s3.PresignOptions) { o.Expires = time.Minute })
 	if err != nil {
 		return "", err
 	}
@@ -123,7 +159,11 @@ func (s *S3) Download(ctx context.Context, key string) (string, error) {
 }
 func (s *S3) Avatar(ctx context.Context, key string) (string, error) {
 	bucket := env("RUSTFS_BUCKET", "betterfly-files")
-	result, err := s.signer.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &bucket, Key: &key, ResponseCacheControl: aws.String("private, no-store")}, func(o *s3.PresignOptions) { o.Expires = time.Minute })
+	signer, err := s.presigner(ctx)
+	if err != nil {
+		return "", err
+	}
+	result, err := signer.PresignGetObject(ctx, &s3.GetObjectInput{Bucket: &bucket, Key: &key, ResponseCacheControl: aws.String("private, no-store")}, func(o *s3.PresignOptions) { o.Expires = time.Minute })
 	if err != nil {
 		return "", err
 	}

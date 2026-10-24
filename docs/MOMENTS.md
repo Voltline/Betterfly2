@@ -25,6 +25,11 @@ MOMENTS_DB_MAX_IDLE_CONNS=2
 
 `MOMENTS_PUBLIC_URL` 只能是 scheme + host + 可选 port，不带路径；用于精确 Origin 校验、
 Cookie Secure 标志及 S3 CORS。默认 `http://localhost:8087` 只适用于本机测试。
+`RUSTFS_EXTERNAL_ENDPOINT_URL` 留空时，与 StorageService 一样按请求推导预签名地址：
+客户端访问 Moments 用的主机名加 `RUSTFS_EXTERNAL_PORT`（默认 9000），协议取
+`RUSTFS_EXTERNAL_SCHEME`（默认 http），主机可用 `RUSTFS_EXTERNAL_HOST` 固定。这样真机通过
+服务器 IP 访问 8087 时拿到的是同一 IP 的 9000 端口，而不是 localhost。HTTPS 部署必须显式配置
+HTTPS 的 `RUSTFS_EXTERNAL_ENDPOINT_URL`，否则启动失败。
 HTTPS 反向代理完整保留 `/moments/` 路径，透传 Cookie、Origin，不记录请求正文或认证头。
 浏览器图片 SHA-512 使用 Web Crypto，需要 HTTPS 或 localhost。
 
@@ -145,7 +150,9 @@ HTTP 响应丢失后保留原请求及幂等 ID 重试，不把本地超时视�
 
 服务故障返回 503，参数 400，认证 401，不可见/不存在 404，冲突 409，作者重试已删
 对象 410，请求体超过 64 KiB 返回 413，登录频率或未发布图片过多 429。错误格式为
-`{"error":{"code":"UNAVAILABLE","message":"..."}}`，不返回数据库细节。
+`{"error":{"code":"UNAVAILABLE","message":"..."}}`，不返回数据库细节。503 带
+`Retry-After`（秒），客户端按它退避后用原幂等 ID 重试。服务端日志记录每个失败请求的
+路由、状态码、错误码与内部错误，不记录正文和凭据。
 元数据保存失败不会误报校验成功，sealed 对象保留供安全重试。
 
 ## 原生接入示例

@@ -8,10 +8,13 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"momentsService/internal/media"
 	"momentsService/internal/moments"
 	"momentsService/web"
+	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +35,8 @@ type Server struct {
 	verifySlots chan struct{}
 	// 只信任来自这些地址（ingress）的X-Forwarded-For/X-Real-IP。
 	trustedProxies []netip.Prefix
+	// 没有配置RUSTFS_EXTERNAL_ENDPOINT_URL时，预签名URL用的对象存储地址；主机为空表示取请求的主机名。
+	objectScheme, objectHost, objectPort string
 }
 
 func New(service *moments.Service, auth Auth, origin string) *Server {
@@ -39,7 +44,31 @@ func New(service *moments.Service, auth Auth, origin string) *Server {
 	if proxies == "" {
 		proxies = sharedutils.DefaultTrustedProxyCIDRs
 	}
-	return &Server{service: service, auth: auth, origin: origin, secure: strings.HasPrefix(origin, "https://"), verifySlots: make(chan struct{}, 2), trustedProxies: sharedutils.ParseTrustedProxies(proxies)}
+	return &Server{service: service, auth: auth, origin: origin, secure: strings.HasPrefix(origin, "https://"), verifySlots: make(chan struct{}, 2), trustedProxies: sharedutils.ParseTrustedProxies(proxies),
+		objectScheme: envOr("RUSTFS_EXTERNAL_SCHEME", "http"), objectHost: strings.TrimSpace(os.Getenv("RUSTFS_EXTERNAL_HOST")), objectPort: envOr("RUSTFS_EXTERNAL_PORT", "9000")}
+}
+func envOr(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// objectEndpoint 与storage一致：客户端访问Moments用的主机名加对象存储端口。
+// 主机名来自请求且只会出现在给该请求者的URL里，只接受主机名或IP字面量的字符。
+func (s *Server) objectEndpoint(r *http.Request) string {
+	host := s.objectHost
+	if host == "" {
+		host = r.Host
+		if name, _, err := net.SplitHostPort(host); err == nil {
+			host = name
+		}
+		host = strings.Trim(host, "[]")
+	}
+	if host == "" || strings.Trim(host, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:") != "" {
+		host = "localhost"
+	}
+	return (&url.URL{Scheme: s.objectScheme, Host: net.JoinHostPort(host, s.objectPort)}).String()
 }
 func write(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -294,7 +323,7 @@ func (s *Server) Routes() http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: http: blob:; connect-src 'self' https: http:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'")
 		ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
 		defer cancel()
-		mux.ServeHTTP(w, r.WithContext(ctx))
+		mux.ServeHTTP(w, r.WithContext(media.WithPublicEndpoint(ctx, s.objectEndpoint(r))))
 	})
 }
 func (s *Server) feed(w http.ResponseWriter, r *http.Request, user int64) {

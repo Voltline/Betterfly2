@@ -292,3 +292,28 @@ func TestRPCAuthLoginMapsRateLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestObjectEndpointFollowsRequestHost(t *testing.T) {
+	t.Setenv("RUSTFS_EXTERNAL_HOST", "")
+	t.Setenv("RUSTFS_EXTERNAL_PORT", "")
+	t.Setenv("RUSTFS_EXTERNAL_SCHEME", "")
+	s := New(nil, &fakeAuth{}, "http://localhost:8087")
+	for host, want := range map[string]string{
+		"192.168.1.5:8087": "http://192.168.1.5:9000",
+		"bf.lan":           "http://bf.lan:9000",
+		"[fd00::5]:8087":   "http://[fd00::5]:9000",
+		"evil/path:8087":   "http://localhost:9000",
+		"":                 "http://localhost:9000",
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Host = host
+		if got := s.objectEndpoint(r); got != want {
+			t.Fatalf("Host %q -> %s, want %s", host, got, want)
+		}
+	}
+	t.Setenv("RUSTFS_EXTERNAL_HOST", "files.bf.lan")
+	t.Setenv("RUSTFS_EXTERNAL_PORT", "19000")
+	s = New(nil, &fakeAuth{}, "http://localhost:8087")
+	if got := s.objectEndpoint(httptest.NewRequest("GET", "/", nil)); got != "http://files.bf.lan:19000" {
+		t.Fatalf("configured host/port ignored: %s", got)
+	}
+}

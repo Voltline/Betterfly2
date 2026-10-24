@@ -11,6 +11,12 @@ import (
 	"storageService/internal/grpcClient"
 )
 
+// validateJWT 测试可替换为不走gRPC的实现。
+var validateJWT = grpcClient.ValidateJWT
+
+// authRetryAfterSeconds 是auth不可用时建议客户端等待的秒数。
+const authRetryAfterSeconds = "2"
+
 func shouldBypassJWTAuth(path string) bool {
 	switch path {
 	case "/health":
@@ -65,11 +71,12 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 通过gRPC验证JWT
-		checkJWTRsp, err := grpcClient.ValidateJWT(userID, jwt)
-		if err != nil {
-			sugar.Errorf("JWT验证失败: %v", err)
-			http.Error(w, "JWT validation failed", http.StatusUnauthorized)
+		// 通过gRPC验证JWT；auth或数据库暂时不可用不是凭据问题，回503让客户端退避重试而不是重新登录
+		checkJWTRsp, err := validateJWT(userID, jwt)
+		if err != nil || checkJWTRsp == nil || checkJWTRsp.Result == pb.AuthResult_SERVICE_ERROR {
+			sugar.Errorw("JWT验证暂时不可用", "user_id", userID, "result", checkJWTRsp.GetResult(), "error", err)
+			w.Header().Set("Retry-After", authRetryAfterSeconds)
+			http.Error(w, "Authentication temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
 

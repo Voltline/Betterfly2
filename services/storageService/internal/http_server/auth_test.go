@@ -1,6 +1,8 @@
 package http_server
 
 import (
+	pb "Betterfly2/proto/server_rpc/auth"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,5 +86,46 @@ func TestJWTAuthMiddleware_BypassesReadyEndpoint(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestJWTAuthMiddlewareSeparatesAuthOutageFromBadCredentials(t *testing.T) {
+	original := validateJWT
+	t.Cleanup(func() { validateJWT = original })
+	tests := []struct {
+		name       string
+		rsp        *pb.CheckJwtRsp
+		err        error
+		wantStatus int
+		wantNext   bool
+	}{
+		{name: "rpc failure", err: errors.New("deadline exceeded"), wantStatus: http.StatusServiceUnavailable},
+		{name: "auth database failure", rsp: &pb.CheckJwtRsp{Result: pb.AuthResult_SERVICE_ERROR}, wantStatus: http.StatusServiceUnavailable},
+		{name: "bad jwt", rsp: &pb.CheckJwtRsp{Result: pb.AuthResult_JWT_ERROR}, wantStatus: http.StatusUnauthorized},
+		{name: "valid jwt", rsp: &pb.CheckJwtRsp{Result: pb.AuthResult_OK, UserId: 7}, wantStatus: http.StatusOK, wantNext: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			validateJWT = func(int64, string) (*pb.CheckJwtRsp, error) { return tt.rsp, tt.err }
+			nextCalled := false
+			handler := JWTAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				nextCalled = true
+				if userID, ok := authenticatedUserID(r); !ok || userID != 7 {
+					t.Fatalf("authenticated user id = %d, %t", userID, ok)
+				}
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/storage_service/download", nil)
+			req.Header.Set("Authorization", "Bearer abc")
+			req.Header.Set("X-User-ID", "7")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus || nextCalled != tt.wantNext {
+				t.Fatalf("status=%d next=%t, want %d %t", rec.Code, nextCalled, tt.wantStatus, tt.wantNext)
+			}
+			if retry := rec.Header().Get("Retry-After"); (tt.wantStatus == http.StatusServiceUnavailable) != (retry != "") {
+				t.Fatalf("Retry-After=%q for status %d", retry, rec.Code)
+			}
+		})
 	}
 }

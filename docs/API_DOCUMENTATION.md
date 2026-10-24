@@ -431,6 +431,7 @@ Content-Type: application/json
 **错误响应**:
 - `400 Bad Request`: 请求参数错误
 - `401 Unauthorized`: JWT验证失败
+- `503 Service Unavailable`: 认证服务暂时不可用（带 `Retry-After` 秒数），不是凭据失效，可退避后重试
 - `413 Request Entity Too Large`: `file_size` 超过 512 MiB
 - `500 Internal Server Error`: 服务器内部错误
 
@@ -478,6 +479,7 @@ Content-Type: application/json
 **错误响应**:
 - `400 Bad Request`: 请求参数错误
 - `401 Unauthorized`: JWT验证失败
+- `503 Service Unavailable`: 认证服务暂时不可用（带 `Retry-After` 秒数），不是凭据失效，可退避后重试
 - `500 Internal Server Error`: 服务器内部错误
 
 ---
@@ -527,6 +529,7 @@ X-User-ID: <USER_ID>
 **错误响应**:
 - `400 Bad Request`: 请求参数错误（缺少file_hash）
 - `401 Unauthorized`: JWT验证失败
+- `503 Service Unavailable`: 认证服务暂时不可用（带 `Retry-After` 秒数），不是凭据失效，可退避后重试
 - `500 Internal Server Error`: 服务器内部错误
 
 ---
@@ -999,6 +1002,7 @@ message DownloadFileResponse {
 - `200 OK`: 请求成功
 - `400 Bad Request`: 请求参数错误
 - `401 Unauthorized`: JWT验证失败
+- `503 Service Unavailable`: 认证服务暂时不可用（带 `Retry-After` 秒数），不是凭据失效，可退避后重试
 - `404 Not Found`: 资源不存在
 - `500 Internal Server Error`: 服务器内部错误
 

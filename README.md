@@ -18,6 +18,7 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 - [会话功能](docs/CONVERSATION_FEATURES.md)：频道置顶、群聊／频道免打扰及引用回复。
 - [频道讨论区](docs/CHANNEL_DISCUSSIONS.md)：关联普通群、按公告评论、入群后完整线程历史。
 - [好友动态](docs/MOMENTS.md)：独立网页与 HTTP API、九图、点赞评论及好友可见性。
+- [AI 助手](docs/CHATBOT.md)：接入 OpenAI 兼容模型的机器人账号，支持单聊和群里 @，回复照常入库与多端同步。
 - PostgreSQL 持久化用户、关系、消息、文件元数据、实验和推送设备。
 - Ristretto L1 + Redis L2 + PostgreSQL 的消息与资料查询缓存。
 - RustFS 预签名直传、服务端 SHA-512 校验和鉴权下载。
@@ -44,6 +45,9 @@ flowchart LR
     Kafka <--> Friend["Friend Service"]
     Kafka <--> Call["Call Service"]
     Kafka <--> Push["Push Service"]
+    Kafka <--> Chatbot["Chatbot Service"]
+    Chatbot --> PG
+    Chatbot --> LLM["OpenAI-compatible API"]
     Storage <--> Redis
     Storage <--> PG[(PostgreSQL)]
     Storage <--> RustFS[(RustFS)]
@@ -76,6 +80,7 @@ flowchart LR
 | Moments Service | HTTP `8087` | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
 | Call Service | Kafka `call-service`；HTTP `8085` | 一对一及可选群会议控制面、探针与签名 SFU 回调 |
 | Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
+| Chatbot Service | Kafka `chatbot-service`；内网 HTTP `8088` | AI 助手账号，调用模型并以机器人身份回复 |
 
 主要基础设施端口：Redis `6379`、Kafka `9092/9094`、RustFS S3 `9000`、RustFS Console `9001`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Kafka UI `8080`、Prometheus `9090` 和 Grafana `3000` 只在相应可选 profile 中启动。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
 
@@ -137,7 +142,7 @@ Betterfly2/
 ├── common/                    # Kafka/Redis 辅助配置与 WebSocket 证书脚本
 ├── deploy/k8s/                # 单集群验证用 Kubernetes manifests
 ├── proto/                     # DataForwarding、Storage、Friend、Call、Push 协议
-├── services/                  # 七个业务服务、Compose 与部署脚本
+├── services/                  # 九个业务服务、Compose 与部署脚本
 ├── shared/                    # 数据库、日志、指标、MQ 和通用分发器
 ├── tool/                      # Protobuf 编译工具
 └── docs/                     # 接口、功能契约、开发与回归测试文档
@@ -155,6 +160,7 @@ Betterfly2/
 | [Call Service](services/callService/README.md) | WebRTC、Coturn 和 PushKit 唤醒 |
 | [群通话](docs/GROUP_CALLS.md) | LiveKit 多人语音/视频、协议和可选部署 |
 | [Push Service](services/pushService/README.md) | APNs 双环境、普通通知与内网调试后台 |
+| [AI 助手](docs/CHATBOT.md) | ChatbotService 触发规则、模型配置与客户端接入 |
 | [Monitor 账号](services/dataForwardingService/MONITOR.md) | 仅用户 ID 1 可见的服务状态与管理指令 |
 | [Kubernetes](deploy/k8s/README.md) | 当前单集群验证清单的范围与限制 |
 | [数据库与可靠性运维](deploy/DATABASE_AND_RELIABILITY.md) | 独立迁移、连接池预算、Kafka 重试与 DLQ 语义 |

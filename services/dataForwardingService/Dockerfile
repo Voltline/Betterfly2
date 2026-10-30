@@ -14,6 +14,7 @@ WORKDIR /app
 # 3. 先下载依赖，业务源码变化时继续复用模块缓存。
 COPY ./proto/go.* ./proto/
 COPY ./proto/call/go.* ./proto/call/
+COPY ./proto/chatbot/go.* ./proto/chatbot/
 COPY ./proto/data_forwarding/go.* ./proto/data_forwarding/
 COPY ./proto/friend/go.* ./proto/friend/
 COPY ./proto/push/go.* ./proto/push/

@@ -121,6 +121,7 @@ cd services
 | `group-calls` | LiveKit、CallService、PushService |
 | `experiments` | ABTestService |
 | `moments` | MomentsService、RustFS |
+| `chatbot` | ChatbotService（模型地址见 [AI 助手](../docs/CHATBOT.md)） |
 | `observability` | Prometheus、Grafana |
 | `tools` | Kafka UI |
 | `redundancy` | 第二个 DF |

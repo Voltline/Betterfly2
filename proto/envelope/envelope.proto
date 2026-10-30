@@ -18,6 +18,7 @@ enum MessageType {
   CALL_RESPONSE = 11;
   PUSH_REQUEST = 12;
   PUSH_RESPONSE = 13;
+  CHATBOT_REQUEST = 14;
 }
 
 message Envelope {

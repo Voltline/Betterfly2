@@ -194,6 +194,9 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 	currentContainerID := currentContainerTopic()
 	if payload.GetIsGroup() {
 		err = routeGroupMessage(messageID, payload.GetFromId(), payload, message, currentContainerID)
+	} else if IsChatbotID(payload.GetToId()) {
+		// 机器人没有连接和推送设备，发给它的消息只需要通知ChatbotService作答。
+		err = publishChatbotTrigger(messageID, payload)
 	} else {
 		targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 		targetTopic, routeErr := redisClient.GetContainerByConnection(targetUserID)
@@ -344,6 +347,15 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 	if err != nil {
 		return err
 	}
+	memberIDs, chatbotIsMember := withoutChatbot(memberIDs)
+	var triggerErr error
+	if chatbotIsMember {
+		if replies, replyErr := chatbotRepliesInGroup(payload); replyErr != nil {
+			triggerErr = replyErr
+		} else if replies {
+			triggerErr = publishChatbotTrigger(messageID, payload)
+		}
+	}
 
 	targetUserIDs := make([]string, 0, len(memberIDs))
 	for _, memberID := range memberIDs {
@@ -360,7 +372,7 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 	pushErr := publishMessagePush(recipients, payload, messageID)
 	containerByUserID, err := redisClient.GetContainersByConnections(targetUserIDs)
 	if err != nil {
-		return errors.Join(err, pushErr)
+		return errors.Join(err, pushErr, triggerErr)
 	}
 
 	deliveryErr := routeGroupTargets(messageID, recipients, containerByUserID, currentContainerID,
@@ -369,7 +381,7 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 		}, func(topic string, users []int64) error {
 			return routeGroupPostBatchCrossContainer(topic, users, payload)
 		})
-	return errors.Join(pushErr, deliveryErr)
+	return errors.Join(pushErr, deliveryErr, triggerErr)
 }
 
 func routeGroupTargets(messageID int64, memberIDs []int64, containerByUserID map[string]string, currentContainerID string, local func(string, string) error, remote func(string, []int64) error) error {

@@ -90,6 +90,7 @@ services:
       FRIEND_DLQ_TOPIC: ${FRIEND_KAFKA_DLQ_TOPIC:-friend-service-dlq}
       CALL_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
       PUSH_DLQ_TOPIC: ${PUSH_KAFKA_DLQ_TOPIC:-push-service-dlq}
+      CHATBOT_DLQ_TOPIC: ${CHATBOT_KAFKA_DLQ_TOPIC:-chatbot-service-dlq}
       DLQ_PARTITIONS: ${DF_KAFKA_DLQ_PARTITIONS:-3}
       DLQ_REPLICATION_FACTOR: 1
       DLQ_MIN_ISR: 1
@@ -98,6 +99,7 @@ services:
       FRIEND_DLQ_RETENTION_MS: ${FRIEND_KAFKA_DLQ_RETENTION_MS:-604800000}
       CALL_DLQ_RETENTION_MS: ${CALL_KAFKA_DLQ_RETENTION_MS:-604800000}
       PUSH_DLQ_RETENTION_MS: ${PUSH_KAFKA_DLQ_RETENTION_MS:-604800000}
+      CHATBOT_DLQ_RETENTION_MS: ${CHATBOT_KAFKA_DLQ_RETENTION_MS:-604800000}
       KAFKA_ACL_ENABLED: ${KAFKA_ACL_ENABLED:-false}
     command:
       - /bin/bash
@@ -134,6 +136,7 @@ services:
         create_dlq "$${FRIEND_DLQ_TOPIC}" "$${FRIEND_DLQ_RETENTION_MS}" friend-service
         create_dlq "$${CALL_DLQ_TOPIC}" "$${CALL_DLQ_RETENTION_MS}" call-service
         create_dlq "$${PUSH_DLQ_TOPIC}" "$${PUSH_DLQ_RETENTION_MS}" push-service
+        create_dlq "$${CHATBOT_DLQ_TOPIC}" "$${CHATBOT_DLQ_RETENTION_MS}" chatbot-service
     restart: "no"
     networks:
       - backend
@@ -200,6 +203,8 @@ services:
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
+      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
+      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -253,6 +258,8 @@ services:
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
+      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
+      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -584,6 +591,52 @@ services:
         condition: service_completed_successfully
     volumes:
       - "${APNS_PRIVATE_KEY_HOST_PATH:-/dev/null}:/run/secrets/apns_key.p8:ro"
+    networks:
+      - backend
+
+  chatbot_service:
+    <<: *container-defaults
+    profiles: ["chatbot"]
+    build:
+      context: ..
+      dockerfile: services/chatbotService/Dockerfile
+    container_name: chatbotService
+    environment:
+      <<: *database-env
+      DB_MAX_OPEN_CONNS: ${CHATBOT_DB_MAX_OPEN_CONNS:-4}
+      DB_MAX_IDLE_CONNS: ${CHATBOT_DB_MAX_IDLE_CONNS:-2}
+      KAFKA_BROKER: kafka1:9092
+      KAFKA_STORAGE_TOPIC: storage-service
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
+      CHATBOT_TOPIC: chatbot-service
+      CHATBOT_CONSUMER_GROUP: chatbot-service-group
+      CHATBOT_KAFKA_DLQ_TOPIC: ${CHATBOT_KAFKA_DLQ_TOPIC:-chatbot-service-dlq}
+      CHATBOT_HTTP_PORT: ${CHATBOT_HTTP_PORT:-8088}
+      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
+      CHATBOT_ACCOUNT: ${CHATBOT_ACCOUNT:-betterfly_assistant}
+      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
+      CHATBOT_AVATAR: ${CHATBOT_AVATAR:-}
+      CHATBOT_API_BASE_URL: ${CHATBOT_API_BASE_URL:-}
+      CHATBOT_API_KEY: ${CHATBOT_API_KEY:-}
+      CHATBOT_MODEL: ${CHATBOT_MODEL:-}
+      CHATBOT_MAX_TOKENS: ${CHATBOT_MAX_TOKENS:-1024}
+      CHATBOT_TEMPERATURE: ${CHATBOT_TEMPERATURE:-}
+      CHATBOT_REQUEST_TIMEOUT: ${CHATBOT_REQUEST_TIMEOUT:-60s}
+      CHATBOT_SYSTEM_PROMPT: ${CHATBOT_SYSTEM_PROMPT:-}
+      CHATBOT_TIMEZONE: ${CHATBOT_TIMEZONE:-Asia/Shanghai}
+      CHATBOT_CONTEXT_MESSAGES: ${CHATBOT_CONTEXT_MESSAGES:-20}
+      CHATBOT_CONTEXT_CHARS: ${CHATBOT_CONTEXT_CHARS:-6000}
+      CHATBOT_MAX_REPLY_PARTS: ${CHATBOT_MAX_REPLY_PARTS:-4}
+      CHATBOT_USER_RATE_PER_MINUTE: ${CHATBOT_USER_RATE_PER_MINUTE:-6}
+      CHATBOT_USER_DAILY_LIMIT: ${CHATBOT_USER_DAILY_LIMIT:-200}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "${CHATBOT_HTTP_PORT:-8088}"
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - backend
 

@@ -51,3 +51,9 @@ scrape_configs:
       - targets: ['moments_service:8087']
         labels:
           service: 'moments'
+
+  - job_name: 'chatbot'
+    static_configs:
+      - targets: ['chatbot_service:8088']
+        labels:
+          service: 'chatbot'

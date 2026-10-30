@@ -7,6 +7,7 @@ toolchain go1.24.1
 require (
 	Betterfly2/proto v0.0.0
 	Betterfly2/proto/call v0.0.0
+	Betterfly2/proto/chatbot v0.0.0
 	Betterfly2/proto/data_forwarding v0.0.0
 	Betterfly2/proto/friend v0.0.0
 	Betterfly2/proto/push v0.0.0
@@ -68,6 +69,7 @@ require (
 replace (
 	Betterfly2/proto => ../../proto
 	Betterfly2/proto/call => ../../proto/call
+	Betterfly2/proto/chatbot => ../../proto/chatbot
 	Betterfly2/proto/data_forwarding => ../../proto/data_forwarding
 	Betterfly2/proto/friend => ../../proto/friend
 	Betterfly2/proto/push => ../../proto/push

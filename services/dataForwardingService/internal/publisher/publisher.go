@@ -119,6 +119,25 @@ func PublishRawMessage(payload []byte, targetTopic string, headers []sarama.Reco
 	return nil
 }
 
+// PublishKeyedMessage 按key选分区，同一key的消息在一个分区内保持顺序。
+func PublishKeyedMessage(payload []byte, targetTopic, key string) error {
+	if KafkaProducer == nil {
+		return fmt.Errorf("尚未初始化 Kafka Producer")
+	}
+	var identity [16]byte
+	if _, err := rand.Read(identity[:]); err != nil {
+		return fmt.Errorf("生成Kafka事件ID失败: %w", err)
+	}
+	_, _, err := KafkaProducer.SendMessage(&sarama.ProducerMessage{
+		Topic: targetTopic, Key: sarama.StringEncoder(key), Value: sarama.ByteEncoder(payload),
+		Headers: []sarama.RecordHeader{{Key: []byte("event_id"), Value: []byte(hex.EncodeToString(identity[:]))}},
+	})
+	if err != nil {
+		return fmt.Errorf("向 Kafka 发布消息失败: %v", err)
+	}
+	return nil
+}
+
 func PublishRawMessageContext(ctx context.Context, payload []byte, targetTopic string, headers []sarama.RecordHeader) error {
 	if err := ctx.Err(); err != nil {
 		return err

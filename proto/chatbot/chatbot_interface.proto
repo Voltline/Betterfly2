@@ -1,0 +1,19 @@
+syntax = "proto3";
+package chatbot;
+option go_package = "Betterfly2/proto/chatbot";
+
+// ChatbotTrigger 由DF在消息入库、完成投递副作用后发布。只带消息标识，正文以数据库为准，
+// 撤回或删除后机器人不会再读到旧正文。
+message ChatbotTrigger {
+  int64 message_id = 1;
+  int64 from_user_id = 2;
+  int64 to_id = 3;        // 单聊为机器人用户ID，群聊为群ID
+  bool is_group = 4;
+  string reply_topic = 5; // 机器人回复的入库响应回到这个DF topic，由DF负责实时投递与推送
+}
+
+message RequestMessage {
+  oneof payload {
+    ChatbotTrigger trigger = 1;
+  }
+}

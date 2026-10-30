@@ -80,6 +80,9 @@ services:
   push_service:
     environment:
       KAFKA_BROKER: kafka1:9092,kafka2:9094
+  chatbot_service:
+    environment:
+      KAFKA_BROKER: kafka1:9092,kafka2:9094
 
 volumes:
   kafka-cluster-1-data:

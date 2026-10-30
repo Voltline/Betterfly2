@@ -12,6 +12,7 @@ Betterfly2 is a Go 1.24 microservice backend for an instant-messaging client. Tr
 - `callService`: Kafka/Redis WebRTC signaling state machine for one-to-one calls (P2P/Coturn) and optional group calls on self-hosted LiveKit.
 - `pushService`: APNs/PushKit token storage, notification delivery and protected administration UI.
 - `momentsService`: HTTP API and web UI for friend moments (posts, likes, comments) with private RustFS images.
+- `chatbotService`: Kafka worker that answers as the AI assistant account through an OpenAI-compatible API; DataForwarding triggers it and auto-accepts its friend requests and group invitations.
 
 ## Development
 
@@ -31,7 +32,7 @@ cd services
 
 - Clients send Protobuf requests over `/ws`; JWT is carried by the protocol request, not an HTTP Authorization header.
 - Auth calls are synchronous gRPC.
-- Storage, friend, call and push work is carried over Kafka topics named `storage-service`, `friend-service`, `call-service`, `push-service` and the high-priority `push-service-voip`.
+- Storage, friend, call, push and chatbot work is carried over Kafka topics named `storage-service`, `friend-service`, `call-service`, `push-service`, the high-priority `push-service-voip` and `chatbot-service`.
 - DataForwarding Pod topics route asynchronous responses back to the correct WebSocket owner.
 - Redis stores cross-pod routes, shared cache entries and active call state.
 - WebRTC media and RustFS object bytes bypass application services.

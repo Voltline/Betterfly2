@@ -32,7 +32,8 @@ Presets:
 
 Options:
   --enable <profile>  Add a profile: storage, notifications, calls, experiments,
-                      group-calls, moments, observability, tools or redundancy. May be repeated.
+                      group-calls, moments, chatbot, observability, tools or redundancy.
+                      May be repeated.
   --cert              Regenerate the WebSocket self-signed certificate.
   --proto             Regenerate protobuf code.
   --without-group-calls  Omit LiveKit; keep one-to-one calls.

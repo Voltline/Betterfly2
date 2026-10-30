@@ -3,7 +3,7 @@
 add_profile() {
   local profile="$1" existing
   case "$profile" in
-    storage|notifications|calls|group-calls|moments|experiments|observability|tools|redundancy) ;;
+    storage|notifications|calls|group-calls|moments|chatbot|experiments|observability|tools|redundancy) ;;
     *) echo "Unknown profile: $profile" >&2; return 1 ;;
   esac
   if [[ "${#EXTRA_PROFILES[@]}" -gt 0 ]]; then
@@ -19,7 +19,7 @@ select_compose_environment() {
   case "$PRESET" in
     minimal) ;;
     standard|distributed|full)
-      for profile in storage notifications calls experiments moments; do add_profile "$profile"; done
+      for profile in storage notifications calls experiments moments chatbot; do add_profile "$profile"; done
       [[ "$GROUP_CALLS" -eq 0 ]] || add_profile group-calls
       [[ "$PRESET" == "standard" ]] || add_profile redundancy
       if [[ "$PRESET" == "full" ]]; then add_profile observability; add_profile tools; fi

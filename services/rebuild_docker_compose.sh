@@ -40,6 +40,7 @@ Aliases:
   friend                 -> friend_service
   abtest                 -> abtest_service
   moments                -> moments_service
+  chatbot                -> chatbot_service
   call                   -> call_service
   turn                   -> coturn
   sfu                    -> livekit
@@ -68,10 +69,10 @@ EOF
 list_targets() {
   cat <<'EOF'
 Compose services:
-  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service moments_service call_service push_service coturn livekit
+  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service moments_service chatbot_service call_service push_service coturn livekit
 
 Useful aliases:
-  dataforwarding df-all auth storage friend abtest moments call push turn sfu
+  dataforwarding df-all auth storage friend abtest moments chatbot call push turn sfu
 EOF
 }
 
@@ -120,6 +121,10 @@ add_target() {
       add_service "moments_service"
       add_profile moments
       ;;
+    chatbot)
+      add_service "chatbot_service"
+      add_profile chatbot
+      ;;
     call)
       add_service "call_service"
       add_profile calls
@@ -136,7 +141,7 @@ add_target() {
       add_service "push_service"
       add_profile notifications
       ;;
-    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|moments_service|call_service|push_service|coturn|livekit)
+    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|moments_service|chatbot_service|call_service|push_service|coturn|livekit)
       add_service "$1"
       ;;
     *)
@@ -248,6 +253,7 @@ for service in "${SERVICES[@]}"; do
     storage_service|rustfs) add_profile storage ;;
     abtest_service) add_profile experiments ;;
     moments_service) add_profile moments ;;
+    chatbot_service) add_profile chatbot ;;
     call_service|coturn) add_profile calls ;;
     push_service) add_profile notifications ;;
     livekit) add_profile group-calls ;;

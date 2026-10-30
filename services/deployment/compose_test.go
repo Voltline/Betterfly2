@@ -172,7 +172,7 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 			if mode == "cluster" {
 				args = append(args, "-f", filepath.Join(serviceRoot(t), "docker-compose.kafka-cluster.yml"))
 			}
-			for _, profile := range []string{"storage", "calls", "notifications", "group-calls", "experiments", "moments"} {
+			for _, profile := range []string{"storage", "calls", "notifications", "group-calls", "experiments", "moments", "chatbot"} {
 				args = append(args, "--profile", profile)
 			}
 			if mode != "standard" {
@@ -193,11 +193,11 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 			if err := json.Unmarshal(output, &model); err != nil {
 				t.Fatal(err)
 			}
-			wantCount := map[string]int{"standard": 15, "distributed": 16, "full": 19, "cluster": 17}[mode]
+			wantCount := map[string]int{"standard": 16, "distributed": 17, "full": 20, "cluster": 18}[mode]
 			if len(model.Services) != wantCount {
 				t.Fatalf("service count=%d want=%d (includes two one-shot jobs)", len(model.Services), wantCount)
 			}
-			for _, name := range []string{"df", "auth_service", "friend_service", "storage_service", "rustfs", "push_service", "call_service", "coturn", "livekit", "abtest_service", "moments_service", "redis"} {
+			for _, name := range []string{"df", "auth_service", "friend_service", "storage_service", "rustfs", "push_service", "call_service", "coturn", "livekit", "abtest_service", "moments_service", "chatbot_service", "redis"} {
 				if _, ok := model.Services[name]; !ok {
 					t.Fatalf("product capability lost: %s", name)
 				}
@@ -206,7 +206,7 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 			if mode == "cluster" {
 				broker, factor, topology = "kafka1:9092,kafka2:9094", "2", "cluster"
 			}
-			for _, name := range []string{"df", "df2", "friend_service", "storage_service", "call_service", "push_service", "kafka-init"} {
+			for _, name := range []string{"df", "df2", "friend_service", "storage_service", "call_service", "push_service", "chatbot_service", "kafka-init"} {
 				if s, ok := model.Services[name]; ok && s.Environment["KAFKA_BROKER"] != broker {
 					t.Fatalf("%s has wrong broker", name)
 				}
@@ -215,7 +215,7 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 			if init.Environment["DLQ_REPLICATION_FACTOR"] != factor || init.Environment["DLQ_MIN_ISR"] != "1" || init.Environment["DLQ_PARTITIONS"] != "3" {
 				t.Fatal("invalid DLQ replication/ISR/partition settings")
 			}
-			for _, prefix := range []string{"DF", "STORAGE", "FRIEND", "CALL", "PUSH"} {
+			for _, prefix := range []string{"DF", "STORAGE", "FRIEND", "CALL", "PUSH", "CHATBOT"} {
 				if init.Environment[prefix+"_DLQ_RETENTION_MS"] != "604800000" {
 					t.Fatal("DLQ replay retention was reduced")
 				}

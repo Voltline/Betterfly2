@@ -28,7 +28,7 @@ sequenceDiagram
 
 | 项 | 默认值 | 说明 |
 | --- | --- | --- |
-| 用户 ID | `900000000000000002` | `CHATBOT_USER_ID`，DF 与 ChatbotService 必须一致 |
+| 用户 ID | `900000000000000002` | `CHATBOT_USER_ID`，DF 与 ChatbotService 必须一致；客户端把它当常量，各环境都不要改 |
 | 账号 | `betterfly_assistant` | `CHATBOT_ACCOUNT`，可被搜索 |
 | 昵称 | `Betterfly 助手` | `CHATBOT_NAME`，也是群里 @ 的名字 |
 | 头像 | 空 | `CHATBOT_AVATAR` |

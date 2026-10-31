@@ -30,8 +30,9 @@ AIChatService 启动时确保账号存在（显式 ID 插入、不推进 `users_
    - 总长度不超过 `AICHAT_CONTEXT_CHARS`（默认 6000 字），撤回的消息不进上下文，视频、文件等用“[视频]”这类占位符表示；
    - system 提示里带当前时间和群名。
 4. 图片：上下文里最新的 `AICHAT_CONTEXT_IMAGES`（默认 3）张用户图片（含触发消息本身）从 RustFS 读取，转成 `data:` URL 作为 OpenAI 兼容的 `image_url` 内容发给模型，其余图片用“[图片]”表示。
-   - JPEG、PNG 在 `AICHAT_IMAGE_MAX_SIDE`（默认 1568）像素和 4MB 以内原样发送；更大的图片和 GIF（取第一帧）、WebP 缩放后转为 JPEG；透明背景铺白。
-   - 原图超过 `AICHAT_IMAGE_MAX_MB`（默认 20MB）或 4000 万像素时不读取。HEIC 暂不支持。
+   - JPEG、PNG 在 `AICHAT_IMAGE_MAX_SIDE`（默认 1568）像素和 4MB 以内原样发送；更大的图片和 GIF（取第一帧）、WebP、HEIC 缩放后转为 JPEG；透明背景铺白。
+   - HEIC 由服务端解码（WASM 版 libheif，不依赖 cgo），客户端照常上传 iPhone 原图即可；带 EXIF 旋转方向的 JPEG 会先转正再编码。
+   - 原图超过 `AICHAT_IMAGE_MAX_MB`（默认 20MB）或 4000 万像素时不读取。
    - 有图片时使用 `AICHAT_VISION_MODEL`（为空时用 `AICHAT_MODEL`）。模型以 400/413/415/422 拒绝图片时，去掉图片重试一次。
 5. 调用 `POST {AICHAT_API_BASE_URL}/chat/completions`，不使用流式输出；429、5xx 和网络错误按退避重试，遵守 `Retry-After`。
 6. 去掉 `<think>` 段和控制字符，按段落、换行、句末拆成不超过 700 字的若干条，最多 `AICHAT_MAX_REPLY_PARTS`（默认 4）条。群里第一条回复引用被 @ 的消息。`client_message_id` 为 `chatbot:<触发消息ID>:<序号>`，重试不会重复。
@@ -42,7 +43,7 @@ AIChatService 启动时确保账号存在（显式 ID 插入、不推进 `users_
 | --- | --- |
 | 未配置模型地址或模型名 | “AI 助手还没有配置模型，暂时无法回答。” |
 | 发来视频、文件等 | “我目前只能理解文字和图片消息。”（未开启识图时为“只能理解文字消息”） |
-| 只发了一张读不了的图片 | “这张图片我暂时看不了，目前支持 JPEG、PNG、GIF 和 WebP。” |
+| 只发了一张读不了的图片 | “这张图片我暂时看不了，目前支持 JPEG、PNG、GIF、WebP 和 HEIC。” |
 | 模型重试后仍失败 | “抱歉，我暂时无法回答，请稍后再试。” |
 | 模型返回空内容 | “我没有想好怎么回答，换个问法试试？” |
 
@@ -77,6 +78,7 @@ AIChatService 启动时确保账号存在（显式 ID 插入、不推进 `users_
 - 指标：`betterfly_aichat_triggers_total{result}`、`betterfly_aichat_llm_seconds{result}`、`betterfly_aichat_images_total{result}`（`ok`、`unsupported`、`too_large`、`missing`、`invalid`、`error`、`rejected`）。
 - 日志不记录消息正文、图片与模型响应正文，模型接口错误只记录状态码。
 - 图片按 base64 发送，单次请求可能有数 MB；按模型服务商的请求体上限调整 `AICHAT_CONTEXT_IMAGES` 和 `AICHAT_IMAGE_MAX_SIDE`。
+- 首次解码 HEIC 时会编译 WASM 模块，稍慢一些，之后复用。
 - 同一分区内的触发串行处理，需要更高并发时增加 `aichat-service` 分区数。
 
 ## 客户端接入建议
@@ -87,4 +89,3 @@ AIChatService 启动时确保账号存在（显式 ID 插入、不推进 `users_
 2. 身份：显示“AI”徽标，隐藏通话按钮。
 3. 群里 @：成员选择器列出机器人，选择后插入“@Betterfly 助手 ”。
 4. 等待提示：发给机器人后显示“正在思考…”，收到下一条机器人消息或约 60 秒后消失。
-5. 图片：iOS 拍照默认是 HEIC，上传前转成 JPEG 能让助手看懂。

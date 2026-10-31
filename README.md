@@ -94,7 +94,7 @@ flowchart LR
 
 ### 前置条件
 
-- Go 1.24 toolchain。个别基础模块声明了更低版本，但当前服务模块统一使用 Go 1.24。
+- Go 1.24 toolchain。个别基础模块声明了更低版本；AIChat Service 的 HEIC 解码库需要 Go 1.25，本地 Go 1.24 会按 `GOTOOLCHAIN=auto` 自动下载，镜像使用 `golang:1.25`。
 - Docker 与 Docker Compose v2。
 - 可用的 PostgreSQL 数据库。
 - 仅在修改 Protobuf 时需要 `protoc`、`protoc-gen-go` 和 `protoc-gen-go-grpc`。

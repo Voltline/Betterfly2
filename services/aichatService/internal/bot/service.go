@@ -28,7 +28,7 @@ const (
 	replyNotConfigured = "AI 助手还没有配置模型，暂时无法回答。"
 	replyTextOnly      = "我目前只能理解文字消息。"
 	replyTextAndImage  = "我目前只能理解文字和图片消息。"
-	replyImageFailed   = "这张图片我暂时看不了，目前支持 JPEG、PNG、GIF 和 WebP。"
+	replyImageFailed   = "这张图片我暂时看不了，目前支持 JPEG、PNG、GIF、WebP 和 HEIC。"
 	imageUnreadable    = "[图片：无法读取]"
 	replyFailed        = "抱歉，我暂时无法回答，请稍后再试。"
 	replyEmpty         = "我没有想好怎么回答，换个问法试试？"

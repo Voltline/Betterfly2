@@ -10,7 +10,7 @@
 | `internal/config` | 环境变量与校验 |
 | `internal/bot` | 触发校验、限流、上下文与图片、回复拆分与入库请求 |
 | `internal/llm` | OpenAI 兼容客户端，支持图片内容，带重试与 `Retry-After` |
-| `internal/media` | 从 RustFS 读取图片，缩放转码为 `data:` URL |
+| `internal/media` | 从 RustFS 读取图片（含 HEIC），按 EXIF 方向转正，缩放转码为 `data:` URL |
 | `internal/consumer` | Kafka 消费，解析失败进死信 |
 | `internal/publisher` | 按会话 key 发布到 Kafka |
 

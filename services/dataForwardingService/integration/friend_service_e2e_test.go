@@ -18,8 +18,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// 直连两个DF实例的本机端口，保证两位用户落在不同Pod；54342是网关，会在实例间负载均衡
 const (
-	defaultDFPort1 = "54342"
+	defaultDFPort1 = "54341"
 	defaultDFPort2 = "54343"
 	e2eTimeout     = 12 * time.Second
 )

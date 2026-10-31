@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,15 +71,19 @@ func client(endpoint string) (*s3.Client, error) {
 	config := aws.Config{Region: env("RUSTFS_REGION", "cn-east-1"), Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(access, secret, "")), HTTPClient: &http.Client{Timeout: 25 * time.Second, Transport: transport}}
 	return s3.NewFromConfig(config, func(o *s3.Options) { o.UsePathStyle = true; o.BaseEndpoint = aws.String(endpoint) }), nil
 }
-func New(ctx context.Context, origin string) (*S3, error) {
+func New(ctx context.Context, origins ...string) (*S3, error) {
 	c, err := client(env("RUSTFS_ENDPOINT_URL", "http://localhost:9000"))
 	if err != nil {
 		return nil, err
 	}
 	store := &S3{client: c, bucket: env("MOMENTS_BUCKET", "betterfly-moments")}
 	publicEndpoint := os.Getenv("RUSTFS_EXTERNAL_ENDPOINT_URL")
-	if strings.HasPrefix(origin, "https://") && !strings.HasPrefix(publicEndpoint, "https://") {
-		return nil, fmt.Errorf("HTTPS Moments requires an HTTPS RUSTFS_EXTERNAL_ENDPOINT_URL")
+	// HTTPS页面里的图片地址也必须是HTTPS；经网关时预签名地址取自网关，本身就是HTTPS
+	viaGateway, _ := strconv.ParseBool(os.Getenv("RUSTFS_PUBLIC_VIA_GATEWAY"))
+	for _, origin := range origins {
+		if strings.HasPrefix(origin, "https://") && !strings.HasPrefix(publicEndpoint, "https://") && (publicEndpoint != "" || !viaGateway) {
+			return nil, fmt.Errorf("HTTPS Moments requires an HTTPS RUSTFS_EXTERNAL_ENDPOINT_URL or RUSTFS_PUBLIC_VIA_GATEWAY")
+		}
 	}
 	if publicEndpoint != "" {
 		public, err := client(publicEndpoint)
@@ -118,7 +123,7 @@ func New(ctx context.Context, origin string) (*S3, error) {
 			return nil, fmt.Errorf("Moments bucket must not have group ACL grants")
 		}
 	}
-	_, err = c.PutBucketCors(ctx, &s3.PutBucketCorsInput{Bucket: &store.bucket, CORSConfiguration: &types.CORSConfiguration{CORSRules: []types.CORSRule{{AllowedOrigins: []string{origin}, AllowedMethods: []string{"PUT", "GET", "HEAD"}, AllowedHeaders: []string{"content-type", "content-length", "x-amz-*"}, ExposeHeaders: []string{"ETag"}, MaxAgeSeconds: aws.Int32(600)}}}})
+	_, err = c.PutBucketCors(ctx, &s3.PutBucketCorsInput{Bucket: &store.bucket, CORSConfiguration: &types.CORSConfiguration{CORSRules: []types.CORSRule{{AllowedOrigins: origins, AllowedMethods: []string{"PUT", "GET", "HEAD"}, AllowedHeaders: []string{"content-type", "content-length", "x-amz-*"}, ExposeHeaders: []string{"ETag"}, MaxAgeSeconds: aws.Int32(600)}}}})
 	if err != nil {
 		return nil, fmt.Errorf("configure private bucket CORS: %w", err)
 	}

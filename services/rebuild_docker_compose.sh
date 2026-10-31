@@ -70,10 +70,10 @@ EOF
 list_targets() {
   cat <<'EOF'
 Compose services:
-  redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service moments_service chatbot_service aichat_service call_service push_service coturn livekit
+  gateway portal redis kafka1 kafka2 kafka-ui df df2 auth_service rustfs storage_service prometheus grafana friend_service abtest_service moments_service chatbot_service aichat_service call_service push_service coturn livekit
 
 Useful aliases:
-  dataforwarding df-all auth storage friend abtest moments chatbot aichat call push turn sfu
+  dataforwarding df-all gw auth storage friend abtest moments chatbot aichat call push turn sfu
 EOF
 }
 
@@ -103,6 +103,10 @@ add_target() {
       add_service "df"
       add_service "df2"
       add_profile redundancy
+      ;;
+    gw)
+      add_service "gateway"
+      add_service "portal"
       ;;
     auth)
       add_service "auth_service"
@@ -147,7 +151,7 @@ add_target() {
       add_service "push_service"
       add_profile notifications
       ;;
-    redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|moments_service|chatbot_service|aichat_service|call_service|push_service|coturn|livekit)
+    gateway|portal|redis|kafka1|kafka2|kafka-ui|df|df2|auth_service|rustfs|storage_service|prometheus|grafana|friend_service|abtest_service|moments_service|chatbot_service|aichat_service|call_service|push_service|coturn|livekit)
       add_service "$1"
       ;;
     *)

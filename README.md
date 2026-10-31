@@ -32,10 +32,13 @@ Betterfly2 是 [Betterfly](https://github.com/Voltline/Betterfly) 的 Go 微服�
 
 ```mermaid
 flowchart LR
-    Client["iOS client"] -->|"WSS + Protobuf"| DF["DataForwarding Service"]
-    Client -->|"HTTP"| Storage["Storage Service"]
-    Client -->|"HTTP"| AB["ABTest Service"]
-    Client -->|"HTTP / Web"| Moments["Moments Service"]
+    Client["iOS client / 浏览器"] -->|"HTTPS / WSS :54342"| GW["Gateway (Traefik)"]
+    GW -->|"/ws + Protobuf，负载均衡"| DF["DataForwarding Service"]
+    GW -->|"/storage_service/"| Storage["Storage Service"]
+    GW -->|"/abtest/"| AB["ABTest Service"]
+    GW -->|"/moments"| Moments["Moments Service"]
+    GW -->|"/bot/v1/"| Chatbot
+    GW -->|"预签名 URL"| RustFS
     Moments --> Auth
     Moments --> PG
     Moments --> RustFS
@@ -69,7 +72,7 @@ flowchart LR
     Client <-->|"TURN relay"| Coturn["Coturn"]
 ```
 
-客户端业务请求首先进入 DataForwarding Service。认证走 Auth gRPC；异步业务封装为 Protobuf Envelope 后进入固定 Kafka topic，由任一对应 Service Pod 消费，再根据请求中的 DataForwarding Pod topic 返回响应。客户端之间的实时消息最终仍由目标用户在 Redis 中登记的 Pod 路由送达。
+所有对外 HTTP、WebSocket 和后台页面都经[统一网关](docs/GATEWAY.md)的 `54342` 端口进入，按路径分发到各服务，根路径是导航页；后台路由只对内网来源开放。客户端业务请求经网关进入 DataForwarding Service。认证走 Auth gRPC；异步业务封装为 Protobuf Envelope 后进入固定 Kafka topic，由任一对应 Service Pod 消费，再根据请求中的 DataForwarding Pod topic 返回响应。客户端之间的实时消息最终仍由目标用户在 Redis 中登记的 Pod 路由送达。
 
 文件上传和下载是例外：Storage Service 只签发 URL、维护元数据并校验哈希，文件内容由客户端直接与 RustFS 传输。WebRTC 媒体也不经过 Call Service，Call Service 只维护信令和通话状态。
 
@@ -77,18 +80,19 @@ flowchart LR
 
 | 服务 | 客户端或内部入口 | 作用 |
 | --- | --- | --- |
-| DataForwarding Service | `wss://host:54342/ws` | WebSocket 会话、协议分发和跨 Pod 路由；`redundancy` profile 增加 `54343` 实例 |
+| Gateway | `https://host:54342` | 统一入口（Traefik），按路径分发、`/ws` 负载均衡、后台来源限制；根路径为导航页 |
+| DataForwarding Service | `wss://host:54342/ws`（经网关） | WebSocket 会话、协议分发和跨 Pod 路由；`distributed` profile 增加 df2，自动加入负载均衡 |
 | Auth Service | 内网 gRPC `50051` | 注册、登录、JWT 校验和登出失效 |
-| Storage Service | Kafka `storage-service`；HTTP `8081` | 消息与资料持久化、同步查询、文件控制面 |
+| Storage Service | Kafka `storage-service`；`/storage_service/`（旧端口 `8081`） | 消息与资料持久化、同步查询、文件控制面 |
 | Friend Service | Kafka `friend-service`；HTTP `54401` | 好友关系、群组和群成员维护；HTTP 仅提供内网探针 |
-| ABTest Service | HTTP `8082` | 实验配置获取、服务端求值和管理后台 |
-| Moments Service | HTTP `8087` | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
+| ABTest Service | `/abtest/`（旧端口 `8082`） | 实验配置获取、服务端求值和管理后台 |
+| Moments Service | `/moments`（旧端口 `8087`） | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
 | Call Service | Kafka `call-service`；HTTP `8085` | 一对一及可选群会议控制面、探针与签名 SFU 回调 |
 | Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
-| Chatbot Service | Kafka `chatbot-service`；HTTP `8088` | 机器人平台：分发消息与关系事件，Bot API、webhook 与管理页面 |
+| Chatbot Service | Kafka `chatbot-service`；`/bot/v1/`、`/chatbot/admin/`（旧端口 `8088`） | 机器人平台：分发消息与关系事件，Bot API、webhook 与管理页面 |
 | AIChat Service | Kafka `aichat-service`；内网 HTTP `8089` | AI 助手账号，读取文字与图片调用模型，以机器人身份回复 |
 
-主要基础设施端口：Redis `6379`、Kafka `9092/9094`、RustFS S3 `9000`、RustFS Console `9001`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Kafka UI `8080`、Prometheus `9090` 和 Grafana `3000` 只在相应可选 profile 中启动。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
+对外端口只有网关 `54342`，以及现有客户端仍在直连的旧端口 `8081`、`8082`、`8087`、`8088`、RustFS S3 `9000`，和不经网关的 LiveKit `7880-7882`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Redis、Kafka、Auth、Friend、Call、Push、RustFS Console 等内部端口只绑定本机（`INTERNAL_BIND_ADDR`）。Kafka UI、Prometheus 和 Grafana 只在相应可选 profile 中启动，经网关的 `/kafka-ui`、`/prometheus`、`/grafana` 访问。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
 
 ## 快速开始
 
@@ -148,7 +152,7 @@ Betterfly2/
 ├── common/                    # Kafka/Redis 辅助配置与 WebSocket 证书脚本
 ├── deploy/k8s/                # 单集群验证用 Kubernetes manifests
 ├── proto/                     # DataForwarding、Storage、Friend、Call、Push 协议
-├── services/                  # 九个业务服务、Compose 与部署脚本
+├── services/                  # 十个业务服务、网关（gateway/）、Compose 与部署脚本
 ├── shared/                    # 数据库、日志、指标、MQ 和通用分发器
 ├── tool/                      # Protobuf 编译工具
 └── docs/                     # 接口、功能契约、开发与回归测试文档
@@ -158,6 +162,7 @@ Betterfly2/
 
 | 文档 | 内容 |
 | --- | --- |
+| [统一网关](docs/GATEWAY.md) | 路由表、端口、后台来源限制、预签名 URL 与证书 |
 | [API 文档](docs/API_DOCUMENTATION.md) | Storage、ABTest、Call、Push 的对外与内部协议 |
 | [接口新增指南](docs/INTERFACE_DEVELOPMENT.md) | DataForwarding、Storage、Friend 模块自注册流程 |
 | [回归测试](docs/REGRESSION_TESTING.md) | Docker Compose 跨 Pod 端到端测试 |

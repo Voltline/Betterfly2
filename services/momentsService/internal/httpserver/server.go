@@ -27,25 +27,28 @@ import (
 const base = "/moments/api/v1"
 
 type Server struct {
-	service     *moments.Service
-	auth        Auth
-	origin      string
-	secure      bool
+	service *moments.Service
+	auth    Auth
+	// 网页版允许的来源，直连端口与网关可以同时配置
+	origins     []string
 	logins      loginLimiter
 	verifySlots chan struct{}
 	// 只信任来自这些地址（ingress）的X-Forwarded-For/X-Real-IP。
 	trustedProxies []netip.Prefix
 	// 没有配置RUSTFS_EXTERNAL_ENDPOINT_URL时，预签名URL用的对象存储地址；主机为空表示取请求的主机名。
 	objectScheme, objectHost, objectPort string
+	// 经网关来的请求，预签名URL改用网关地址，由网关按桶路径转给RustFS
+	objectViaGateway bool
 }
 
-func New(service *moments.Service, auth Auth, origin string) *Server {
+func New(service *moments.Service, auth Auth, origins ...string) *Server {
 	proxies := os.Getenv("MOMENTS_TRUSTED_PROXY_CIDRS")
 	if proxies == "" {
 		proxies = sharedutils.DefaultTrustedProxyCIDRs
 	}
-	return &Server{service: service, auth: auth, origin: origin, secure: strings.HasPrefix(origin, "https://"), verifySlots: make(chan struct{}, 2), trustedProxies: sharedutils.ParseTrustedProxies(proxies),
-		objectScheme: envOr("RUSTFS_EXTERNAL_SCHEME", "http"), objectHost: strings.TrimSpace(os.Getenv("RUSTFS_EXTERNAL_HOST")), objectPort: envOr("RUSTFS_EXTERNAL_PORT", "9000")}
+	viaGateway, _ := strconv.ParseBool(os.Getenv("RUSTFS_PUBLIC_VIA_GATEWAY"))
+	return &Server{service: service, auth: auth, origins: origins, verifySlots: make(chan struct{}, 2), trustedProxies: sharedutils.ParseTrustedProxies(proxies),
+		objectScheme: envOr("RUSTFS_EXTERNAL_SCHEME", "http"), objectHost: strings.TrimSpace(os.Getenv("RUSTFS_EXTERNAL_HOST")), objectPort: envOr("RUSTFS_EXTERNAL_PORT", "9000"), objectViaGateway: viaGateway}
 }
 func envOr(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
@@ -57,6 +60,11 @@ func envOr(key, fallback string) string {
 // objectEndpoint 与storage一致：客户端访问Moments用的主机名加对象存储端口。
 // 主机名来自请求且只会出现在给该请求者的URL里，只接受主机名或IP字面量的字符。
 func (s *Server) objectEndpoint(r *http.Request) string {
+	if s.objectViaGateway {
+		if origin := sharedutils.GatewayOrigin(r); origin != "" {
+			return origin
+		}
+	}
 	host := s.objectHost
 	if host == "" {
 		host = r.Host

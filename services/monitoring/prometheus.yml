@@ -42,6 +42,12 @@ scrape_configs:
         labels:
           service: 'abtest'
 
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:8080']
+        labels:
+          service: 'gateway'
+
   - job_name: 'prometheus'
     static_configs:
       - targets: ['localhost:9090']

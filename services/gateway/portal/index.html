@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Betterfly2 网关</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #677085; --line: #e3e6ec;
+    --accent: #2f6fde; --ok: #1f8a4c; --off: #a0a6b3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171d; --card: #1c2028; --text: #e6e9ef; --muted: #9aa3b5; --line: #2b313c;
+      --accent: #6fa0ff; --ok: #4cc27f; --off: #5d6575; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px 48px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 28px; }
+  h2 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 28px 0 10px; letter-spacing: .02em; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .card { display: block; background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; color: inherit; text-decoration: none; }
+  a.card:hover { border-color: var(--accent); }
+  .title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--off); }
+  .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--accent);
+    word-break: break-all; }
+  .desc { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .note { color: var(--muted); font-size: 13px; margin-top: 28px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Betterfly2 网关</h1>
+  <p class="lead">所有站点与接口统一从这个地址进入，按路径分发到各个服务。</p>
+
+  <h2>客户端与开放接口</h2>
+  <div class="grid">
+    <div class="card" data-router="ws"><div class="title"><span class="dot"></span>消息长连接</div>
+      <div class="path" data-url="wss" data-suffix="/ws"></div>
+      <div class="desc">WebSocket + Protobuf，负载均衡到所有 DataForwarding 实例</div></div>
+    <div class="card" data-router="storage"><div class="title"><span class="dot"></span>文件服务</div>
+      <div class="path">/storage_service/</div>
+      <div class="desc">上传、校验与下载签名；文件内容经网关直达对象存储</div></div>
+    <div class="card" data-router="abtest"><div class="title"><span class="dot"></span>实验配置</div>
+      <div class="path">/abtest/v1/</div>
+      <div class="desc">客户端实验配置与服务端求值</div></div>
+    <a class="card" href="/moments/" data-router="moments"><div class="title"><span class="dot"></span>好友动态</div>
+      <div class="path">/moments/</div>
+      <div class="desc">网页版动态与原生客户端共用的 API</div></a>
+    <div class="card" data-router="bot-api"><div class="title"><span class="dot"></span>Bot API</div>
+      <div class="path">/bot/v1/</div>
+      <div class="desc">第三方机器人长轮询、发消息与文件</div></div>
+    <div class="card" data-router="livekit"><div class="title"><span class="dot"></span>群通话信令</div>
+      <div class="path" data-url="wss" data-suffix="/rtc"></div>
+      <div class="desc">LiveKit 信令；媒体仍走 7881/7882 与 Coturn</div></div>
+  </div>
+
+  <h2>管理后台</h2>
+  <div class="grid">
+    <a class="card" href="/push/admin/" data-router="push-admin"><div class="title"><span class="dot"></span>推送后台</div>
+      <div class="path">/push/admin/</div><div class="desc">APNs 设备、审计与调试发送</div></a>
+    <a class="card" href="/abtest/admin/" data-router="abtest-admin"><div class="title"><span class="dot"></span>实验后台</div>
+      <div class="path">/abtest/admin/</div><div class="desc">实验配置、推全与撤回</div></a>
+    <a class="card" href="/chatbot/admin/" data-router="chatbot-admin"><div class="title"><span class="dot"></span>机器人管理</div>
+      <div class="path">/chatbot/admin/</div><div class="desc">创建机器人、重置令牌、开关群聊</div></a>
+  </div>
+
+  <h2>运维工具</h2>
+  <div class="grid">
+    <a class="card" href="/dashboard/" data-router="gateway-dashboard"><div class="title"><span class="dot"></span>网关控制台</div>
+      <div class="path">/dashboard/</div><div class="desc">Traefik 路由、服务与实例状态</div></a>
+    <a class="card" href="/grafana/" data-router="grafana"><div class="title"><span class="dot"></span>Grafana</div>
+      <div class="path">/grafana/</div><div class="desc">监控面板（observability）</div></a>
+    <a class="card" href="/prometheus/" data-router="prometheus"><div class="title"><span class="dot"></span>Prometheus</div>
+      <div class="path">/prometheus/</div><div class="desc">指标查询与告警规则（observability）</div></a>
+    <a class="card" href="/kafka-ui/" data-router="kafka-ui"><div class="title"><span class="dot"></span>Kafka UI</div>
+      <div class="path">/kafka-ui/</div><div class="desc">Topic、消费组与消息查看（tools）</div></a>
+  </div>
+
+  <p class="note">管理后台与运维工具只接受本机和内网来源，范围由 <code>GATEWAY_ADMIN_SOURCE_RANGE</code> 配置；
+    各后台自己的令牌或登录照常生效。绿点表示该路由当前已在网关上注册，灰点表示对应服务未启动。</p>
+</main>
+<script>
+  for (const node of document.querySelectorAll("[data-url=wss]")) {
+    node.textContent = "wss://" + location.host + node.dataset.suffix;
+  }
+  // 路由状态来自网关控制台接口，只有允许访问管理页面的来源能拿到；拿不到时不显示状态
+  fetch("/api/http/routers?per_page=200", { headers: { Accept: "application/json" } })
+    .then((response) => response.ok ? response.json() : Promise.reject())
+    .then((routers) => {
+      const live = new Set(routers.filter((r) => r.status === "enabled").map((r) => r.name.split("@")[0]));
+      for (const card of document.querySelectorAll("[data-router]")) {
+        card.querySelector(".dot").classList.add(live.has(card.dataset.router) ? "on" : "off");
+      }
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>

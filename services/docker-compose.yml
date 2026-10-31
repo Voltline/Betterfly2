@@ -19,7 +19,70 @@ x-container-defaults: &container-defaults
       max-size: "10m"
       max-file: "3"
 
+# 对外只有网关的${GATEWAY_PORT:-54342}一个统一入口，按路径分发到各服务，路由写在各服务的labels里。
+# 8081、8082、8087、8088、9000是现有客户端与机器人仍在直连的旧端口，照常对外映射；
+# 其余内部端口只绑定${INTERNAL_BIND_ADDR:-127.0.0.1}，供本机调试与测试使用。
 services:
+  gateway:
+    <<: *container-defaults
+    image: traefik:v3.7.15
+    container_name: gateway
+    restart: unless-stopped
+    command:
+      - --entrypoints.websecure.address=:54342
+      - --entrypoints.websecure.asDefault=true
+      - --entrypoints.websecure.http.tls=true
+      # WebSocket长连接、Bot API长轮询和对象存储的大文件上传都不能被网关按时长截断
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0s
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0s
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=180s
+      - --providers.docker=true
+      - --providers.docker.exposedByDefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --api.dashboard=true
+      - --ping=true
+      - --metrics.prometheus=true
+      - --log.level=${GATEWAY_LOG_LEVEL:-INFO}
+      - --global.checkNewVersion=false
+      - --global.sendAnonymousUsage=false
+    environment:
+      GATEWAY_ADMIN_SOURCE_RANGE: ${GATEWAY_ADMIN_SOURCE_RANGE:-127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+    ports:
+      - "${GATEWAY_PORT:-54342}:54342"
+    volumes:
+      # 只读取容器标签来发现路由；df2等可选实例启动后自动加入负载均衡
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./gateway/dynamic:/etc/traefik/dynamic:ro
+      # 默认与DF共用自签名证书，客户端的证书信任方式不变；有正式证书时把目录指向cert.pem/key.pem
+      - ${GATEWAY_CERT_DIR:-./dataForwardingService/certs}:/certs:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+
+  portal:
+    <<: *container-defaults
+    build:
+      context: ./gateway/portal
+    container_name: portal
+    restart: unless-stopped
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.portal.rule: "Path(`/`) || Path(`/index.html`)"
+      traefik.http.services.portal.loadbalancer.server.port: "8080"
+    healthcheck:
+      test: ["CMD", "/portal", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+
+
   db_migrate:
     <<: *container-defaults
     build:
@@ -41,7 +104,7 @@ services:
     image: redis:7
     container_name: redis
     ports:
-      - "6379:6379"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:6379:6379"
     command: redis-server --appendonly no --save ""
     networks:
       - backend
@@ -70,7 +133,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
     ports:
-      - "9092:9092"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:9092:9092"
     volumes:
       - kafka-single-data:/var/lib/kafka/data
     networks:
@@ -158,11 +221,17 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     ports:
-      - "8080:8080"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:8080:8080"
     environment:
       DYNAMIC_CONFIG_ENABLED: "TRUE"
+      SERVER_SERVLET_CONTEXT_PATH: /kafka-ui
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka1:9092
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.kafka-ui.rule: "PathPrefix(`/kafka-ui`)"
+      traefik.http.routers.kafka-ui.middlewares: admin-only@file
+      traefik.http.services.kafka-ui.loadbalancer.server.port: "8080"
     depends_on:
       - kafka1
     networks:
@@ -218,8 +287,16 @@ services:
       DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    # 客户端经网关的54342连接；这里是该实例的本机直连端口，供跨Pod测试指定实例
     ports:
-      - "54342:54342"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:${DF_DIRECT_PORT:-54341}:54342"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.ws.rule: "Path(`/ws`)"
+      traefik.http.routers.ws.service: ws
+      traefik.http.services.ws.loadbalancer.server.port: "54342"
+      traefik.http.services.ws.loadbalancer.server.scheme: https
+      traefik.http.services.ws.loadbalancer.serverstransport: betterfly-internal-tls@file
     networks:
       - backend
 
@@ -274,7 +351,14 @@ services:
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "54343:54343"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:54343:54343"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.ws.rule: "Path(`/ws`)"
+      traefik.http.routers.ws.service: ws
+      traefik.http.services.ws.loadbalancer.server.port: "54343"
+      traefik.http.services.ws.loadbalancer.server.scheme: https
+      traefik.http.services.ws.loadbalancer.serverstransport: betterfly-internal-tls@file
     networks:
       - backend
 
@@ -297,7 +381,7 @@ services:
       redis:
         condition: service_started
     ports:
-      - "50051:50051"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:50051:50051"
     networks:
       - backend
 
@@ -308,7 +392,7 @@ services:
     container_name: rustfs
     ports:
       - "9000:9000"  # S3 API端口
-      - "9001:9001"  # 控制台端口
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:9001:9001"  # 控制台端口，不支持挂在子路径下，只供本机访问
     volumes:
       - rustfs-data:/data
     environment:
@@ -324,6 +408,10 @@ services:
       - --secret-key
       - ${RUSTFS_SECRET_KEY:-rustfsadmin}
       - /data
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.rustfs-objects.rule: "PathPrefix(`/${RUSTFS_BUCKET:-betterfly-files}/`) || PathPrefix(`/${MOMENTS_BUCKET:-betterfly-moments}/`)"
+      traefik.http.services.rustfs-objects.loadbalancer.server.port: "9000"
     networks:
       - backend
     healthcheck:
@@ -371,11 +459,17 @@ services:
       RUSTFS_ENDPOINT_URL: http://rustfs:9000
       RUSTFS_EXTERNAL_ENDPOINT_URL: ${RUSTFS_EXTERNAL_ENDPOINT_URL:-}
       RUSTFS_EXTERNAL_PORT: ${RUSTFS_EXTERNAL_PORT:-9000}
+      # 经网关来的请求，预签名URL也指向网关；直连8081的旧客户端仍拿到9000端口的地址
+      RUSTFS_PUBLIC_VIA_GATEWAY: ${RUSTFS_PUBLIC_VIA_GATEWAY:-true}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "${HTTP_PORT:-8081}:${HTTP_PORT:-8081}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.storage.rule: "PathPrefix(`/storage_service/`)"
+      traefik.http.services.storage.loadbalancer.server.port: "${HTTP_PORT:-8081}"
     networks:
       - backend
 
@@ -385,7 +479,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/rules:/etc/prometheus/rules:ro
@@ -396,6 +490,14 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
+      - '--web.external-url=/prometheus/'
+      - '--web.route-prefix=/'
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.prometheus.rule: "PathPrefix(`/prometheus`)"
+      traefik.http.routers.prometheus.middlewares: admin-only@file,prometheus-strip
+      traefik.http.middlewares.prometheus-strip.stripprefix.prefixes: /prometheus
+      traefik.http.services.prometheus.loadbalancer.server.port: "9090"
     networks:
       - backend
   grafana:
@@ -404,10 +506,17 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.grafana.rule: "PathPrefix(`/grafana`)"
+      traefik.http.routers.grafana.middlewares: admin-only@file
+      traefik.http.services.grafana.loadbalancer.server.port: "3000"
     volumes:
       - grafana-storage:/var/lib/grafana
     networks:
@@ -439,7 +548,7 @@ services:
       kafka-init:
         condition: service_completed_successfully
     ports:
-      - "54401:54401"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:54401:54401"
     networks:
       - backend
 
@@ -464,7 +573,8 @@ services:
       DB_MAX_IDLE_CONNS: ${MOMENTS_DB_MAX_IDLE_CONNS:-2}
       PORT: "8087"
       AUTH_RPC_ADDR: auth_service:50051
-      MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-http://localhost:8087}
+      # 网页版允许的来源，可用逗号写多个，例如 https://example.com:54342,http://example.com:8087
+      MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-http://localhost:8087,https://localhost:54342}
       MOMENTS_TRUSTED_PROXY_CIDRS: ${MOMENTS_TRUSTED_PROXY_CIDRS:-}
       MOMENTS_BUCKET: ${MOMENTS_BUCKET:-betterfly-moments}
       RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
@@ -473,11 +583,16 @@ services:
       RUSTFS_ENDPOINT_URL: http://rustfs:9000
       RUSTFS_EXTERNAL_ENDPOINT_URL: ${RUSTFS_EXTERNAL_ENDPOINT_URL:-}
       RUSTFS_EXTERNAL_PORT: ${RUSTFS_EXTERNAL_PORT:-9000}
+      RUSTFS_PUBLIC_VIA_GATEWAY: ${RUSTFS_PUBLIC_VIA_GATEWAY:-true}
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
       - "8087:8087"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.moments.rule: "PathPrefix(`/moments`)"
+      traefik.http.services.moments.loadbalancer.server.port: "8087"
     networks:
       - backend
 
@@ -504,6 +619,14 @@ services:
         condition: service_started
     ports:
       - "${ABTEST_HTTP_PORT:-8082}:${ABTEST_HTTP_PORT:-8082}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.abtest.rule: "PathPrefix(`/abtest/`)"
+      traefik.http.routers.abtest.service: abtest
+      traefik.http.routers.abtest-admin.rule: "PathPrefix(`/abtest/admin`)"
+      traefik.http.routers.abtest-admin.service: abtest
+      traefik.http.routers.abtest-admin.middlewares: admin-only@file
+      traefik.http.services.abtest.loadbalancer.server.port: "${ABTEST_HTTP_PORT:-8082}"
     networks:
       - backend
 
@@ -546,7 +669,7 @@ services:
       CALL_GROUP_MAX_PARTICIPANTS: ${CALL_GROUP_MAX_PARTICIPANTS:-16}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:${CALL_HTTP_PORT:-8085}:${CALL_HTTP_PORT:-8085}"
     depends_on:
       - redis
       - kafka-init
@@ -594,7 +717,12 @@ services:
       PUSH_ADMIN_TOKEN: ${PUSH_ADMIN_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
-      - "${PUSH_HTTP_PORT:-8086}:${PUSH_HTTP_PORT:-8086}"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:${PUSH_HTTP_PORT:-8086}:${PUSH_HTTP_PORT:-8086}"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.push-admin.rule: "PathPrefix(`/push/admin`)"
+      traefik.http.routers.push-admin.middlewares: admin-only@file
+      traefik.http.services.push.loadbalancer.server.port: "${PUSH_HTTP_PORT:-8086}"
     depends_on:
       db_migrate:
         condition: service_completed_successfully
@@ -639,9 +767,17 @@ services:
       RUSTFS_ENDPOINT_URL: http://rustfs:9000
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    # Bot API供第三方机器人调用
+    # Bot API供第三方机器人调用；经网关为 /bot/v1/，管理页面为 /chatbot/admin/
     ports:
       - "${CHATBOT_PUBLIC_PORT:-8088}:8088"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.bot-api.rule: "PathPrefix(`/bot/v1/`)"
+      traefik.http.routers.bot-api.service: chatbot
+      traefik.http.routers.chatbot-admin.rule: "PathPrefix(`/chatbot/admin`)"
+      traefik.http.routers.chatbot-admin.service: chatbot
+      traefik.http.routers.chatbot-admin.middlewares: admin-only@file
+      traefik.http.services.chatbot.loadbalancer.server.port: "8088"
     depends_on:
       db_migrate:
         condition: service_completed_successfully
@@ -733,6 +869,10 @@ services:
       - "7880:7880"
       - "7881:7881"
       - "7882:7882/udp"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.livekit.rule: "PathPrefix(`/rtc`)"
+      traefik.http.services.livekit.loadbalancer.server.port: "7880"
     depends_on:
       - redis
     networks:

@@ -317,3 +317,48 @@ func TestObjectEndpointFollowsRequestHost(t *testing.T) {
 		t.Fatalf("configured host/port ignored: %s", got)
 	}
 }
+func TestObjectEndpointUsesGatewayForForwardedRequests(t *testing.T) {
+	t.Setenv("RUSTFS_EXTERNAL_HOST", "")
+	t.Setenv("RUSTFS_EXTERNAL_PORT", "")
+	t.Setenv("RUSTFS_EXTERNAL_SCHEME", "")
+	t.Setenv("RUSTFS_PUBLIC_VIA_GATEWAY", "true")
+	s := New(nil, &fakeAuth{}, "http://bf.lan:8087", "https://bf.lan:54342")
+	forwarded := httptest.NewRequest("GET", "/", nil)
+	forwarded.Host = "bf.lan:54342"
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	if got := s.objectEndpoint(forwarded); got != "https://bf.lan:54342" {
+		t.Fatalf("gateway request -> %s", got)
+	}
+	direct := httptest.NewRequest("GET", "/", nil)
+	direct.Host = "bf.lan:8087"
+	if got := s.objectEndpoint(direct); got != "http://bf.lan:9000" {
+		t.Fatalf("direct request -> %s", got)
+	}
+}
+func TestSessionAcceptsEachConfiguredOriginWithMatchingCookieSecurity(t *testing.T) {
+	origins, err := Origins(" http://bf.lan:8087 , https://bf.lan:54342,http://bf.lan:8087")
+	if err != nil || len(origins) != 2 {
+		t.Fatal(origins, err)
+	}
+	for _, bad := range []string{"", " , ", "http://bf.lan:8087,ftp://x"} {
+		if _, err := Origins(bad); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	a := &fakeAuth{}
+	handler := New(nil, a, origins...).Routes()
+	for origin, secure := range map[string]bool{"http://bf.lan:8087": false, "https://bf.lan:54342": true} {
+		w := req(handler, "POST", base+"/session", `{"account":"user","password":"secret"}`, map[string]string{"Origin": origin, "Content-Type": "application/json"}, nil)
+		if w.Code != 200 {
+			t.Fatal(origin, w.Code, w.Body.String())
+		}
+		for _, c := range w.Result().Cookies() {
+			if c.Secure != secure {
+				t.Fatalf("%s cookie %s secure=%v", origin, c.Name, c.Secure)
+			}
+		}
+	}
+	if w := req(handler, "POST", base+"/session", `{"account":"user","password":"secret"}`, map[string]string{"Origin": "https://bf.lan:8087", "Content-Type": "application/json"}, nil); w.Code != 401 {
+		t.Fatal("unlisted origin accepted", w.Code)
+	}
+}

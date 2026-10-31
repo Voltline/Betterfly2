@@ -40,7 +40,7 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
     ports:
-      - "9094:9094"
+      - "${INTERNAL_BIND_ADDR:-127.0.0.1}:9094:9094"
     volumes:
       - kafka-cluster-2-data:/var/lib/kafka/data
     networks:

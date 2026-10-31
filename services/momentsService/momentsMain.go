@@ -33,12 +33,12 @@ func main() {
 	if os.Getenv("DB_MAX_IDLE_CONNS") == "" {
 		os.Setenv("DB_MAX_IDLE_CONNS", "2")
 	}
-	origin, err := httpserver.Origin(env("MOMENTS_PUBLIC_URL", "http://localhost:8087"))
+	origins, err := httpserver.Origins(env("MOMENTS_PUBLIC_URL", "http://localhost:8087"))
 	if err != nil {
 		logger.Sugar().Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	objects, err := media.New(ctx, origin)
+	objects, err := media.New(ctx, origins...)
 	cancel()
 	if err != nil {
 		logger.Sugar().Fatalw("Moments private storage unavailable", "error", err)
@@ -58,7 +58,7 @@ func main() {
 	if os.Getenv("METRICS_ENABLED") != "false" {
 		moments.RegisterMetrics(database)
 	}
-	server := &http.Server{Addr: ":" + env("PORT", "8087"), Handler: httpserver.New(service, httpserver.RPCAuth{Client: pb.NewAuthServiceClient(conn)}, origin).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := &http.Server{Addr: ":" + env("PORT", "8087"), Handler: httpserver.New(service, httpserver.RPCAuth{Client: pb.NewAuthServiceClient(conn)}, origins...).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 40 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	errorsCh := make(chan error, 1)
 	go func() {
 		logger.Sugar().Infow("MomentsService HTTP started", "address", server.Addr)

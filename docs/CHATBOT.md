@@ -70,7 +70,7 @@ DataForwarding 在消息入库并完成投递后通知平台：
 
 ## 管理
 
-设置 `CHATBOT_ADMIN_TOKEN`（至少 16 个字符）后开放管理页面 `http://<host>:8088/admin/` 和管理接口，请求头 `X-Admin-Token` 携带令牌。未设置时 `/admin` 一律返回 404。管理页面与 Bot API 共用端口，对外暴露时应在反向代理上限制 `/admin` 的来源。
+设置 `CHATBOT_ADMIN_TOKEN`（至少 16 个字符）后开放管理页面和管理接口，请求头 `X-Admin-Token` 携带令牌。未设置时一律返回 404。管理页面经[统一网关](GATEWAY.md)访问 `https://<host>:54342/chatbot/admin/`，网关只对内网来源开放；服务本身同时在 `/admin/` 和 `/chatbot/admin/` 下提供页面与接口（下表的 `/admin` 前缀可换成 `/chatbot/admin`），直连 `8088/admin/` 时没有来源限制，对外暴露 8088 时应自行限制。
 
 | 接口 | 说明 |
 | --- | --- |

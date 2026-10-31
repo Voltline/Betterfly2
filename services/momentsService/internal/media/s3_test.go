@@ -124,3 +124,17 @@ func TestUnconfiguredExternalEndpointSignsForRequestHost(t *testing.T) {
 		t.Fatal("HTTPS Moments started without an HTTPS object endpoint")
 	}
 }
+func TestHTTPSOriginNeedsHTTPSObjectsOrGateway(t *testing.T) {
+	t.Setenv("RUSTFS_PUBLIC_VIA_GATEWAY", "")
+	if _, err := s3FixtureFor(t, "", "", "https://bf.test:54342", ""); err == nil {
+		t.Fatal("HTTPS page accepted plain object URLs")
+	}
+	// 经网关时HTTPS页面拿到的预签名地址就是网关地址
+	t.Setenv("RUSTFS_PUBLIC_VIA_GATEWAY", "true")
+	if _, err := s3FixtureFor(t, "", "", "https://bf.test:54342", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3FixtureFor(t, "", "", "https://bf.test:54342", "http://objects.bf.test"); err == nil {
+		t.Fatal("explicit plain endpoint accepted for HTTPS page")
+	}
+}

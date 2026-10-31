@@ -4,6 +4,7 @@ Betterfly2 is a Go 1.24 microservice backend for an instant-messaging client. Tr
 
 ## Active services
 
+- `gateway` (`services/gateway`): Traefik single entry point on `:54342` that routes by path (`/ws`, `/storage_service/`, `/abtest/`, `/moments`, `/bot/v1/`, RustFS buckets, admin UIs) from Compose labels, load-balances DataForwarding pods and restricts admin routes to `GATEWAY_ADMIN_SOURCE_RANGE`; `portal` serves the navigation page at `/`. See [GATEWAY.md](GATEWAY.md).
 - `dataForwardingService`: TLS WebSocket gateway, authenticated dispatch and Kafka/Redis routing.
 - `authService`: synchronous gRPC registration, login and JWT lifecycle.
 - `storageService`: message/profile persistence, sync queries, cache and RustFS HTTP control plane.

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,16 +82,44 @@ func Origin(raw string) (string, error) {
 	}
 	return u.Scheme + "://" + host, nil
 }
-func (s *Server) sameOrigin(r *http.Request) bool {
+
+// Origins 解析逗号分隔的MOMENTS_PUBLIC_URL，例如同时允许直连8087和经网关的地址。
+func Origins(raw string) ([]string, error) {
+	var origins []string
+	for _, item := range strings.Split(raw, ",") {
+		if item = strings.TrimSpace(item); item == "" {
+			continue
+		}
+		origin, err := Origin(item)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(origins, origin) {
+			origins = append(origins, origin)
+		}
+	}
+	if len(origins) == 0 {
+		return nil, errors.New("MOMENTS_PUBLIC_URL must be an HTTP(S) origin")
+	}
+	return origins, nil
+}
+
+// sameOrigin 返回请求的Origin是否为允许的来源，以及它是不是HTTPS。
+func (s *Server) sameOrigin(r *http.Request) (ok, secure bool) {
 	value, err := Origin(r.Header.Get("Origin"))
-	return err == nil && value == s.origin
+	if err != nil || !slices.Contains(s.origins, value) {
+		return false, false
+	}
+	return true, strings.HasPrefix(value, "https://")
 }
-func (s *Server) cookie(w http.ResponseWriter, name, value string, age int) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/moments/", HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode, MaxAge: age})
+
+// cookie 的Secure跟随本次登录所用来源：经网关的HTTPS页面带Secure，直连的HTTP页面不带，否则浏览器不会回传。
+func (s *Server) cookie(w http.ResponseWriter, secure bool, name, value string, age int) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/moments/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode, MaxAge: age})
 }
-func (s *Server) clearCookies(w http.ResponseWriter) {
+func (s *Server) clearCookies(w http.ResponseWriter, secure bool) {
 	for _, name := range []string{"bf_moments_jwt", "bf_moments_user", "bf_moments_csrf"} {
-		s.cookie(w, name, "", -1)
+		s.cookie(w, secure, name, "", -1)
 	}
 }
 func csrfValue(r *http.Request) string {
@@ -134,7 +163,7 @@ func (s *Server) authenticate(r *http.Request) (int64, error) {
 		jwt = jwtCookie.Value
 		if r.Method != "GET" && r.Method != "HEAD" {
 			csrf := csrfValue(r)
-			if !s.sameOrigin(r) || len(csrf) != 48 || subtle.ConstantTimeCompare([]byte(csrf), []byte(r.Header.Get("X-CSRF-Token"))) != 1 {
+			if ok, _ := s.sameOrigin(r); !ok || len(csrf) != 48 || subtle.ConstantTimeCompare([]byte(csrf), []byte(r.Header.Get("X-CSRF-Token"))) != 1 {
 				return 0, errUnauthorized
 			}
 		}
@@ -145,7 +174,8 @@ func (s *Server) authenticate(r *http.Request) (int64, error) {
 	return s.auth.Check(r.Context(), user, jwt)
 }
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOrigin(r) {
+	allowed, secure := s.sameOrigin(r)
+	if !allowed {
 		s.fail(w, r, errUnauthorized)
 		return
 	}
@@ -155,7 +185,7 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, errUnauthorized)
 			return
 		}
-		s.clearCookies(w)
+		s.clearCookies(w, secure)
 		write(w, 200, map[string]bool{"success": true})
 		return
 	}
@@ -202,9 +232,9 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	csrf := hex.EncodeToString(data[:])
-	s.cookie(w, "bf_moments_jwt", jwt, 0)
-	s.cookie(w, "bf_moments_user", strconv.FormatInt(user, 10), 0)
-	s.cookie(w, "bf_moments_csrf", csrf, 0)
+	s.cookie(w, secure, "bf_moments_jwt", jwt, 0)
+	s.cookie(w, secure, "bf_moments_user", strconv.FormatInt(user, 10), 0)
+	s.cookie(w, secure, "bf_moments_csrf", csrf, 0)
 	write(w, 200, map[string]string{"user_id": strconv.FormatInt(user, 10), "csrf_token": csrf})
 }
 

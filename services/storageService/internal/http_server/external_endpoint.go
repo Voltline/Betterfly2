@@ -1,16 +1,24 @@
 package http_server
 
 import (
+	sharedutils "Betterfly2/shared/utils"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
 func resolveRustFSExternalEndpoint(r *http.Request) string {
 	if explicit := strings.TrimSpace(os.Getenv("RUSTFS_EXTERNAL_ENDPOINT_URL")); explicit != "" {
 		return explicit
+	}
+	// 经网关来的请求，对象存储也按同一地址访问（网关按桶路径转给RustFS）；直连8081的请求不受影响
+	if viaGateway, _ := strconv.ParseBool(os.Getenv("RUSTFS_PUBLIC_VIA_GATEWAY")); viaGateway {
+		if origin := sharedutils.GatewayOrigin(r); origin != "" {
+			return origin
+		}
 	}
 
 	scheme := strings.TrimSpace(os.Getenv("RUSTFS_EXTERNAL_SCHEME"))

@@ -18,8 +18,8 @@ cd services
 
 | 配置 | Compose 默认值 | 说明 |
 | --- | --- | --- |
-| RustFS S3 API | `9000` | 客户端使用预签名 URL 直传 |
-| RustFS Console | `9001` | 对象存储管理页面 |
+| RustFS S3 API | `9000` | 客户端使用预签名 URL 直传；经网关时走 `54342` 的桶名路径 |
+| RustFS Console | `9001` | 对象存储管理页面，只绑定本机 |
 | Storage HTTP | `8081` | 文件控制面；进程脱离 Compose 运行时默认 `8080` |
 | Access key | `rustfsadmin` | 仅适合本地开发 |
 | Secret key | `rustfsadmin` | 生产环境必须替换 |
@@ -44,7 +44,9 @@ Compose 内部固定通过 `http://rustfs:9000` 访问 RustFS，不应写成 `lo
 RUSTFS_EXTERNAL_ENDPOINT_URL=https://files.example.com
 ```
 
-未设置完整地址时，Storage Service 按以下方式推导：
+未设置完整地址、且 `RUSTFS_PUBLIC_VIA_GATEWAY=true`（Compose 默认）时，经[统一网关](../docs/GATEWAY.md)转发来的请求按网关地址签发，例如 `https://<host>:54342/betterfly-files/...`，网关按桶名路径转给 RustFS 并原样透传 `Host`，签名照样有效。
+
+其余情况（包括直连 `8081` 的请求），Storage Service 按以下方式推导：
 
 - 协议优先使用 `RUSTFS_EXTERNAL_SCHEME`，其次使用 `X-Forwarded-Proto` 或当前请求协议。
 - 主机优先使用 `RUSTFS_EXTERNAL_HOST`，其次使用当前 HTTP 请求的 host。

@@ -1,0 +1,33 @@
+# 网关的共用配置：证书、到DF的TLS连接、管理页面的来源限制、网关自身的控制台。
+# 各站点的路由写在docker-compose.yml对应服务的labels里，服务没有启动时路由也就不存在。
+# 本文件按Go模板渲染，可以读取网关容器的环境变量。
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/cert.pem
+        keyFile: /certs/key.pem
+
+http:
+  serversTransports:
+    # DF自己用自签名证书提供wss，证书没有SAN，只在compose内网里跳过校验
+    betterfly-internal-tls:
+      insecureSkipVerify: true
+
+  middlewares:
+    # 管理页面只允许这些来源访问，默认是本机与内网；各后台自己的令牌校验照旧
+    admin-only:
+      ipAllowList:
+        sourceRange:
+{{- range $cidr := splitList "," (env "GATEWAY_ADMIN_SOURCE_RANGE") }}
+{{- if trim $cidr }}
+          - "{{ trim $cidr }}"
+{{- end }}
+{{- end }}
+
+  routers:
+    gateway-dashboard:
+      rule: "PathPrefix(`/dashboard`) || PathPrefix(`/api`)"
+      service: api@internal
+      middlewares:
+        - admin-only

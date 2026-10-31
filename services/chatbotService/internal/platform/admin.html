@@ -117,17 +117,17 @@ function renderBot(bot) {
     element("button", { class: "secondary", onclick: async () => {
       const name = prompt("新名字", bot.name);
       if (name === null) return;
-      await run(() => api("PATCH", "/admin/api/bots/" + bot.id, { name }), "已更新名字");
+      await run(() => api("PATCH", "api/bots/" + bot.id, { name }), "已更新名字");
     } }, ["改名"]),
-    element("button", { class: "secondary", onclick: () => run(() => api("PATCH", "/admin/api/bots/" + bot.id, { allow_groups: !bot.allow_groups }), "已更新群聊设置") },
+    element("button", { class: "secondary", onclick: () => run(() => api("PATCH", "api/bots/" + bot.id, { allow_groups: !bot.allow_groups }), "已更新群聊设置") },
       [bot.allow_groups ? "禁止进群" : "允许进群"]),
-    element("button", { class: bot.disabled ? "secondary" : "danger", onclick: () => run(() => api("PATCH", "/admin/api/bots/" + bot.id, { disabled: !bot.disabled }), bot.disabled ? "已启用" : "已停用") },
+    element("button", { class: bot.disabled ? "secondary" : "danger", onclick: () => run(() => api("PATCH", "api/bots/" + bot.id, { disabled: !bot.disabled }), bot.disabled ? "已启用" : "已停用") },
       [bot.disabled ? "启用" : "停用"]),
   ];
   if (bot.delivery === "api") {
     actions.push(element("button", { class: "danger", onclick: async () => {
       if (!confirm("重置后旧令牌立即失效，确定吗？")) return;
-      try { const result = await api("POST", "/admin/api/bots/" + bot.id + "/token"); showToken(bot.account, result.token); } catch (error) { show(error.message, true); }
+      try { const result = await api("POST", "api/bots/" + bot.id + "/token"); showToken(bot.account, result.token); } catch (error) { show(error.message, true); }
     } }, ["重置令牌"]));
   }
   return element("div", { class: "bot" }, [
@@ -141,7 +141,7 @@ async function load() {
   try { sessionStorage.setItem("betterfly-admin-token", tokenInput.value); } catch (_) {}
   const container = document.getElementById("bots");
   try {
-    const bots = await api("GET", "/admin/api/bots");
+    const bots = await api("GET", "api/bots");
     container.replaceChildren(...(bots.length ? bots.map(renderBot) : [element("p", { class: "meta" }, ["还没有机器人。"])]));
   } catch (error) {
     show(error.message, true);
@@ -157,7 +157,7 @@ document.getElementById("refresh").addEventListener("click", load);
 document.getElementById("create-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    const result = await api("POST", "/admin/api/bots", {
+    const result = await api("POST", "api/bots", {
       account: document.getElementById("account").value.trim(),
       name: document.getElementById("name").value,
       avatar: document.getElementById("avatar").value.trim(),

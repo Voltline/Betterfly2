@@ -7,7 +7,7 @@ Post、Kafka、APNs 或 DataForwarding。支持文字、最多九张图片、好
 
 ## 部署
 
-入口 `http://localhost:8087/moments/`，API `/moments/api/v1`，探针 `/health`、`/ready`，
+入口 `https://<host>:54342/moments/`（经[统一网关](GATEWAY.md)）或直连 `http://localhost:8087/moments/`，API `/moments/api/v1`，探针 `/health`、`/ready`，
 指标 `/metrics`（遵循已有 `METRICS_ENABLED`）。正式网页使用仓库 Betterfly Logo。
 
 `standard` / `full` 预设默认启用动态；`minimal` 不启用，可单独追加 `--enable moments`。
@@ -23,13 +23,17 @@ MOMENTS_DB_MAX_OPEN_CONNS=6
 MOMENTS_DB_MAX_IDLE_CONNS=2
 ```
 
-`MOMENTS_PUBLIC_URL` 只能是 scheme + host + 可选 port，不带路径；用于精确 Origin 校验、
-Cookie Secure 标志及 S3 CORS。默认 `http://localhost:8087` 只适用于本机测试。
-`RUSTFS_EXTERNAL_ENDPOINT_URL` 留空时，与 StorageService 一样按请求推导预签名地址：
+`MOMENTS_PUBLIC_URL` 是逗号分隔的一个或多个来源，每个只能是 scheme + host + 可选 port，
+不带路径；用于精确 Origin 校验和 S3 CORS，Cookie 的 Secure 标志跟随请求所来自的来源。
+Compose 默认 `http://localhost:8087,https://localhost:54342`（直连与网关）只适用于本机测试，
+用域名或局域网地址访问时把对应来源加进去。
+`RUSTFS_EXTERNAL_ENDPOINT_URL` 留空且 `RUSTFS_PUBLIC_VIA_GATEWAY=true`（Compose 默认）时，
+经网关来的请求按网关地址签发预签名 URL（如 `https://<host>:54342/betterfly-moments/...`）。
+直连 8087 的请求与 StorageService 一样按请求推导预签名地址：
 客户端访问 Moments 用的主机名加 `RUSTFS_EXTERNAL_PORT`（默认 9000），协议取
 `RUSTFS_EXTERNAL_SCHEME`（默认 http），主机可用 `RUSTFS_EXTERNAL_HOST` 固定。这样真机通过
-服务器 IP 访问 8087 时拿到的是同一 IP 的 9000 端口，而不是 localhost。HTTPS 部署必须显式配置
-HTTPS 的 `RUSTFS_EXTERNAL_ENDPOINT_URL`，否则启动失败。
+服务器 IP 访问 8087 时拿到的是同一 IP 的 9000 端口，而不是 localhost。来源里有 HTTPS 时必须
+配置 HTTPS 的 `RUSTFS_EXTERNAL_ENDPOINT_URL` 或开启 `RUSTFS_PUBLIC_VIA_GATEWAY`，否则启动失败。
 HTTPS 反向代理完整保留 `/moments/` 路径，透传 Cookie、Origin，不记录请求正文或认证头。
 浏览器图片 SHA-512 使用 Web Crypto，需要 HTTPS 或 localhost。
 

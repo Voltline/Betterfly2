@@ -236,6 +236,33 @@ func TestResolveRustFSExternalEndpoint_FromRequestAndProxyHeaders(t *testing.T) 
 	}
 }
 
+func TestResolveRustFSExternalEndpoint_ViaGatewayKeepsGatewayOrigin(t *testing.T) {
+	t.Setenv("RUSTFS_EXTERNAL_ENDPOINT_URL", "")
+	t.Setenv("RUSTFS_EXTERNAL_SCHEME", "")
+	t.Setenv("RUSTFS_EXTERNAL_HOST", "")
+	t.Setenv("RUSTFS_EXTERNAL_PORT", "9000")
+	t.Setenv("RUSTFS_PUBLIC_VIA_GATEWAY", "true")
+
+	forwarded := httptest.NewRequest(http.MethodGet, "/storage_service/upload", nil)
+	forwarded.Host = "chat.example.com:54342"
+	forwarded.Header.Set("X-Forwarded-Proto", "https")
+	if got := resolveRustFSExternalEndpoint(forwarded); got != "https://chat.example.com:54342" {
+		t.Fatalf("gateway request endpoint=%q", got)
+	}
+
+	// 旧客户端直连8081，没有转发头，仍拿到对象存储端口
+	direct := httptest.NewRequest(http.MethodGet, "/storage_service/upload", nil)
+	direct.Host = "chat.example.com:8081"
+	if got := resolveRustFSExternalEndpoint(direct); got != "http://chat.example.com:9000" {
+		t.Fatalf("direct request endpoint=%q", got)
+	}
+
+	t.Setenv("RUSTFS_PUBLIC_VIA_GATEWAY", "")
+	if got := resolveRustFSExternalEndpoint(forwarded); got != "https://chat.example.com:9000" {
+		t.Fatalf("disabled gateway mode endpoint=%q", got)
+	}
+}
+
 func TestReadinessHandler_ReturnsReadyWhenDependenciesHealthy(t *testing.T) {
 	handler := &ReadinessHandler{
 		pingDB:             func(context.Context) error { return nil },

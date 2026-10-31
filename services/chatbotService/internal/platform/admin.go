@@ -67,18 +67,21 @@ func (p *Platform) withAdmin(route string, handler adminHandler) http.HandlerFun
 	}
 }
 
-// AdminRoutes 注册管理页面与管理接口。
+// AdminRoutes 注册管理页面与管理接口。直连端口用/admin/，网关上用/chatbot/admin/，
+// 页面里的请求都是相对路径，两处都能用。
 func (p *Platform) AdminRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /admin/{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'")
-		w.Header().Set("X-Frame-Options", "DENY")
-		_, _ = w.Write(adminPage)
-	})
-	mux.HandleFunc("GET /admin/api/bots", p.withAdmin("list", p.handleListBots))
-	mux.HandleFunc("POST /admin/api/bots", p.withAdmin("create", p.handleCreateBot))
-	mux.HandleFunc("PATCH /admin/api/bots/{id}", p.withAdmin("update", p.handlePatchBot))
-	mux.HandleFunc("POST /admin/api/bots/{id}/token", p.withAdmin("token", p.handleResetToken))
+	for _, prefix := range []string{"/admin", "/chatbot/admin"} {
+		mux.HandleFunc("GET "+prefix+"/{$}", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'")
+			w.Header().Set("X-Frame-Options", "DENY")
+			_, _ = w.Write(adminPage)
+		})
+		mux.HandleFunc("GET "+prefix+"/api/bots", p.withAdmin("list", p.handleListBots))
+		mux.HandleFunc("POST "+prefix+"/api/bots", p.withAdmin("create", p.handleCreateBot))
+		mux.HandleFunc("PATCH "+prefix+"/api/bots/{id}", p.withAdmin("update", p.handlePatchBot))
+		mux.HandleFunc("POST "+prefix+"/api/bots/{id}/token", p.withAdmin("token", p.handleResetToken))
+	}
 }
 
 func (p *Platform) handleListBots(w http.ResponseWriter, r *http.Request) error {

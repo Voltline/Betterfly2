@@ -156,6 +156,11 @@ type composeService struct {
 		Driver  string            `json:"driver"`
 		Options map[string]string `json:"options"`
 	} `json:"logging"`
+	Ports []struct {
+		HostIP    string `json:"host_ip"`
+		Target    int    `json:"target"`
+		Published string `json:"published"`
+	} `json:"ports"`
 }
 
 func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
@@ -193,11 +198,11 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 			if err := json.Unmarshal(output, &model); err != nil {
 				t.Fatal(err)
 			}
-			wantCount := map[string]int{"standard": 17, "distributed": 18, "full": 21, "cluster": 19}[mode]
+			wantCount := map[string]int{"standard": 19, "distributed": 20, "full": 23, "cluster": 21}[mode]
 			if len(model.Services) != wantCount {
 				t.Fatalf("service count=%d want=%d (includes two one-shot jobs)", len(model.Services), wantCount)
 			}
-			for _, name := range []string{"df", "auth_service", "friend_service", "storage_service", "rustfs", "push_service", "call_service", "coturn", "livekit", "abtest_service", "moments_service", "chatbot_service", "aichat_service", "redis"} {
+			for _, name := range []string{"gateway", "portal", "df", "auth_service", "friend_service", "storage_service", "rustfs", "push_service", "call_service", "coturn", "livekit", "abtest_service", "moments_service", "chatbot_service", "aichat_service", "redis"} {
 				if _, ok := model.Services[name]; !ok {
 					t.Fatalf("product capability lost: %s", name)
 				}
@@ -235,11 +240,85 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 					t.Fatal("daily initialization still requires kafka2")
 				}
 			}
+			checkGateway(t, mode, model.Services)
 			for name, service := range model.Services {
 				if service.Logging.Driver != "local" || service.Logging.Options["max-size"] != "10m" || service.Logging.Options["max-file"] != "3" {
 					t.Fatalf("unbounded container logs: %s", name)
 				}
 			}
 		})
+	}
+}
+
+// checkGateway 确认对外只有网关和旧客户端仍在直连的端口，其余端口只绑本机，且各站点都挂到了网关上。
+func checkGateway(t *testing.T, mode string, services map[string]composeService) {
+	t.Helper()
+	public := map[string]bool{
+		"gateway/54342": true, "storage_service/8081": true, "abtest_service/8082": true, "moments_service/8087": true,
+		"chatbot_service/8088": true, "rustfs/9000": true, "livekit/7880": true, "livekit/7881": true, "livekit/7882": true, "coturn/3478": true,
+	}
+	for name, service := range services {
+		for _, port := range service.Ports {
+			key := name + "/" + strconv.Itoa(port.Target)
+			if name == "coturn" && port.Target >= 49160 && port.Target <= 49200 {
+				continue
+			}
+			if public[key] {
+				if port.HostIP != "" {
+					t.Fatalf("%s should stay reachable for existing clients, bound to %q", key, port.HostIP)
+				}
+			} else if port.HostIP != "127.0.0.1" {
+				t.Fatalf("internal port %s published on %q", key, port.HostIP)
+			}
+		}
+	}
+	gateway := services["gateway"]
+	if len(gateway.Ports) != 1 || gateway.Ports[0].Published != "54342" || gateway.Ports[0].Target != 54342 {
+		t.Fatalf("gateway entry point: %+v", gateway.Ports)
+	}
+	routes := map[string]string{
+		"portal": "portal", "df": "ws", "storage_service": "storage", "abtest_service": "abtest", "moments_service": "moments",
+		"chatbot_service": "bot-api", "push_service": "push-admin", "rustfs": "rustfs-objects", "livekit": "livekit",
+	}
+	if mode != "standard" {
+		routes["df2"] = "ws"
+	}
+	if mode == "full" {
+		routes["grafana"], routes["prometheus"], routes["kafka-ui"] = "grafana", "prometheus", "kafka-ui"
+	}
+	for name, router := range routes {
+		labels := services[name].Labels
+		if labels["traefik.enable"] != "true" || labels["traefik.http.routers."+router+".rule"] == "" {
+			t.Fatalf("%s is not routed through the gateway as %s", name, router)
+		}
+	}
+	for _, name := range []string{"df", "df2"} {
+		if labels, ok := services[name]; ok && (labels.Labels["traefik.http.services.ws.loadbalancer.server.scheme"] != "https" || labels.Labels["traefik.http.services.ws.loadbalancer.serverstransport"] != "betterfly-internal-tls@file") {
+			t.Fatalf("%s WebSocket backend must be reached over TLS", name)
+		}
+	}
+	admin := map[string]string{"abtest_service": "abtest-admin", "chatbot_service": "chatbot-admin", "push_service": "push-admin", "grafana": "grafana", "prometheus": "prometheus", "kafka-ui": "kafka-ui"}
+	for name, router := range admin {
+		if service, ok := services[name]; ok && !strings.Contains(service.Labels["traefik.http.routers."+router+".middlewares"], "admin-only@file") {
+			t.Fatalf("%s admin route %s is not restricted", name, router)
+		}
+	}
+	for _, name := range []string{"storage_service", "moments_service"} {
+		if services[name].Environment["RUSTFS_PUBLIC_VIA_GATEWAY"] != "true" {
+			t.Fatalf("%s presigns object URLs past the gateway", name)
+		}
+	}
+}
+
+func TestGatewayDynamicConfigRestrictsAdminRoutes(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(serviceRoot(t), "gateway", "dynamic", "gateway.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(data)
+	for _, want := range []string{"defaultCertificate", "betterfly-internal-tls", "admin-only", "ipAllowList", `env "GATEWAY_ADMIN_SOURCE_RANGE"`, "api@internal"} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("gateway.yml missing %q", want)
+		}
 	}
 }

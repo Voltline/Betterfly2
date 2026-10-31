@@ -7,14 +7,14 @@
 
 | 预设 | 长期运行容器 | 能力 |
 | --- | --- | --- |
-| `standard`（默认） | 13 | 单 Kafka、单 DF，文件、推送、一对一和群通话、实验、好友动态全部保留 |
-| `distributed` | 14 | standard 加第二个 DF，测试跨 Pod 投递、连接迁移及恢复 |
-| `full` | 17 | distributed 加 Prometheus、Grafana 和 Kafka UI；Kafka 仍为单节点 |
-| `minimal` | 5 | Redis、Kafka、DF、Auth、Friend；仅认证、连接和关系控制面 |
+| `standard`（默认） | 17 | 单 Kafka、单 DF，文件、推送、一对一和群通话、实验、好友动态、机器人平台与 AI 助手全部保留 |
+| `distributed` | 18 | standard 加第二个 DF，网关自动把 `/ws` 分流到两个实例，测试跨 Pod 投递、连接迁移及恢复 |
+| `full` | 21 | distributed 加 Prometheus、Grafana 和 Kafka UI；Kafka 仍为单节点 |
+| `minimal` | 7 | 网关、导航页、Redis、Kafka、DF、Auth、Friend；仅认证、连接和关系控制面 |
 
 计数不包含执行后退出的 `db_migrate`、`kafka-init`，也不包含现有外部 PostgreSQL。
 `minimal` 没有 Storage，因此不支持完整的消息发送、持久化和同步；不是全功能低配模式。
-完整业务 Go 服务各一份，RustFS、Redis、Coturn、LiveKit 也各一份。
+完整业务 Go 服务各一份，RustFS、Redis、Coturn、LiveKit 也各一份。所有预设都包含[统一网关](../docs/GATEWAY.md)和导航页，对外入口固定为 `54342`。
 
 ```bash
 cd services

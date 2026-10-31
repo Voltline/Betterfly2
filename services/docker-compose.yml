@@ -20,7 +20,7 @@ x-container-defaults: &container-defaults
       max-file: "3"
 
 # 对外只有网关的${GATEWAY_PORT:-54342}一个统一入口，按路径分发到各服务，路由写在各服务的labels里。
-# 8081、8082、8087、8088、9000是现有客户端与机器人仍在直连的旧端口，照常对外映射；
+# 除此之外只有LiveKit与Coturn的媒体端口直接对外；HTTP服务与RustFS S3不再映射宿主机端口，
 # 其余内部端口只绑定${INTERNAL_BIND_ADDR:-127.0.0.1}，供本机调试与测试使用。
 services:
   gateway:
@@ -391,7 +391,6 @@ services:
     image: rustfs/rustfs:latest
     container_name: rustfs
     ports:
-      - "9000:9000"  # S3 API端口
       - "${INTERNAL_BIND_ADDR:-127.0.0.1}:9001:9001"  # 控制台端口，不支持挂在子路径下，只供本机访问
     volumes:
       - rustfs-data:/data
@@ -464,8 +463,6 @@ services:
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports:
-      - "${HTTP_PORT:-8081}:${HTTP_PORT:-8081}"
     labels:
       traefik.enable: "true"
       traefik.http.routers.storage.rule: "PathPrefix(`/storage_service/`)"
@@ -573,8 +570,8 @@ services:
       DB_MAX_IDLE_CONNS: ${MOMENTS_DB_MAX_IDLE_CONNS:-2}
       PORT: "8087"
       AUTH_RPC_ADDR: auth_service:50051
-      # 网页版允许的来源，可用逗号写多个，例如 https://example.com:54342,http://example.com:8087
-      MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-http://localhost:8087,https://localhost:54342}
+      # 网页版允许的来源（经网关的地址），可用逗号写多个，例如 https://localhost:54342,https://192.168.1.5:54342
+      MOMENTS_PUBLIC_URL: ${MOMENTS_PUBLIC_URL:-https://localhost:54342}
       MOMENTS_TRUSTED_PROXY_CIDRS: ${MOMENTS_TRUSTED_PROXY_CIDRS:-}
       MOMENTS_BUCKET: ${MOMENTS_BUCKET:-betterfly-moments}
       RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
@@ -587,8 +584,6 @@ services:
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    ports:
-      - "8087:8087"
     labels:
       traefik.enable: "true"
       traefik.http.routers.moments.rule: "PathPrefix(`/moments`)"
@@ -617,8 +612,6 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_started
-    ports:
-      - "${ABTEST_HTTP_PORT:-8082}:${ABTEST_HTTP_PORT:-8082}"
     labels:
       traefik.enable: "true"
       traefik.http.routers.abtest.rule: "PathPrefix(`/abtest/`)"
@@ -767,9 +760,7 @@ services:
       RUSTFS_ENDPOINT_URL: http://rustfs:9000
       RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-    # Bot API供第三方机器人调用；经网关为 /bot/v1/，管理页面为 /chatbot/admin/
-    ports:
-      - "${CHATBOT_PUBLIC_PORT:-8088}:8088"
+    # Bot API供第三方机器人调用，经网关为 /bot/v1/，管理页面为 /chatbot/admin/
     labels:
       traefik.enable: "true"
       traefik.http.routers.bot-api.rule: "PathPrefix(`/bot/v1/`)"

@@ -45,21 +45,30 @@ flowchart LR
 
 ## 预签名 URL 经网关
 
-Storage 和 Moments 在 `RUSTFS_PUBLIC_VIA_GATEWAY=true`（Compose 默认）时，对经网关转发来的请求（带 `X-Forwarded-Proto`）按网关地址签发预签名 URL，例如 `https://<host>:54342/betterfly-files/...`；网关按桶名路径转给 RustFS，并原样透传 `Host`，所以签名照样有效。直连旧端口 8081、8087 的请求不受影响，仍然拿到 `http://<host>:9000` 的地址。显式配置了 `RUSTFS_EXTERNAL_ENDPOINT_URL` 时一律使用它。
+Storage 和 Moments 在 `RUSTFS_PUBLIC_VIA_GATEWAY=true`（Compose 默认）时，对经网关转发来的请求（带 `X-Forwarded-Proto`）按网关地址签发预签名 URL，例如 `https://<host>:54342/betterfly-files/...`；网关按桶名路径转给 RustFS，并原样透传 `Host`，所以签名照样有效。显式配置了 `RUSTFS_EXTERNAL_ENDPOINT_URL` 时一律使用它。
 
-Moments 的 `MOMENTS_PUBLIC_URL` 可以写逗号分隔的多个来源，默认同时允许直连的 `http://localhost:8087` 和网关的 `https://localhost:54342`。会话 Cookie 是否带 `Secure` 跟随请求所来自的来源。用域名或局域网地址访问时，需要把对应来源加进去。
+Moments 的 `MOMENTS_PUBLIC_URL` 可以写逗号分隔的多个来源，默认 `https://localhost:54342`。会话 Cookie 是否带 `Secure` 跟随请求所来自的来源。用域名或局域网地址访问时，需要把对应来源加进去。
 
 ## 端口
 
 | 端口 | 绑定 | 用途 |
 | --- | --- | --- |
 | `54342` | 对外 | 网关，统一入口（`GATEWAY_PORT`） |
-| `8081`、`8082`、`8087`、`8088`、`9000` | 对外 | Storage、ABTest、Moments、Bot API、RustFS 的旧端口，现有客户端和机器人仍在直连 |
 | `7880-7882`、`3478`、`49160-49200/udp` | 对外 | LiveKit 与 Coturn 媒体，不经过网关 |
 | `54341`、`54343` | 本机 | df、df2 直连（`DF_DIRECT_PORT`），供跨实例测试使用 |
 | Redis、Kafka、Auth、Friend、Call、Push、RustFS 控制台、Prometheus、Grafana、Kafka UI | 本机 | 内部端口，绑定 `INTERNAL_BIND_ADDR`（默认 `127.0.0.1`） |
 
-现有客户端连接 `wss://<host>:54342/ws`，现在由网关接收并转给 DF，证书与路径都没有变化，客户端不需要修改。旧端口在客户端全部改为经网关访问之前继续保留。
+Storage（原 `8081`）、ABTest（原 `8082`）、Moments（原 `8087`）、Bot API（原 `8088`）和 RustFS S3（原 `9000`）不再映射宿主机端口，只能经网关按路径访问：
+
+| 原地址 | 现地址 |
+| --- | --- |
+| `http://<host>:8081/storage_service/...` | `https://<host>:54342/storage_service/...` |
+| `http://<host>:8082/abtest/...` | `https://<host>:54342/abtest/...` |
+| `http://<host>:8087/moments/...` | `https://<host>:54342/moments/...` |
+| `http://<host>:8088/bot/v1/...` | `https://<host>:54342/bot/v1/...` |
+| `http://<host>:9000/<桶>/...`（预签名） | `https://<host>:54342/<桶>/...`，由服务端签发，客户端照用即可 |
+
+WebSocket 仍是 `wss://<host>:54342/ws`，由网关接收并转给 DF，证书与路径没有变化。所有 HTTP 请求现在也是 HTTPS，证书默认是同一张自签名证书，客户端需要像 WebSocket 一样信任它。
 
 需要从其他机器访问内部端口时，把 `INTERNAL_BIND_ADDR` 设为 `0.0.0.0`，或者经 SSH 转发。
 
@@ -74,7 +83,7 @@ Moments 的 `MOMENTS_PUBLIC_URL` 可以写逗号分隔的多个来源，默认�
 | `INTERNAL_BIND_ADDR` | `127.0.0.1` | 内部端口的绑定地址 |
 | `DF_DIRECT_PORT` | `54341` | df 的本机直连端口 |
 | `RUSTFS_PUBLIC_VIA_GATEWAY` | `true` | 经网关的请求按网关地址签发预签名 URL |
-| `MOMENTS_PUBLIC_URL` | `http://localhost:8087,https://localhost:54342` | Moments 允许的来源列表 |
+| `MOMENTS_PUBLIC_URL` | `https://localhost:54342` | Moments 网页允许的来源列表，用局域网地址或域名访问网页时加上 |
 
 `gateway.yml` 由 Traefik 的文件 provider 读取并监视，修改后无需重启；`GATEWAY_ADMIN_SOURCE_RANGE` 通过模板读取，修改后需要重建 `gateway` 容器。
 

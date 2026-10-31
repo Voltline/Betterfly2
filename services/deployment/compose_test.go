@@ -250,12 +250,11 @@ func TestComposeTopologiesPreserveFeaturesAndReliability(t *testing.T) {
 	}
 }
 
-// checkGateway 确认对外只有网关和旧客户端仍在直连的端口，其余端口只绑本机，且各站点都挂到了网关上。
+// checkGateway 确认对外只有网关和LiveKit、Coturn的媒体端口，其余端口只绑本机，且各站点都挂到了网关上。
 func checkGateway(t *testing.T, mode string, services map[string]composeService) {
 	t.Helper()
 	public := map[string]bool{
-		"gateway/54342": true, "storage_service/8081": true, "abtest_service/8082": true, "moments_service/8087": true,
-		"chatbot_service/8088": true, "rustfs/9000": true, "livekit/7880": true, "livekit/7881": true, "livekit/7882": true, "coturn/3478": true,
+		"gateway/54342": true, "livekit/7880": true, "livekit/7881": true, "livekit/7882": true, "coturn/3478": true,
 	}
 	for name, service := range services {
 		for _, port := range service.Ports {
@@ -265,7 +264,7 @@ func checkGateway(t *testing.T, mode string, services map[string]composeService)
 			}
 			if public[key] {
 				if port.HostIP != "" {
-					t.Fatalf("%s should stay reachable for existing clients, bound to %q", key, port.HostIP)
+					t.Fatalf("%s must stay public, bound to %q", key, port.HostIP)
 				}
 			} else if port.HostIP != "127.0.0.1" {
 				t.Fatalf("internal port %s published on %q", key, port.HostIP)

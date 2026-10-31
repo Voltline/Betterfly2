@@ -132,7 +132,7 @@ call-service -> both sides: CALL_ENDED
 
 ABTestService 提供统一实验配置与稳定分流能力。当前主要用于客户端实验，接口设计已预留服务端实验入口。
 
-**基础URL**: `http://localhost:8082`
+**基础URL**: `https://localhost:54342`（经[统一网关](GATEWAY.md)，路径不变）
 
 ### 客户端获取实验配置
 
@@ -301,7 +301,7 @@ Targeting 规则当前支持:
 
 存储服务提供独立的 HTTP 服务，客户端可以直接通过 HTTP 进行文件的上传和下载操作。
 
-**基础URL**: `http://localhost:8081/storage_service` (开发环境)
+**基础URL**: `https://localhost:54342/storage_service`（经[统一网关](GATEWAY.md)，开发环境证书为自签名）
 
 **认证方式**: 文件控制面接口都需要在请求头中携带 JWT Token 和用户ID；`/health` 与 `/ready` 用于探针检查，可匿名访问
 
@@ -345,7 +345,7 @@ Content-Type: application/json
    - 选择 "Manage Environments"
    - 点击 "Add" 创建新环境
    - 添加以下变量：
-     - `base_url`: `http://localhost:8081`
+     - `base_url`: `https://localhost:54342`（关闭 SSL certificate verification）
      - `jwt_token`: `<你的JWT Token>`
      - `user_id`: `<你的用户ID>`
 

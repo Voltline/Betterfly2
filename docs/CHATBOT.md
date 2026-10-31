@@ -70,7 +70,7 @@ DataForwarding 在消息入库并完成投递后通知平台：
 
 ## 管理
 
-设置 `CHATBOT_ADMIN_TOKEN`（至少 16 个字符）后开放管理页面和管理接口，请求头 `X-Admin-Token` 携带令牌。未设置时一律返回 404。管理页面经[统一网关](GATEWAY.md)访问 `https://<host>:54342/chatbot/admin/`，网关只对内网来源开放；服务本身同时在 `/admin/` 和 `/chatbot/admin/` 下提供页面与接口（下表的 `/admin` 前缀可换成 `/chatbot/admin`），直连 `8088/admin/` 时没有来源限制，对外暴露 8088 时应自行限制。
+设置 `CHATBOT_ADMIN_TOKEN`（至少 16 个字符）后开放管理页面和管理接口，请求头 `X-Admin-Token` 携带令牌。未设置时一律返回 404。管理页面经[统一网关](GATEWAY.md)访问 `https://<host>:54342/chatbot/admin/`，网关只对内网来源开放；服务本身同时在 `/admin/` 和 `/chatbot/admin/` 下提供页面与接口（下表的 `/admin` 前缀可换成 `/chatbot/admin`）。Compose 不再映射 8088，Bot API 与管理页面都只能经网关访问。
 
 | 接口 | 说明 |
 | --- | --- |
@@ -152,9 +152,10 @@ DataForwarding 在消息入库并完成投递后通知平台：
 
 ```bash
 TOKEN=bfbot_xxx
-curl -s -H "Authorization: Bearer $TOKEN" "http://localhost:8088/bot/v1/updates?timeout=30"
-curl -s -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"chat_id":12,"chat_type":"private","text":"你好"}' http://localhost:8088/bot/v1/messages
+# 网关默认使用自签名证书，本机测试加 -k
+curl -sk -H "Authorization: Bearer $TOKEN" "https://localhost:54342/bot/v1/updates?timeout=30"
+curl -sk -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"chat_id":12,"chat_type":"private","text":"你好"}' https://localhost:54342/bot/v1/messages
 ```
 
 ## 配置
@@ -172,7 +173,7 @@ ChatbotService：
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `CHATBOT_ADMIN_TOKEN` | 空 | 管理令牌，为空时不开放 `/admin` |
-| `CHATBOT_HTTP_PORT` | `8088` | Bot API、管理页面、`/healthz`、`/ready`、`/metrics`；Compose 映射到 `CHATBOT_PUBLIC_PORT` |
+| `CHATBOT_HTTP_PORT` | `8088` | Bot API、管理页面、`/healthz`、`/ready`、`/metrics`；Compose 中不映射宿主机端口，经网关的 `/bot/v1/`、`/chatbot/admin/` 访问 |
 | `CHATBOT_UPDATE_RETENTION` | `24h` | 1h–30d |
 | `CHATBOT_MAX_POLL_TIMEOUT` | `50s` | 长轮询上限 |
 | `CHATBOT_SEND_WAIT` | `5s` | 发消息等待入库的时间 |

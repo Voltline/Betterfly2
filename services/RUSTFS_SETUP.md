@@ -18,9 +18,9 @@ cd services
 
 | 配置 | Compose 默认值 | 说明 |
 | --- | --- | --- |
-| RustFS S3 API | `9000` | 客户端使用预签名 URL 直传；经网关时走 `54342` 的桶名路径 |
+| RustFS S3 API | `9000` | 仅容器网络内；客户端经网关 `54342` 的桶名路径使用预签名 URL 直传 |
 | RustFS Console | `9001` | 对象存储管理页面，只绑定本机 |
-| Storage HTTP | `8081` | 文件控制面；进程脱离 Compose 运行时默认 `8080` |
+| Storage HTTP | `8081` | 文件控制面，经网关 `/storage_service/` 访问；进程脱离 Compose 运行时默认 `8080` |
 | Access key | `rustfsadmin` | 仅适合本地开发 |
 | Secret key | `rustfsadmin` | 生产环境必须替换 |
 | Bucket | `betterfly-files` | 服务启动时自动确认或创建 |
@@ -46,7 +46,7 @@ RUSTFS_EXTERNAL_ENDPOINT_URL=https://files.example.com
 
 未设置完整地址、且 `RUSTFS_PUBLIC_VIA_GATEWAY=true`（Compose 默认）时，经[统一网关](../docs/GATEWAY.md)转发来的请求按网关地址签发，例如 `https://<host>:54342/betterfly-files/...`，网关按桶名路径转给 RustFS 并原样透传 `Host`，签名照样有效。
 
-其余情况（包括直连 `8081` 的请求），Storage Service 按以下方式推导：
+其余情况（脱离网关运行时），Storage Service 按以下方式推导：
 
 - 协议优先使用 `RUSTFS_EXTERNAL_SCHEME`，其次使用 `X-Forwarded-Proto` 或当前请求协议。
 - 主机优先使用 `RUSTFS_EXTERNAL_HOST`，其次使用当前 HTTP 请求的 host。
@@ -78,14 +78,14 @@ RUSTFS_EXTERNAL_PORT=9000
 docker compose --profile storage ps
 docker logs rustfs
 docker logs storageService
-curl http://localhost:9000/health
-curl http://localhost:8081/health
-curl http://localhost:8081/ready
+docker inspect -f '{{.State.Health.Status}}' rustfs
+# 探针不经网关对外，在容器网络内访问
+docker run --rm --network services_backend busybox wget -qO- http://storage_service:8081/ready
 ```
 
 `/health` 只表示 Storage Service 进程存活；`/ready` 会检查 PostgreSQL 和 RustFS bucket。常见故障：
 
-- URL 返回 `localhost:9000`：配置 `RUSTFS_EXTERNAL_ENDPOINT_URL` 或外部 scheme/host/port。
+- URL 返回 `localhost:9000`：请求没有经过网关（缺少 `X-Forwarded-Proto`），或 `RUSTFS_PUBLIC_VIA_GATEWAY` 被关闭；脱离网关时配置 `RUSTFS_EXTERNAL_ENDPOINT_URL` 或外部 scheme/host/port。
 - 上传后一直未验证：确认客户端在 PUT 成功后调用了 `/upload/verify`，并检查对象内容是否与声明哈希一致。
 - 容器无法连接 RustFS：确认内部 endpoint 为 `http://rustfs:9000`，并检查两个服务是否位于同一 Compose network。
 - 客户端无法上传：除 Storage HTTP 端口外，还必须让客户端能够访问预签名 URL 对应的 RustFS S3 端口。

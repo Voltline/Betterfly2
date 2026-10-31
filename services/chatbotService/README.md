@@ -25,4 +25,4 @@ go test ./...
 BETTERFLY_TEST_POSTGRES_DSN="host=127.0.0.1 port=5432 user=postgres password=... dbname=postgres sslmode=disable" go test ./internal/platform
 ```
 
-HTTP `8088`：`/bot/v1/*` Bot API，`/admin/` 管理页面（需要 `CHATBOT_ADMIN_TOKEN`），`/healthz`、`/ready`、`/metrics`。
+HTTP `8088`（Compose 中经网关访问）：`/bot/v1/*` Bot API，`/admin/` 与 `/chatbot/admin/` 管理页面（需要 `CHATBOT_ADMIN_TOKEN`），`/healthz`、`/ready`、`/metrics`。

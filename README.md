@@ -83,16 +83,16 @@ flowchart LR
 | Gateway | `https://host:54342` | 统一入口（Traefik），按路径分发、`/ws` 负载均衡、后台来源限制；根路径为导航页 |
 | DataForwarding Service | `wss://host:54342/ws`（经网关） | WebSocket 会话、协议分发和跨 Pod 路由；`distributed` profile 增加 df2，自动加入负载均衡 |
 | Auth Service | 内网 gRPC `50051` | 注册、登录、JWT 校验和登出失效 |
-| Storage Service | Kafka `storage-service`；`/storage_service/`（旧端口 `8081`） | 消息与资料持久化、同步查询、文件控制面 |
+| Storage Service | Kafka `storage-service`；`/storage_service/` | 消息与资料持久化、同步查询、文件控制面 |
 | Friend Service | Kafka `friend-service`；HTTP `54401` | 好友关系、群组和群成员维护；HTTP 仅提供内网探针 |
-| ABTest Service | `/abtest/`（旧端口 `8082`） | 实验配置获取、服务端求值和管理后台 |
-| Moments Service | `/moments`（旧端口 `8087`） | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
+| ABTest Service | `/abtest/` | 实验配置获取、服务端求值和管理后台 |
+| Moments Service | `/moments` | 好友动态网页和原生共用 API，私有图片、点赞、评论 |
 | Call Service | Kafka `call-service`；HTTP `8085` | 一对一及可选群会议控制面、探针与签名 SFU 回调 |
 | Push Service | Kafka `push-service`；HTTP `8086` | PushKit/普通 APNs 推送；HTTP 提供探针和受保护后台 |
-| Chatbot Service | Kafka `chatbot-service`；`/bot/v1/`、`/chatbot/admin/`（旧端口 `8088`） | 机器人平台：分发消息与关系事件，Bot API、webhook 与管理页面 |
+| Chatbot Service | Kafka `chatbot-service`；`/bot/v1/`、`/chatbot/admin/` | 机器人平台：分发消息与关系事件，Bot API、webhook 与管理页面 |
 | AIChat Service | Kafka `aichat-service`；内网 HTTP `8089` | AI 助手账号，读取文字与图片调用模型，以机器人身份回复 |
 
-对外端口只有网关 `54342`，以及现有客户端仍在直连的旧端口 `8081`、`8082`、`8087`、`8088`、RustFS S3 `9000`，和不经网关的 LiveKit `7880-7882`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Redis、Kafka、Auth、Friend、Call、Push、RustFS Console 等内部端口只绑定本机（`INTERNAL_BIND_ADDR`）。Kafka UI、Prometheus 和 Grafana 只在相应可选 profile 中启动，经网关的 `/kafka-ui`、`/prometheus`、`/grafana` 访问。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
+对外端口只有网关 `54342`，以及不经网关的 LiveKit `7880-7882`、Coturn `3478/tcp+udp` 与 `49160-49200/udp`。Storage、ABTest、Moments、Chatbot 和 RustFS S3 只能经网关访问，不再映射宿主机端口；Redis、Kafka、Auth、Friend、Call、Push、RustFS Console 等内部端口只绑定本机（`INTERNAL_BIND_ADDR`）。Kafka UI、Prometheus 和 Grafana 只在相应可选 profile 中启动，经网关的 `/kafka-ui`、`/prometheus`、`/grafana` 访问。PostgreSQL 当前由 `PGSQL_DSN` 指向外部实例，Compose 不负责创建数据库。
 
 ## 快速开始
 

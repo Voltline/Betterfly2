@@ -6,7 +6,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode"
 
 	chatbotpb "Betterfly2/proto/chatbot"
 	pb "Betterfly2/proto/data_forwarding"
@@ -15,101 +14,78 @@ import (
 	sharedDB "Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
 	"Betterfly2/shared/mq"
-	"data_forwarding_service/internal/monitor"
+	"Betterfly2/shared/utils"
 	"data_forwarding_service/internal/publisher"
 )
 
+const defaultChatbotTopic = "chatbot-service"
+
 const (
-	defaultChatbotName  = "Betterfly 助手"
-	defaultChatbotTopic = "chatbot-service"
+	BotEventRelationshipRequest = "relationship_request"
+	BotEventFriendAdded         = "friend_added"
+	BotEventGroupJoined         = "group_joined"
+	BotEventFriendRemoved       = "friend_removed"
+	BotEventGroupRemoved        = "group_removed"
 )
 
-// chatbotConfig 描述ChatbotService托管的机器人账号。机器人是users表里的真实用户，
-// 消息照常入库与同步；DF只负责在消息入库后通知ChatbotService，并替它接受好友申请和群邀请。
+// chatbotConfig 描述机器人平台的接入。机器人是users表里ID落在机器人段的真实用户，消息照常入库与同步；
+// DF只负责在消息入库后通知机器人平台，并把与机器人有关的关系变化转给它。
 type chatbotConfig struct {
-	userID  int64
-	mention string // 归一化后的“@名字”
+	enabled bool
 	topic   string
 }
 
 var chatbot = loadChatbotConfig()
 
-// loadChatbotConfig 未配置CHATBOT_USER_ID或取值非法时关闭机器人，DF行为与之前一致。
+// loadChatbotConfig 未开启CHATBOT_ENABLED时DF不识别机器人，行为与之前一致。
 func loadChatbotConfig() chatbotConfig {
-	id, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("CHATBOT_USER_ID")), 10, 64)
-	if err != nil || id <= 1 || monitor.IsMonitorID(id) {
-		return chatbotConfig{}
-	}
-	name := strings.TrimSpace(os.Getenv("CHATBOT_NAME"))
-	if name == "" {
-		name = defaultChatbotName
-	}
+	enabled, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("CHATBOT_ENABLED")))
 	topic := strings.TrimSpace(os.Getenv("CHATBOT_TOPIC"))
 	if topic == "" {
 		topic = defaultChatbotTopic
 	}
-	return chatbotConfig{userID: id, mention: normalizeMention("@" + name), topic: topic}
+	return chatbotConfig{enabled: enabled, topic: topic}
 }
 
 // IsChatbotID 判断用户ID是否为机器人账号。
 func IsChatbotID(userID int64) bool {
-	return chatbot.userID > 0 && userID == chatbot.userID
+	return chatbot.enabled && sharedDB.IsBotUserID(userID)
 }
 
-// normalizeMention 去掉空白并转小写，“@Betterfly 助手”和“@betterfly助手”视为同一个提及。
-func normalizeMention(text string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) {
-			return -1
-		}
-		return unicode.ToLower(r)
-	}, text)
-}
-
-// withoutChatbot 从群成员中去掉机器人：它没有连接也没有推送设备，投递和APNs都只会空转。
-func withoutChatbot(memberIDs []int64) ([]int64, bool) {
-	if chatbot.userID <= 0 {
-		return memberIDs, false
+// withoutChatbot 从群成员中分出机器人：它们没有连接也没有推送设备，投递和APNs都只会空转。
+func withoutChatbot(memberIDs []int64) ([]int64, []int64) {
+	if !chatbot.enabled {
+		return memberIDs, nil
 	}
-	for i, memberID := range memberIDs {
-		if memberID == chatbot.userID {
-			rest := make([]int64, 0, len(memberIDs)-1)
-			rest = append(rest, memberIDs[:i]...)
-			return append(rest, memberIDs[i+1:]...), true
+	var rest, bots []int64
+	for _, memberID := range memberIDs {
+		if IsChatbotID(memberID) {
+			bots = append(bots, memberID)
+		} else {
+			rest = append(rest, memberID)
 		}
 	}
-	return memberIDs, false
+	if bots == nil {
+		return memberIDs, nil
+	}
+	return rest, bots
 }
 
-// chatbotRepliesInGroup 群里只有文字消息@机器人，或引用机器人的消息时才触发；
-// 频道卡片和讨论串不触发，机器人自己的消息也不触发。
-func chatbotRepliesInGroup(payload *pb.Post) (bool, error) {
-	if IsChatbotID(payload.GetFromId()) || payload.GetSourceChannelMessageId() != 0 || payload.GetDiscussionRootMessageId() != 0 ||
-		strings.TrimSpace(payload.GetMsgType()) != "text" {
-		return false, nil
-	}
-	if strings.Contains(normalizeMention(payload.GetMsg()), chatbot.mention) {
-		return true, nil
-	}
-	if payload.GetReplyToMessageId() <= 0 {
-		return false, nil
-	}
-	quoted, err := sharedDB.GetMessageByIDWithDB(sharedDB.DB(), payload.GetReplyToMessageId())
-	if err != nil {
-		return false, err
-	}
-	return quoted != nil && IsChatbotID(quoted.FromUserID), nil
+// chatbotSeesGroupPost 只有群主时间线上的消息交给机器人平台判断是否@了某个机器人；
+// 频道卡片、讨论串和机器人自己发的消息不触发，避免机器人之间互相应答。
+func chatbotSeesGroupPost(payload *pb.Post) bool {
+	return !IsChatbotID(payload.GetFromId()) && payload.GetSourceChannelMessageId() == 0 && payload.GetDiscussionRootMessageId() == 0
 }
 
-func buildChatbotTrigger(messageID int64, payload *pb.Post, replyTopic string) ([]byte, string, error) {
+func buildChatbotTrigger(messageID int64, payload *pb.Post, botIDs []int64) ([]byte, string, error) {
 	req := &chatbotpb.RequestMessage{Payload: &chatbotpb.RequestMessage_Trigger{Trigger: &chatbotpb.ChatbotTrigger{
-		MessageId: messageID, FromUserId: payload.GetFromId(), ToId: payload.GetToId(), IsGroup: payload.GetIsGroup(), ReplyTopic: replyTopic,
+		MessageId: messageID, FromUserId: payload.GetFromId(), ToId: payload.GetToId(), IsGroup: payload.GetIsGroup(), BotUserIds: botIDs,
 	}}}
 	encoded, err := mq.MarshalEnvelope(envelope.MessageType_CHATBOT_REQUEST, req)
 	if err != nil {
 		return nil, "", err
 	}
-	// 同一会话的触发进同一分区，机器人按发送顺序作答。
+	// 同一会话的触发进同一分区，机器人按发送顺序收到消息。
 	key := fmt.Sprintf("u:%d", payload.GetFromId())
 	if payload.GetIsGroup() {
 		key = fmt.Sprintf("g:%d", payload.GetToId())
@@ -120,9 +96,9 @@ func buildChatbotTrigger(messageID int64, payload *pb.Post, replyTopic string) (
 var publishChatbotMessage = publisher.PublishKeyedMessage
 
 // publishChatbotTrigger 失败时返回错误，交给storage响应的重试：重投递由客户端按message_id去重，
-// 推送有账本去重，机器人回复以client_message_id去重。
-func publishChatbotTrigger(messageID int64, payload *pb.Post) error {
-	encoded, key, err := buildChatbotTrigger(messageID, payload, currentContainerTopic())
+// 推送有账本去重，机器人平台按message_id去重。
+func publishChatbotTrigger(messageID int64, payload *pb.Post, botIDs []int64) error {
+	encoded, key, err := buildChatbotTrigger(messageID, payload, botIDs)
 	if err != nil {
 		return err
 	}
@@ -133,12 +109,29 @@ func publishChatbotTrigger(messageID int64, payload *pb.Post) error {
 	return nil
 }
 
+func publishBotEvent(event *chatbotpb.BotEvent) error {
+	if event.GetOccurredAt() == "" {
+		event.OccurredAt = utils.NowTime()
+	}
+	encoded, err := mq.MarshalEnvelope(envelope.MessageType_CHATBOT_REQUEST, &chatbotpb.RequestMessage{
+		Payload: &chatbotpb.RequestMessage_Event{Event: event},
+	})
+	if err != nil {
+		return err
+	}
+	if err := publishChatbotMessage(encoded, chatbot.topic, fmt.Sprintf("b:%d", event.GetBotUserId())); err != nil {
+		return errors.Join(errors.New("发布机器人事件失败"), err)
+	}
+	logger.Sugar().Infow("发布机器人事件", "type", event.GetType(), "bot_user_id", event.GetBotUserId(), "user_id", event.GetUserId(), "group_id", event.GetGroupId())
+	return nil
+}
+
 // chatbotPendingRequest 从好友服务的创建回包里取出发给机器人的待处理好友申请或群邀请。
 // 只看发给申请人的回包：申请人所在DF一定会收到它，重复提交（REQUEST_PENDING）也会再带一次，
-// 机器人当时没接上的申请可以靠重发补上；发给机器人本人的created事件只会被丢弃。
+// 机器人当时没处理的申请可以靠重发补上；发给机器人本人的created事件只会被丢弃。
 func chatbotPendingRequest(resp *friend.ResponseMessage) *friend.RelationshipRequestInfo {
 	operation := resp.GetRelationshipOperationRsp()
-	if chatbot.userID <= 0 || operation == nil || IsChatbotID(resp.GetTargetUserId()) {
+	if !chatbot.enabled || operation == nil || IsChatbotID(resp.GetTargetUserId()) {
 		return nil
 	}
 	if resp.GetResult() != friend.FriendResult_FRIEND_OK && resp.GetResult() != friend.FriendResult_REQUEST_PENDING {
@@ -157,32 +150,59 @@ func chatbotPendingRequest(resp *friend.ResponseMessage) *friend.RelationshipReq
 	return request
 }
 
-func buildChatbotAcceptRequest(request *friend.RelationshipRequestInfo, replyTopic string) *friend.RequestMessage {
-	req := newFriendRequest(replyTopic, chatbot.userID)
-	if request.GetRequestType() == sharedDB.RequestTypeFriend {
-		req.Payload = &friend.RequestMessage_ResolveFriendRequest{ResolveFriendRequest: &friend.ResolveFriendRequest{
-			UserId: chatbot.userID, RequestId: request.GetRequestId(), Decision: friend.RequestDecision_REQUEST_ACCEPT,
-		}}
-	} else {
-		req.Payload = &friend.RequestMessage_ResolveGroupInvitation{ResolveGroupInvitation: &friend.ResolveGroupInvitation{
-			UserId: chatbot.userID, InvitationId: request.GetRequestId(), Decision: friend.RequestDecision_REQUEST_ACCEPT,
-		}}
-	}
-	return req
-}
-
-var publishChatbotFriendRequest = publishFriendRequest
-
-// AcceptChatbotRequest 以机器人身份接受发给它的好友申请或群邀请，权限与状态校验仍由FriendService完成。
-// 同意后好友服务照常把resolved事件推给申请人；发给机器人的回包由DF丢弃。重复同意只会得到INVALID_STATE。
-func AcceptChatbotRequest(resp *friend.ResponseMessage) error {
-	request := chatbotPendingRequest(resp)
-	if request == nil {
+// chatbotRelationshipEvent 把好友服务回给普通用户的响应里与机器人有关的变化转成机器人事件：
+// 发给机器人的申请交给平台决定是否同意；申请被机器人同意后的resolved事件、删除机器人好友、
+// 把机器人移出群分别通知机器人。没有关系变化时返回nil。
+func chatbotRelationshipEvent(resp *friend.ResponseMessage) *chatbotpb.BotEvent {
+	if !chatbot.enabled || IsChatbotID(resp.GetTargetUserId()) {
 		return nil
 	}
-	if err := publishChatbotFriendRequest(buildChatbotAcceptRequest(request, currentContainerTopic())); err != nil {
-		return errors.Join(errors.New("机器人接受申请失败"), err)
+	if request := chatbotPendingRequest(resp); request != nil {
+		return &chatbotpb.BotEvent{
+			Type: BotEventRelationshipRequest, BotUserId: request.GetTargetUserId(), UserId: request.GetRequesterUserId(),
+			GroupId: request.GetGroupId(), RequestId: request.GetRequestId(), RequestType: request.GetRequestType(),
+		}
 	}
-	logger.Sugar().Infow("机器人接受关系申请", "request_id", request.GetRequestId(), "request_type", request.GetRequestType(), "requester_user_id", request.GetRequesterUserId())
+	if changed := resp.GetRelationshipChangedEvent(); changed != nil {
+		request := changed.GetRequest()
+		if changed.GetOperation() != "resolved" || request.GetStatus() != sharedDB.RequestStatusAccepted ||
+			!IsChatbotID(request.GetTargetUserId()) || request.GetRequesterUserId() != resp.GetTargetUserId() {
+			return nil
+		}
+		event := &chatbotpb.BotEvent{BotUserId: request.GetTargetUserId(), UserId: request.GetRequesterUserId(), OccurredAt: changed.GetChangedAt()}
+		switch request.GetRequestType() {
+		case sharedDB.RequestTypeFriend:
+			event.Type = BotEventFriendAdded
+		case sharedDB.RequestTypeGroupInvite:
+			event.Type, event.GroupId = BotEventGroupJoined, request.GetGroupId()
+		default:
+			return nil
+		}
+		return event
+	}
+	if resp.GetResult() != friend.FriendResult_FRIEND_OK {
+		return nil
+	}
+	if operation := resp.GetFriendOperationRsp(); operation.GetOperation() == "remove_direct_friend" && IsChatbotID(operation.GetFriendId()) {
+		return &chatbotpb.BotEvent{Type: BotEventFriendRemoved, BotUserId: operation.GetFriendId(), UserId: resp.GetTargetUserId(), OccurredAt: operation.GetUpdateTime()}
+	}
+	if operation := resp.GetGroupOperationRsp(); (operation.GetOperation() == "kick_group_member" || operation.GetOperation() == "remove_group_member") &&
+		IsChatbotID(operation.GetUserId()) {
+		return &chatbotpb.BotEvent{
+			Type: BotEventGroupRemoved, BotUserId: operation.GetUserId(), UserId: resp.GetTargetUserId(), GroupId: operation.GetGroupId(), OccurredAt: operation.GetUpdateTime(),
+		}
+	}
 	return nil
+}
+
+var publishChatbotEvent = publishBotEvent
+
+// ForwardChatbotRelationshipEvent 把与机器人有关的关系变化交给机器人平台；同意与否、权限与状态仍由
+// 平台和FriendService决定。发布失败返回错误，由Kafka重投这条好友响应。
+func ForwardChatbotRelationshipEvent(resp *friend.ResponseMessage) error {
+	event := chatbotRelationshipEvent(resp)
+	if event == nil {
+		return nil
+	}
+	return publishChatbotEvent(event)
 }

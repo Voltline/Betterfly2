@@ -10,6 +10,7 @@ import (
 	"Betterfly2/shared/mq"
 	"data_forwarding_service/internal/publisher"
 	"os"
+	"strings"
 )
 
 const (
@@ -18,6 +19,14 @@ const (
 	callServiceTopic    = "call-service"
 	pushServiceTopic    = "push-service"
 )
+
+// SharedDeliveryTopic 是所有DF共同消费的topic，消息在消费组内只由一个DF处理。
+func SharedDeliveryTopic() string {
+	if topic := strings.TrimSpace(os.Getenv("DF_SHARED_TOPIC")); topic != "" {
+		return topic
+	}
+	return "data-forwarding-shared"
+}
 
 func currentContainerTopic() string {
 	containerID := os.Getenv("HOSTNAME")

@@ -195,8 +195,8 @@ func DeliverStoredPost(messageID int64, payload *pb.Post) error {
 	if payload.GetIsGroup() {
 		err = routeGroupMessage(messageID, payload.GetFromId(), payload, message, currentContainerID)
 	} else if IsChatbotID(payload.GetToId()) {
-		// 机器人没有连接和推送设备，发给它的消息只需要通知ChatbotService作答。
-		err = publishChatbotTrigger(messageID, payload)
+		// 机器人没有连接和推送设备，发给它的消息只需要通知机器人平台。
+		err = publishChatbotTrigger(messageID, payload, nil)
 	} else {
 		targetUserID := strconv.FormatInt(payload.GetToId(), 10)
 		targetTopic, routeErr := redisClient.GetContainerByConnection(targetUserID)
@@ -347,14 +347,10 @@ func routeGroupMessage(messageID, fromID int64, payload *pb.Post, message *pb.Re
 	if err != nil {
 		return err
 	}
-	memberIDs, chatbotIsMember := withoutChatbot(memberIDs)
+	memberIDs, botIDs := withoutChatbot(memberIDs)
 	var triggerErr error
-	if chatbotIsMember {
-		if replies, replyErr := chatbotRepliesInGroup(payload); replyErr != nil {
-			triggerErr = replyErr
-		} else if replies {
-			triggerErr = publishChatbotTrigger(messageID, payload)
-		}
+	if len(botIDs) > 0 && chatbotSeesGroupPost(payload) {
+		triggerErr = publishChatbotTrigger(messageID, payload, botIDs)
 	}
 
 	targetUserIDs := make([]string, 0, len(memberIDs))

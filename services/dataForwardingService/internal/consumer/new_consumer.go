@@ -99,12 +99,12 @@ func (h *NewKafkaConsumerGroupHandler) handleFriendResponse(friendResp *friend.R
 		return fmt.Errorf("WebSocket处理器未设置，无法转发好友响应")
 	}
 
+	// 与机器人有关的申请、同意、删除和移出交给机器人平台；回给机器人本人的响应没有接收者，直接丢弃。
+	if err := handlers.ForwardChatbotRelationshipEvent(friendResp); err != nil {
+		return err
+	}
 	if event := friendResp.GetRelationshipChangedEvent(); event != nil {
 		return forwardRelationshipChangedEvent(friendResp.GetTargetUserId(), event, h.wsHandler.SendMessage)
-	}
-	// 发给机器人的申请或邀请由DF代为同意；回给机器人本人的响应没有接收者，直接丢弃。
-	if err := handlers.AcceptChatbotRequest(friendResp); err != nil {
-		return err
 	}
 	if handlers.IsChatbotID(friendResp.GetTargetUserId()) {
 		return nil
@@ -735,7 +735,7 @@ func (h *NewKafkaConsumerGroupHandler) handleStorageResponse(storageResp *storag
 		return processStoredPostResponse(storeRsp, func() error {
 			return handlers.CompletePostIdempotency(context.Background(), storeRsp.GetFromUserId(), storeRsp.GetClientMessageId(), storeRsp.GetMessageId())
 		}, handlers.DeliverStoredPost, func(response *pb.ResponseMessage) error {
-			// 机器人回复由ChatbotService经Kafka提交，没有连接接收回执；按client_message_id去重即可。
+			// 机器人的消息由机器人平台或AI服务经Kafka提交，没有连接接收回执；按client_message_id去重即可。
 			if handlers.IsChatbotID(storageResp.GetTargetUserId()) {
 				return nil
 			}

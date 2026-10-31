@@ -13,10 +13,10 @@ func TestFileAccessMigrationIsExplicitAdditiveAndRetryable(t *testing.T) {
 	plan := migrationPlan()
 	versions := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	pending, err := pendingMigrations(plan, versions)
-	if err != nil || len(pending) != 2 || pending[0].Version != 11 {
+	if err != nil || len(pending) != 3 || pending[0].Version != 11 {
 		t.Fatal(pending, err)
 	}
-	if pending, err := pendingMigrations(plan, append(versions, 11)); err != nil || len(pending) != 1 || pending[0].Version != 12 {
+	if pending, err := pendingMigrations(plan, append(versions, 11)); err != nil || len(pending) != 2 || pending[0].Version != 12 {
 		t.Fatal(pending, err)
 	}
 	database, mock := newInboxDatabase(t)
@@ -120,10 +120,10 @@ func TestFileDownloadIndexMigrationIsExplicitAndRetryable(t *testing.T) {
 	plan := migrationPlan()
 	versions := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
 	pending, err := pendingMigrations(plan, versions)
-	if err != nil || len(pending) != 1 || pending[0].Version != 12 {
+	if err != nil || len(pending) != 2 || pending[0].Version != 12 {
 		t.Fatal(pending, err)
 	}
-	if pending, err := pendingMigrations(plan, append(versions, 12)); err != nil || len(pending) != 0 {
+	if pending, err := pendingMigrations(plan, append(versions, 12)); err != nil || len(pending) != 1 || pending[0].Version != 13 {
 		t.Fatal(pending, err)
 	}
 	database, mock := newInboxDatabase(t)
@@ -153,7 +153,7 @@ func TestFileDownloadIndexesPostgresV11Upgrade(t *testing.T) {
 	}
 	for _, statement := range []string{
 		"DROP INDEX idx_messages_file_hash", "DROP INDEX idx_users_avatar", "DROP INDEX idx_groups_avatar",
-		"DELETE FROM schema_migrations WHERE version = 12",
+		"DELETE FROM schema_migrations WHERE version >= 12",
 	} {
 		if err := database.Exec(statement).Error; err != nil {
 			t.Fatal(err)

@@ -39,6 +39,7 @@ func migrationPlan() []Migration {
 		{Version: 10, Name: "friend moments", Apply: migrateMomentsSchema},
 		{Version: 11, Name: "file access grants", Apply: migrateFileAccessSchema},
 		{Version: 12, Name: "file download authorization indexes", Apply: migrateFileDownloadIndexes},
+		{Version: 13, Name: "bot platform", Apply: migrateBotPlatformSchema},
 	}
 }
 

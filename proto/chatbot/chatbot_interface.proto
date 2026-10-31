@@ -2,18 +2,31 @@ syntax = "proto3";
 package chatbot;
 option go_package = "Betterfly2/proto/chatbot";
 
-// ChatbotTrigger 由DF在消息入库、完成投递副作用后发布。只带消息标识，正文以数据库为准，
-// 撤回或删除后机器人不会再读到旧正文。
+// ChatbotTrigger 由DF在消息入库、完成投递副作用后发布到chatbot-service，机器人平台再按机器人分发。
+// 只带消息标识，正文以数据库为准，撤回或删除后机器人不会再读到旧正文。
 message ChatbotTrigger {
   int64 message_id = 1;
   int64 from_user_id = 2;
-  int64 to_id = 3;        // 单聊为机器人用户ID，群聊为群ID
+  int64 to_id = 3;  // 单聊为机器人用户ID，群聊为群ID
   bool is_group = 4;
-  string reply_topic = 5; // 机器人回复的入库响应回到这个DF topic，由DF负责实时投递与推送
+  reserved 5;       // 曾为reply_topic；回复改经DF共享topic投递
+  repeated int64 bot_user_ids = 6; // 群里的机器人成员；单聊为空，机器人即to_id
+}
+
+// BotEvent 是与机器人有关的关系变化。relationship_request由平台决定是否同意，其余事件转给第三方机器人。
+message BotEvent {
+  string type = 1;          // relationship_request / friend_added / group_joined / friend_removed / group_removed
+  int64 bot_user_id = 2;
+  int64 user_id = 3;        // 申请人、邀请人或执行删除/移出的用户
+  int64 group_id = 4;
+  int64 request_id = 5;     // 仅relationship_request
+  string request_type = 6;  // 仅relationship_request：friend / group_invite
+  string occurred_at = 7;
 }
 
 message RequestMessage {
   oneof payload {
     ChatbotTrigger trigger = 1;
+    BotEvent event = 2;
   }
 }

@@ -28,6 +28,8 @@ func ConsumerRoutine() {
 
 	// 兼容滚动升级期间旧版本Pod发布到共享topic的踢出消息；新版本直接发布到目标Pod的topic
 	kickTopic := "user-kick-topic"
+	// 机器人平台与AI服务主动发出的消息不属于任何连接，入库响应发到共享topic，由组内任意一个DF投递
+	sharedTopic := handlers.SharedDeliveryTopic()
 	broker := os.Getenv("KAFKA_BROKER")
 	if broker == "" {
 		broker = config.DefaultNsServer
@@ -65,7 +67,7 @@ func ConsumerRoutine() {
 
 	go func() {
 		for {
-			err := consumerGroup.Consume(ctx, []string{topic, kickTopic}, handler)
+			err := consumerGroup.Consume(ctx, []string{topic, kickTopic, sharedTopic}, handler)
 			if err != nil {
 				if errors.Is(err, sarama.ErrClosedConsumerGroup) {
 					sugar.Warnf("Kafka 消费者组已关闭，退出消费循环")

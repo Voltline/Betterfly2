@@ -74,19 +74,32 @@ func mentions(text string, bot *BotInfo) bool {
 }
 
 // parseCommand 识别消息开头的/命令。返回命令名（含/）与它指向的机器人账号（/cmd@account），
-// 不是命令时返回空串。命令名只允许字母、数字和下划线。
+// 不是命令时返回空串。命令名只允许字母、数字和下划线，遇到其他字符即结束，
+// 因此“/weather上海”也是/weather，参数紧跟在后面。
 func parseCommand(text string) (command, target string) {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, "/") {
 		return "", ""
 	}
-	head, _, _ := strings.Cut(text, " ")
-	head, _, _ = strings.Cut(head, "\n")
-	name, target, _ := strings.Cut(head[1:], "@")
-	if name == "" || len(name) > 32 || strings.Trim(strings.ToLower(name), "abcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+	name := commandWord(text[1:])
+	if name == "" || len(name) > 32 {
 		return "", ""
 	}
+	if rest := text[1+len(name):]; strings.HasPrefix(rest, "@") {
+		target = commandWord(rest[1:])
+	}
 	return "/" + name, strings.ToLower(target)
+}
+
+// commandWord 返回开头由字母、数字和下划线组成的部分。
+func commandWord(text string) string {
+	end := strings.IndexFunc(text, func(r rune) bool {
+		return r != '_' && (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z')
+	})
+	if end < 0 {
+		return text
+	}
+	return text[:end]
 }
 
 // messageText 返回可能带@或命令的文字：文字消息取正文，图片取说明。

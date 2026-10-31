@@ -20,6 +20,11 @@ func TestParseCommand(t *testing.T) {
 		"/中文":                         {"", ""},
 		"hello /start":                {"", ""},
 		"/" + strings.Repeat("a", 33): {"", ""},
+		"/weather上海":                  {"/weather", ""},
+		"/weather上海@工具箱":              {"/weather", ""},
+		"/weather@sky_bot上海":          {"/weather", "sky_bot"},
+		"/roll@":                      {"/roll", ""},
+		"/todo，list":                  {"/todo", ""},
 	} {
 		command, target := parseCommand(text)
 		if command != want[0] || target != want[1] {

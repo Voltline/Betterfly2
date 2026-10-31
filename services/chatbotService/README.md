@@ -1,25 +1,28 @@
 # ChatbotService
 
-托管 Betterfly AI 助手账号：消费 DataForwarding 发来的 `chatbot-service` 触发消息，读取会话上下文，调用 OpenAI 兼容的 `/chat/completions` 接口，再以机器人身份经 `storage-service` 写回回复。设计、触发规则、配置和客户端接入见 [AI 助手](../../docs/CHATBOT.md)。
+机器人平台：消费 DataForwarding 发来的 `chatbot-service` 触发与关系事件，把消息分发给各个机器人。内置机器人（AI 助手）转发到它自己的 Kafka topic；第三方机器人通过 HTTP Bot API 长轮询或 webhook 接收更新，再经 `storage-service` 以机器人身份发消息、收发文件。设计、接口和配置见 [机器人平台](../../docs/CHATBOT.md)。
 
 ## 结构
 
 | 路径 | 作用 |
 | --- | --- |
-| `chatbotMain.go` | 读取配置、确保机器人账号、启动 Kafka 消费与内网 HTTP |
+| `chatbotMain.go` | 读取配置，启动 Kafka 消费、webhook 投递、过期更新清理与 HTTP |
 | `internal/config` | 环境变量与校验 |
-| `internal/bot` | 触发校验、限流、上下文、回复拆分与入库请求 |
-| `internal/llm` | OpenAI 兼容客户端，带重试与 `Retry-After` |
+| `internal/platform/router.go` | 触发分发（@、引用、命令）与关系事件（同意申请、事件更新） |
+| `internal/platform/api.go` | Bot API：资料、更新、发消息、上传下载、webhook |
+| `internal/platform/webhook.go` | 按机器人加租约顺序投递 webhook，签名与内网地址拦截 |
+| `internal/platform/admin.go` | 管理接口与内嵌管理页面 `admin.html` |
+| `internal/platform/store.go` | `bots`、`bot_updates` 与消息、权限、文件查询 |
 | `internal/consumer` | Kafka 消费，解析失败进死信 |
-| `internal/publisher` | 按会话 key 发布到 Kafka |
+| `internal/publisher` | 按 key 发布到 Kafka |
 
 ## 本地运行测试
 
 ```bash
 cd services/chatbotService
 go test ./...
-# 账号与上下文查询的 PostgreSQL 测试
-BETTERFLY_TEST_POSTGRES_DSN="host=127.0.0.1 port=5432 user=postgres password=... dbname=postgres sslmode=disable" go test ./internal/bot
+# 建号、分发、发消息、文件、webhook 与管理接口的 PostgreSQL 测试
+BETTERFLY_TEST_POSTGRES_DSN="host=127.0.0.1 port=5432 user=postgres password=... dbname=postgres sslmode=disable" go test ./internal/platform
 ```
 
-HTTP `8088`：`/healthz` 存活、`/ready` 检查数据库、`/metrics` Prometheus 指标，只在内网暴露。
+HTTP `8088`：`/bot/v1/*` Bot API，`/admin/` 管理页面（需要 `CHATBOT_ADMIN_TOKEN`），`/healthz`、`/ready`、`/metrics`。

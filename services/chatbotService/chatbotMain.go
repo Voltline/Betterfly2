@@ -10,10 +10,9 @@ import (
 
 	"Betterfly2/shared/db"
 	"Betterfly2/shared/logger"
-	"chatbotService/internal/bot"
 	"chatbotService/internal/config"
 	"chatbotService/internal/consumer"
-	"chatbotService/internal/llm"
+	"chatbotService/internal/platform"
 	"chatbotService/internal/publisher"
 
 	"github.com/IBM/sarama"
@@ -31,12 +30,6 @@ func main() {
 		sugar.Fatalf("ChatbotService配置无效: %v", err)
 	}
 	database := db.DB()
-	ensureCtx, ensureCancel := context.WithTimeout(ctx, 30*time.Second)
-	err = bot.EnsureBotUser(ensureCtx, database, bot.Identity{UserID: cfg.BotUserID, Account: cfg.Account, Name: cfg.Name, Avatar: cfg.Avatar})
-	ensureCancel()
-	if err != nil {
-		sugar.Fatalf("初始化机器人账号失败: %v", err)
-	}
 
 	if err := publisher.WaitForBrokers(cfg.Brokers, 60*time.Second); err != nil {
 		sugar.Fatalf("Kafka未就绪: %v", err)
@@ -47,16 +40,19 @@ func main() {
 	}
 	defer kafkaPublisher.Close()
 
-	var completer bot.Completer
-	if cfg.LLMConfigured() {
-		completer = llm.New(llm.Config{
-			BaseURL: cfg.APIBaseURL, APIKey: cfg.APIKey, Model: cfg.Model, MaxTokens: cfg.MaxTokens,
-			Temperature: cfg.Temperature, Timeout: cfg.RequestTimeout, MaxRetries: cfg.MaxRetries,
-		})
+	var objects platform.Objects
+	if cfg.FilesEnabled() {
+		objects = platform.NewS3Objects(cfg.RustFSEndpoint, cfg.RustFSRegion, cfg.RustFSAccessKey, cfg.RustFSSecretKey, cfg.RustFSBucket)
 	} else {
-		sugar.Warn("未配置CHATBOT_API_BASE_URL或CHATBOT_MODEL，机器人只回复未配置提示")
+		sugar.Warn("未配置RUSTFS_ENDPOINT_URL或RustFS凭据，Bot API不能上传和下载文件")
 	}
-	service := bot.NewService(cfg, bot.NewGormStore(database), completer, kafkaPublisher.PublishKeyed)
+	if cfg.AdminToken == "" {
+		sugar.Warn("未配置CHATBOT_ADMIN_TOKEN，机器人管理接口未开启")
+	}
+	service := platform.New(cfg, platform.NewStore(database), kafkaPublisher.PublishKeyed, objects)
+	dispatcher := platform.NewDispatcher(service)
+	go dispatcher.Run(ctx, 4)
+	go service.CleanupLoop(ctx, 10*time.Minute)
 
 	saramaConfig := sarama.NewConfig()
 	saramaConfig.Version = sarama.V2_1_0_0
@@ -75,9 +71,11 @@ func main() {
 			}
 		}
 	}()
-	sugar.Infow("ChatbotService启动", "bot_user_id", cfg.BotUserID, "topic", cfg.Topic, "model", cfg.Model, "llm_configured", cfg.LLMConfigured())
+	sugar.Infow("ChatbotService启动", "topic", cfg.Topic, "http_port", cfg.HTTPPort, "files", objects != nil, "admin", cfg.AdminToken != "")
 
 	mux := http.NewServeMux()
+	service.Routes(mux)
+	service.AdminRoutes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
 		sqlDB, err := database.DB()
@@ -93,7 +91,8 @@ func main() {
 		_, _ = w.Write([]byte("ready"))
 	})
 	mux.Handle("GET /metrics", promhttp.Handler())
-	httpServer := &http.Server{Addr: ":" + cfg.HTTPPort, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// 不设WriteTimeout：长轮询最长等待CHATBOT_MAX_POLL_TIMEOUT，文件上传下载时间取决于大小。
+	httpServer := &http.Server{Addr: ":" + cfg.HTTPPort, Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			sugar.Errorf("ChatbotService HTTP服务退出: %v", err)

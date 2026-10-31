@@ -7,15 +7,29 @@ toolchain go1.24.1
 require (
 	Betterfly2/proto v0.0.0
 	Betterfly2/proto/chatbot v0.0.0
+	Betterfly2/proto/friend v0.0.0
 	Betterfly2/proto/storage v0.0.0
 	Betterfly2/shared v0.0.0
 	github.com/IBM/sarama v1.45.2
+	github.com/aws/aws-sdk-go-v2 v1.32.6
+	github.com/aws/aws-sdk-go-v2/credentials v1.17.41
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.70.0
+	github.com/jackc/pgx/v5 v5.5.5
 	github.com/prometheus/client_golang v1.21.0
 	google.golang.org/protobuf v1.36.6
 	gorm.io/gorm v1.25.12
 )
 
 require (
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.7 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.3.25 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.6.25 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.25 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.4.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.6 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.6 // indirect
+	github.com/aws/smithy-go v1.22.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -28,7 +42,6 @@ require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
-	github.com/jackc/pgx/v5 v5.5.5 // indirect
 	github.com/jackc/puddle/v2 v2.2.1 // indirect
 	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
@@ -57,6 +70,7 @@ require (
 replace (
 	Betterfly2/proto => ../../proto
 	Betterfly2/proto/chatbot => ../../proto/chatbot
+	Betterfly2/proto/friend => ../../proto/friend
 	Betterfly2/proto/storage => ../../proto/storage
 	Betterfly2/shared => ../../shared
 )

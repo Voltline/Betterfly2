@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -11,31 +10,32 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.BotUserID != DefaultBotUserID || cfg.LLMConfigured() || cfg.Location.String() != "Asia/Shanghai" ||
-		cfg.MaxTriggerAge != 15*time.Minute || !strings.Contains(cfg.SystemPrompt, "Betterfly 助手") {
+	if cfg.Topic != "chatbot-service" || cfg.ReplyTopic != "data-forwarding-shared" || cfg.FriendTopic != "friend-service" || cfg.HTTPPort != "8088" ||
+		cfg.AdminToken != "" || cfg.UpdateRetention != 24*time.Hour || cfg.MaxUploadBytes != 50<<20 || cfg.WebhookAllowPrivate || cfg.FilesEnabled() {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
 
 func TestLoadOverridesAndValidation(t *testing.T) {
-	t.Setenv("CHATBOT_API_BASE_URL", "https://api.example.com/v1/")
-	t.Setenv("CHATBOT_MODEL", "m")
-	t.Setenv("CHATBOT_TEMPERATURE", "0.3")
-	t.Setenv("CHATBOT_NAME", "小蝶")
+	t.Setenv("CHATBOT_ADMIN_TOKEN", "0123456789abcdef")
+	t.Setenv("CHATBOT_UPDATE_RETENTION", "48h")
+	t.Setenv("CHATBOT_WEBHOOK_ALLOW_PRIVATE", "true")
+	t.Setenv("CHATBOT_MAX_UPLOAD_MB", "8")
+	t.Setenv("RUSTFS_ENDPOINT_URL", "http://rustfs:9000/")
+	t.Setenv("RUSTFS_ACCESS_KEY_ID", "key")
+	t.Setenv("RUSTFS_SECRET_ACCESS_KEY", "secret")
 	cfg, err := Load()
-	if err != nil || !cfg.LLMConfigured() || cfg.APIBaseURL != "https://api.example.com/v1" || *cfg.Temperature != 0.3 || cfg.Name != "小蝶" {
+	if err != nil || cfg.UpdateRetention != 48*time.Hour || !cfg.WebhookAllowPrivate || cfg.MaxUploadBytes != 8<<20 ||
+		cfg.RustFSEndpoint != "http://rustfs:9000" || !cfg.FilesEnabled() {
 		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
-
 	for key, value := range map[string]string{
-		"CHATBOT_USER_ID":          "900000000000000001",
-		"CHATBOT_API_BASE_URL":     "ftp://x",
-		"CHATBOT_MAX_REPLY_PARTS":  "0",
-		"CHATBOT_REQUEST_TIMEOUT":  "1ms",
-		"CHATBOT_TIMEZONE":         "Mars/Base",
-		"CHATBOT_MAX_TRIGGER_AGE":  "1s",
-		"CHATBOT_TEMPERATURE":      "5",
-		"CHATBOT_CONTEXT_MESSAGES": "abc",
+		"CHATBOT_ADMIN_TOKEN":           "short",
+		"CHATBOT_UPDATE_RETENTION":      "1m",
+		"CHATBOT_MAX_POLL_TIMEOUT":      "abc",
+		"CHATBOT_WEBHOOK_TIMEOUT":       "2h",
+		"CHATBOT_WEBHOOK_ALLOW_PRIVATE": "maybe",
+		"CHATBOT_MAX_UPLOAD_MB":         "0",
 	} {
 		t.Run(key, func(t *testing.T) {
 			t.Setenv(key, value)

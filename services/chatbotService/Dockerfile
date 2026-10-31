@@ -10,6 +10,7 @@ WORKDIR /app
 
 COPY ./proto/go.* ./proto/
 COPY ./proto/chatbot/go.* ./proto/chatbot/
+COPY ./proto/friend/go.* ./proto/friend/
 COPY ./proto/storage/go.* ./proto/storage/
 COPY ./shared/go.* ./shared/
 COPY ./services/chatbotService/go.* ./services/chatbotService/

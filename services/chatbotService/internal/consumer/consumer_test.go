@@ -9,7 +9,7 @@ import (
 	envelope "Betterfly2/proto/envelope"
 	"Betterfly2/shared/kafkaconsumer"
 	"Betterfly2/shared/mq"
-	"chatbotService/internal/bot"
+	"chatbotService/internal/platform"
 
 	"github.com/IBM/sarama"
 )
@@ -17,10 +17,16 @@ import (
 type stubService struct {
 	err     error
 	trigger *chatbotpb.ChatbotTrigger
+	event   *chatbotpb.BotEvent
 }
 
-func (s *stubService) Handle(_ context.Context, trigger *chatbotpb.ChatbotTrigger) error {
+func (s *stubService) HandleTrigger(_ context.Context, trigger *chatbotpb.ChatbotTrigger) error {
 	s.trigger = trigger
+	return s.err
+}
+
+func (s *stubService) HandleEvent(_ context.Context, event *chatbotpb.BotEvent) error {
+	s.event = event
 	return s.err
 }
 
@@ -42,7 +48,7 @@ func TestProcessClassifiesResults(t *testing.T) {
 	}{
 		"success":      {encode(t, envelope.MessageType_CHATBOT_REQUEST, trigger), nil, kafkaconsumer.OutcomeSuccess},
 		"transient":    {encode(t, envelope.MessageType_CHATBOT_REQUEST, trigger), errors.New("db down"), kafkaconsumer.OutcomeTransient},
-		"invalid":      {encode(t, envelope.MessageType_CHATBOT_REQUEST, trigger), bot.ErrInvalidTrigger, kafkaconsumer.OutcomePermanent},
+		"invalid":      {encode(t, envelope.MessageType_CHATBOT_REQUEST, trigger), platform.ErrInvalidTrigger, kafkaconsumer.OutcomePermanent},
 		"wrong type":   {encode(t, envelope.MessageType_PUSH_REQUEST, trigger), nil, kafkaconsumer.OutcomePermanent},
 		"empty":        {encode(t, envelope.MessageType_CHATBOT_REQUEST, &chatbotpb.RequestMessage{}), nil, kafkaconsumer.OutcomePermanent},
 		"not protobuf": {&sarama.ConsumerMessage{Value: []byte{0xff, 0xff}}, nil, kafkaconsumer.OutcomePermanent},
@@ -58,5 +64,16 @@ func TestProcessClassifiesResults(t *testing.T) {
 				t.Fatalf("trigger = %+v", service.trigger)
 			}
 		})
+	}
+}
+
+func TestProcessRoutesEvents(t *testing.T) {
+	service := &stubService{}
+	message := encode(t, envelope.MessageType_CHATBOT_REQUEST, &chatbotpb.RequestMessage{
+		Payload: &chatbotpb.RequestMessage_Event{Event: &chatbotpb.BotEvent{Type: "friend_added", BotUserId: 9}},
+	})
+	if result := NewHandler(service, nil).process(context.Background(), message); result.Outcome != kafkaconsumer.OutcomeSuccess ||
+		service.event.GetType() != "friend_added" || service.trigger != nil {
+		t.Fatalf("result=%v event=%v", result.Outcome, service.event)
 	}
 }

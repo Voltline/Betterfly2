@@ -12,7 +12,7 @@
 | `friend/` | 好友、群组和群成员操作 |
 | `call/` | WebRTC 通话信令与状态事件 |
 | `push/` | 普通 APNs/VoIP token 注册和内部推送任务 |
-| `chatbot/` | DataForwarding 发给 ChatbotService 的机器人触发 |
+| `chatbot/` | DataForwarding 发给机器人平台的触发与关系事件，平台转给内置机器人的触发 |
 | `envelope/` | Kafka 消息信封 |
 | `server_rpc/` | Auth Service gRPC 接口及生成配置 |
 

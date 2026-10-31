@@ -91,6 +91,8 @@ services:
       CALL_DLQ_TOPIC: ${CALL_KAFKA_DLQ_TOPIC:-call-service-dlq}
       PUSH_DLQ_TOPIC: ${PUSH_KAFKA_DLQ_TOPIC:-push-service-dlq}
       CHATBOT_DLQ_TOPIC: ${CHATBOT_KAFKA_DLQ_TOPIC:-chatbot-service-dlq}
+      AICHAT_DLQ_TOPIC: ${AICHAT_KAFKA_DLQ_TOPIC:-aichat-service-dlq}
+      DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
       DLQ_PARTITIONS: ${DF_KAFKA_DLQ_PARTITIONS:-3}
       DLQ_REPLICATION_FACTOR: 1
       DLQ_MIN_ISR: 1
@@ -100,6 +102,7 @@ services:
       CALL_DLQ_RETENTION_MS: ${CALL_KAFKA_DLQ_RETENTION_MS:-604800000}
       PUSH_DLQ_RETENTION_MS: ${PUSH_KAFKA_DLQ_RETENTION_MS:-604800000}
       CHATBOT_DLQ_RETENTION_MS: ${CHATBOT_KAFKA_DLQ_RETENTION_MS:-604800000}
+      AICHAT_DLQ_RETENTION_MS: ${AICHAT_KAFKA_DLQ_RETENTION_MS:-604800000}
       KAFKA_ACL_ENABLED: ${KAFKA_ACL_ENABLED:-false}
     command:
       - /bin/bash
@@ -137,6 +140,14 @@ services:
         create_dlq "$${CALL_DLQ_TOPIC}" "$${CALL_DLQ_RETENTION_MS}" call-service
         create_dlq "$${PUSH_DLQ_TOPIC}" "$${PUSH_DLQ_RETENTION_MS}" push-service
         create_dlq "$${CHATBOT_DLQ_TOPIC}" "$${CHATBOT_DLQ_RETENTION_MS}" chatbot-service
+        create_dlq "$${AICHAT_DLQ_TOPIC}" "$${AICHAT_DLQ_RETENTION_MS}" aichat-service
+        # 机器人发出消息的入库响应走共享topic，所有DF同组消费，提前建好避免首次订阅时topic不存在
+        /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server "$${KAFKA_BROKER}" \
+          --create --if-not-exists \
+          --topic "$${DF_SHARED_TOPIC}" \
+          --partitions "$${DLQ_PARTITIONS}" \
+          --replication-factor "$${DLQ_REPLICATION_FACTOR}"
     restart: "no"
     networks:
       - backend
@@ -203,8 +214,8 @@ services:
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
-      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
-      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
+      CHATBOT_ENABLED: ${CHATBOT_ENABLED:-true}
+      DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -258,8 +269,8 @@ services:
       MONITOR_USER_ID: ${MONITOR_USER_ID:-900000000000000001}
       MONITOR_NAME: ${MONITOR_NAME:-Betterfly Monitor}
       MONITOR_AVATAR: ${MONITOR_AVATAR:-}
-      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
-      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
+      CHATBOT_ENABLED: ${CHATBOT_ENABLED:-true}
+      DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
       METRICS_ENABLED: ${METRICS_ENABLED:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -603,35 +614,92 @@ services:
     container_name: chatbotService
     environment:
       <<: *database-env
-      DB_MAX_OPEN_CONNS: ${CHATBOT_DB_MAX_OPEN_CONNS:-4}
-      DB_MAX_IDLE_CONNS: ${CHATBOT_DB_MAX_IDLE_CONNS:-2}
+      DB_MAX_OPEN_CONNS: ${CHATBOT_DB_MAX_OPEN_CONNS:-6}
+      DB_MAX_IDLE_CONNS: ${CHATBOT_DB_MAX_IDLE_CONNS:-3}
       KAFKA_BROKER: kafka1:9092
       KAFKA_STORAGE_TOPIC: storage-service
+      KAFKA_FRIEND_TOPIC: friend-service
       KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
+      DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
       CHATBOT_TOPIC: chatbot-service
       CHATBOT_CONSUMER_GROUP: chatbot-service-group
       CHATBOT_KAFKA_DLQ_TOPIC: ${CHATBOT_KAFKA_DLQ_TOPIC:-chatbot-service-dlq}
-      CHATBOT_HTTP_PORT: ${CHATBOT_HTTP_PORT:-8088}
-      CHATBOT_USER_ID: ${CHATBOT_USER_ID:-900000000000000002}
-      CHATBOT_ACCOUNT: ${CHATBOT_ACCOUNT:-betterfly_assistant}
-      CHATBOT_NAME: ${CHATBOT_NAME:-Betterfly 助手}
-      CHATBOT_AVATAR: ${CHATBOT_AVATAR:-}
-      CHATBOT_API_BASE_URL: ${CHATBOT_API_BASE_URL:-}
-      CHATBOT_API_KEY: ${CHATBOT_API_KEY:-}
-      CHATBOT_MODEL: ${CHATBOT_MODEL:-}
-      CHATBOT_MAX_TOKENS: ${CHATBOT_MAX_TOKENS:-1024}
-      CHATBOT_TEMPERATURE: ${CHATBOT_TEMPERATURE:-}
-      CHATBOT_REQUEST_TIMEOUT: ${CHATBOT_REQUEST_TIMEOUT:-60s}
-      CHATBOT_SYSTEM_PROMPT: ${CHATBOT_SYSTEM_PROMPT:-}
-      CHATBOT_TIMEZONE: ${CHATBOT_TIMEZONE:-Asia/Shanghai}
-      CHATBOT_CONTEXT_MESSAGES: ${CHATBOT_CONTEXT_MESSAGES:-20}
-      CHATBOT_CONTEXT_CHARS: ${CHATBOT_CONTEXT_CHARS:-6000}
-      CHATBOT_MAX_REPLY_PARTS: ${CHATBOT_MAX_REPLY_PARTS:-4}
-      CHATBOT_USER_RATE_PER_MINUTE: ${CHATBOT_USER_RATE_PER_MINUTE:-6}
-      CHATBOT_USER_DAILY_LIMIT: ${CHATBOT_USER_DAILY_LIMIT:-200}
+      CHATBOT_HTTP_PORT: "8088"
+      # 为空时不开放/admin；对外暴露时应在反向代理上限制/admin的来源
+      CHATBOT_ADMIN_TOKEN: ${CHATBOT_ADMIN_TOKEN:-}
+      CHATBOT_UPDATE_RETENTION: ${CHATBOT_UPDATE_RETENTION:-24h}
+      CHATBOT_MAX_POLL_TIMEOUT: ${CHATBOT_MAX_POLL_TIMEOUT:-50s}
+      CHATBOT_SEND_WAIT: ${CHATBOT_SEND_WAIT:-5s}
+      CHATBOT_WEBHOOK_TIMEOUT: ${CHATBOT_WEBHOOK_TIMEOUT:-10s}
+      CHATBOT_WEBHOOK_ALLOW_PRIVATE: ${CHATBOT_WEBHOOK_ALLOW_PRIVATE:-false}
+      CHATBOT_MAX_UPLOAD_MB: ${CHATBOT_MAX_UPLOAD_MB:-50}
+      RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
+      RUSTFS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ENDPOINT_URL: http://rustfs:9000
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Bot API供第三方机器人调用
+    ports:
+      - "${CHATBOT_PUBLIC_PORT:-8088}:8088"
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+
+  aichat_service:
+    <<: *container-defaults
+    profiles: ["chatbot"]
+    build:
+      context: ..
+      dockerfile: services/aichatService/Dockerfile
+    container_name: aichatService
+    environment:
+      <<: *database-env
+      DB_MAX_OPEN_CONNS: ${AICHAT_DB_MAX_OPEN_CONNS:-4}
+      DB_MAX_IDLE_CONNS: ${AICHAT_DB_MAX_IDLE_CONNS:-2}
+      KAFKA_BROKER: kafka1:9092
+      KAFKA_STORAGE_TOPIC: storage-service
+      KAFKA_NETWORK_TIMEOUT: ${KAFKA_NETWORK_TIMEOUT:-10s}
+      DF_SHARED_TOPIC: ${DF_SHARED_TOPIC:-data-forwarding-shared}
+      AICHAT_TOPIC: aichat-service
+      AICHAT_CONSUMER_GROUP: aichat-service-group
+      AICHAT_KAFKA_DLQ_TOPIC: ${AICHAT_KAFKA_DLQ_TOPIC:-aichat-service-dlq}
+      AICHAT_HTTP_PORT: "8089"
+      AICHAT_USER_ID: ${AICHAT_USER_ID:-900000000000000002}
+      AICHAT_ACCOUNT: ${AICHAT_ACCOUNT:-betterfly_assistant}
+      AICHAT_NAME: ${AICHAT_NAME:-Betterfly 助手}
+      AICHAT_AVATAR: ${AICHAT_AVATAR:-}
+      # 兼容此前的CHATBOT_*模型配置
+      AICHAT_API_BASE_URL: ${AICHAT_API_BASE_URL:-${CHATBOT_API_BASE_URL:-}}
+      AICHAT_API_KEY: ${AICHAT_API_KEY:-${CHATBOT_API_KEY:-}}
+      AICHAT_MODEL: ${AICHAT_MODEL:-${CHATBOT_MODEL:-}}
+      AICHAT_VISION_MODEL: ${AICHAT_VISION_MODEL:-}
+      AICHAT_VISION: ${AICHAT_VISION:-true}
+      AICHAT_CONTEXT_IMAGES: ${AICHAT_CONTEXT_IMAGES:-3}
+      AICHAT_IMAGE_MAX_MB: ${AICHAT_IMAGE_MAX_MB:-20}
+      AICHAT_IMAGE_MAX_SIDE: ${AICHAT_IMAGE_MAX_SIDE:-1568}
+      AICHAT_MAX_TOKENS: ${AICHAT_MAX_TOKENS:-1024}
+      AICHAT_TEMPERATURE: ${AICHAT_TEMPERATURE:-}
+      AICHAT_REQUEST_TIMEOUT: ${AICHAT_REQUEST_TIMEOUT:-60s}
+      AICHAT_SYSTEM_PROMPT: ${AICHAT_SYSTEM_PROMPT:-}
+      AICHAT_TIMEZONE: ${AICHAT_TIMEZONE:-Asia/Shanghai}
+      AICHAT_CONTEXT_MESSAGES: ${AICHAT_CONTEXT_MESSAGES:-20}
+      AICHAT_CONTEXT_CHARS: ${AICHAT_CONTEXT_CHARS:-6000}
+      AICHAT_MAX_REPLY_PARTS: ${AICHAT_MAX_REPLY_PARTS:-4}
+      AICHAT_USER_RATE_PER_MINUTE: ${AICHAT_USER_RATE_PER_MINUTE:-6}
+      AICHAT_USER_DAILY_LIMIT: ${AICHAT_USER_DAILY_LIMIT:-200}
+      RUSTFS_REGION: ${RUSTFS_REGION:-cn-east-1}
+      RUSTFS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_ENDPOINT_URL: http://rustfs:9000
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-betterfly-files}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
-      - "${CHATBOT_HTTP_PORT:-8088}"
+      - "8089"
     depends_on:
       db_migrate:
         condition: service_completed_successfully

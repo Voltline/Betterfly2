@@ -90,8 +90,8 @@ required server capacity >= runtime budget + migration/admin reserve
 The base manifests currently budget 94 runtime connections: DataForwarding 24,
 Push 24, AB Test 16, Storage 12, Friend 10 and Auth 8. Reserve at least another
 4 connections for the migration Job plus capacity for administration and failover.
-Compose-only services add to this when their profiles are enabled: Moments 6 and
-Chatbot 4 (`CHATBOT_DB_MAX_OPEN_CONNS`).
+Compose-only services add to this when their profiles are enabled: Moments 6,
+Chatbot 6 (`CHATBOT_DB_MAX_OPEN_CONNS`) and AIChat 4 (`AICHAT_DB_MAX_OPEN_CONNS`).
 Prometheus exports `betterfly_db_*` pool stats from each service `/metrics` endpoint.
 
 Production may place PgBouncer in transaction-pooling mode in front of PostgreSQL

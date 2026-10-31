@@ -57,3 +57,9 @@ scrape_configs:
       - targets: ['chatbot_service:8088']
         labels:
           service: 'chatbot'
+
+  - job_name: 'aichat'
+    static_configs:
+      - targets: ['aichat_service:8089']
+        labels:
+          service: 'aichat'
